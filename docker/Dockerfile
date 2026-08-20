@@ -31,9 +31,9 @@ RUN apt-get update \
     && mkdir -p /data/source /data/runtime /usr/share/licenses/ply-pcd-registration \
     && chown -R registration:registration /data/runtime /var/lib/registration
 
-COPY service/requirements.txt /tmp/service-requirements.txt
+COPY service/requirements.lock.txt /tmp/service-requirements.txt
 RUN python3 -m venv /opt/registration-venv \
-    && /opt/registration-venv/bin/pip install --no-cache-dir -r /tmp/service-requirements.txt
+    && /opt/registration-venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/service-requirements.txt
 
 COPY --from=builder /opt/registration/bin/registration_worker /usr/local/bin/registration_worker
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/ply-pcd-registration/

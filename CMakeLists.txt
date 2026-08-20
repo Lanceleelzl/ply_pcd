@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.25)
 
 project(ply_pcd_registration VERSION 0.1.0 LANGUAGES CXX)
 
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 option(REGISTRATION_BUILD_TESTS "Build registration tests" ON)
 
 set(CCCORELIB_USE_QT_CONCURRENT OFF CACHE BOOL "" FORCE)

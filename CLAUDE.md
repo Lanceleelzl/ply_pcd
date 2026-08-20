@@ -40,6 +40,9 @@ p_target = T_source_to_target * p_source
 - PLY／PCD 解析器封装为本项目无界面模块。
 - ICP 行为和混合精度与本地 CloudCompare 版本保持一致。
 - Windows 使用 Visual Studio 2022 开发和调试。
+- Windows 普通使用者通过 `pnpm install` 使用仓库内预编译静态 Worker，不要求安装 Visual Studio、CMake 或 Python。
+- `pnpm run build:native` 在 VS2022 环境编译并替换预编译 Worker，同时更新源码指纹和 SHA-256 清单。
+- 本地 Python 由项目内固定版本 uv 管理，依赖以 `uv.lock` 为准，不修改系统 Python 和 PATH。
 - Docker Desktop 构建 Linux 镜像，最终以同一 Linux 镜像部署到服务器。
 
 ## 上游基线
@@ -126,4 +129,3 @@ Docker 改动：镜像构建＋容器内真实数据回归测试
 - 修改系统配置、安装全局依赖、修改 CI/CD、发布镜像或公开仓库前必须先询问用户。
 - 不修改 `E:\Geosv_space\CloudCompare` 上游工作区。
 - 不把密钥、Token、密码写入源码、配置、日志或提交。
-

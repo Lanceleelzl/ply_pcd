@@ -3,7 +3,7 @@
 ## 当前阶段
 
 ```text
-阶段 6：HTTP 服务与网页 MVP
+阶段 6.5：本地一键运行与可分发 Worker
 状态：已完成，待进入生产化阶段
 ```
 
@@ -48,9 +48,14 @@
 - 已将网页和 API 的 `T_ply_to_pcd` 标记为推荐的最终业务矩阵，其余矩阵作为辅助结果展示。
 - 已实现任务完成后立即清理上传文件、默认保留结果 7 天并按小时清理过期任务；清理范围仅限 `runtime/jobs/{UUID}`。
 - 已提供标准 API 文档，覆盖接口、模型、错误码、状态机、矩阵约定、保留策略以及前端／Java／Python 调用方式。
-- 已在上传页增加高精度／快速模式、高级参数、恢复推荐值和参数风险提示；高精度默认值为 `1e-5／150000／0.95／42`。
+- 已在上传页增加推荐／实验／自定义模式、高级参数、恢复推荐值和参数风险提示。
 - 已统一页面、HTTP API 和 API 文档的默认值与参数范围，并在结果页显示实际参数、米／厘米 RMS 及误差含义警告。
 - 根据 CloudCompare 手工复核结果，将“推荐模式”默认参数恢复为实测更准确的 `1e-5／50000／1.0／42`；`150000／0.95` 降级为扩大采样实验模式。
+- 已增加 pnpm 统一入口，`pnpm install` 自动配置项目内 uv、Python 3.12、`.venv`、锁定依赖和可用 Worker。
+- 已提供 Windows x64 静态预编译 Worker、源码指纹和二进制 SHA-256；普通用户无需 Visual Studio、CMake、Python 或 VC++ Runtime。
+- 已实现 VS2022 检测、C++ 源码变化检测和 `pnpm run build:native` 自动编译、替换预编译 Worker及更新清单。
+- 已提供标准 `pnpm run dev／start／test／docker:*` 命令和本地运行文档。
+- 本地 Python 全部传递依赖已由 `uv.lock` 锁定；Docker 改用带哈希的完整 requirements 锁文件。
 
 ## 进行中
 
@@ -106,6 +111,12 @@
 - 增加多 overlap 候选与结果评分。
 - 增加 MinIO／S3、任务队列、保留策略和负载测试。
 
+### 阶段 6.5：本地运行与分发
+
+- 已支持 Windows x64 `pnpm install` 后直接 `pnpm run dev`。
+- 已支持无 VS 使用预编译 Worker，有 VS 自动构建和替换 Worker。
+- 已验证本地模式和 Docker 模式共用同一 API 与网页。
+
 ## 阻塞
 
 - 当前黄金矩阵只有 6 位小数，且未知 CloudCompare 随机采样种子；可以用于几何回归，但不能作为逐位一致基线。若能导出更高精度矩阵，应替换当前基线。
@@ -115,6 +126,6 @@
 
 ```text
 日期：2026-08-20
-方式：Docker Desktop／WSL2 FastAPI 服务＋Worker 子进程＋真实 PLY／PCD multipart 上传
-结果：健康页、上传页和 OpenAPI 均返回 200；OpenAPI 默认值已核对为 sampling_limit=50000、overlap=1.0、min_rms_decrease=1e-5、random_seed=42；页面默认显示“推荐模式”，并将 150000／0.95 标记为实验模式；此前默认组合真实任务 RMS 0.222230612453，API 与容器 CLI 矩阵逐元素最大差值为 0
+方式：pnpm 首次安装／重复安装＋托管 Python＋预编译 Worker＋VS2022 原生构建＋本地 FastAPI＋CTest＋Docker 哈希锁定构建
+结果：首次 pnpm install 自动安装 uv 0.12.3、Python 3.12.13 和 14 个运行包；重复安装约 0.9 s；强制无 VS 模式成功使用 SHA-256 校验的预编译 Worker；pnpm run build:native 成功替换静态 Worker且二进制仅依赖 KERNEL32.dll；pnpm run dev 健康页返回 200，失败任务隔离和输入清理通过；pnpm run test 1／1 通过，约 39.5 s；Docker 使用完整哈希锁文件构建成功
 ```

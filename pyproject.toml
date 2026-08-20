@@ -1,0 +1,12 @@
+[project]
+name = "ply-pcd-registration-service"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.116.1",
+    "python-multipart==0.0.20",
+    "uvicorn==0.35.0",
+]
+
+[tool.uv]
+package = false

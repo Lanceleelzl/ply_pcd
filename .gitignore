@@ -2,6 +2,7 @@
 /build/
 /out/
 /cmake-build-*/
+/node_modules/
 *.obj
 *.o
 *.lib
@@ -14,6 +15,9 @@
 # Runtime data
 /runtime/
 registration_trace_log.csv
+
+# Project-local managed runtimes
+/.tools/
 
 # Environment and secrets
 .env
