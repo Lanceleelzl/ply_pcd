@@ -1,0 +1,165 @@
+.integrated-editor {
+  display: block;
+  height: 100vh;
+}
+
+.integrated-workspace {
+  display: grid;
+  grid-template-columns: 370px minmax(0, 1fr);
+  height: 100vh;
+}
+
+.workflow-panel {
+  border: 0;
+  border-right: 1px solid #344155;
+  padding: 14px;
+}
+
+.workflow-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.workflow-title h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.workflow-title small,
+.step-hint {
+  color: #9dacbf;
+}
+
+.workflow-step {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #344155;
+  border-radius: 9px;
+  background: #111b2a;
+}
+
+.workflow-step h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.workflow-step h2 span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #33445d;
+  font-size: 12px;
+}
+
+.workflow-step.completed h2 span {
+  background: #24775f;
+}
+
+.workflow-step h3 {
+  margin: 10px 0 6px;
+  font-size: 12px;
+}
+
+.workflow-step p {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.viewport-toolbar {
+  position: absolute;
+  z-index: 4;
+  left: 12px;
+  top: 12px;
+  height: auto;
+  padding: 7px;
+  border: 1px solid #42516a;
+  border-radius: 8px;
+  background: #111a27e8;
+}
+
+.viewport-toolbar strong {
+  padding: 0 5px;
+  font-size: 12px;
+}
+
+.badge {
+  top: 66px;
+}
+
+.parameter-label,
+.icp-grid label {
+  display: grid;
+  gap: 4px;
+  color: #aeb9ca;
+  font-size: 11px;
+}
+
+.parameter-label select,
+.icp-grid input {
+  width: 100%;
+  padding: 7px;
+  border: 1px solid #45536a;
+  border-radius: 5px;
+  background: #0f1724;
+  color: #fff;
+}
+
+.icp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.timeline {
+  max-height: 150px;
+  overflow: auto;
+}
+
+.result-formula {
+  color: #79d5b3;
+}
+
+.preview-loading {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #c3cfdf;
+}
+
+.workflow-panel details summary {
+  margin-top: 10px;
+  color: #b9c7d9;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .integrated-workspace {
+    grid-template-columns: 310px minmax(0, 1fr);
+  }
+
+  .workflow-panel {
+    position: relative;
+    inset: auto;
+    width: auto;
+  }
+
+  .viewport-toolbar strong,
+  .viewport-toolbar button:nth-of-type(n + 4) {
+    display: none;
+  }
+}

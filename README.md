@@ -35,9 +35,11 @@ pnpm install
 pnpm run dev
 ```
 
-浏览器打开 `http://localhost:8765`，选择一个 `.ply` 和一个 `.pcd` 文件即可创建异步配准任务。OpenAPI 文档位于 `http://localhost:8765/docs`。
+开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8765`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。选择一个 `.ply` 和一个 `.pcd` 后点击“上传并进入配准工作台”，页面会自动生成轻量预览并在同一工作台加载模型。
 
-如需修改本地端口，编辑 `config/local.json` 后重新启动服务，无需设置系统或终端环境变量。
+如需修改端口，编辑 `config/local.json` 中的 `port`（API）和 `web_port`（开发页面）后重新启动服务，无需设置系统或终端环境变量。
+
+工作台左侧按“数据→可选粗配准→ICP→结果”展示完整流程，粗配准工具浮动在三维视口内。PLY 固定，只有 PCD 可以平移和旋转，禁止缩放；不做人工调整时可直接执行 ICP。Gaussian 效果按需加载同一采样集合的轻量 PLY。人工矩阵作为 `T_manual_pcd_to_ply` 提交，最终组合为 `T_pcd_to_ply = T_icp_delta × T_manual_pcd_to_ply`，业务最终使用页面显式标记的 `PLY→PCD` 矩阵。
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
 

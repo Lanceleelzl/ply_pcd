@@ -2,11 +2,12 @@
   "name": "ply-pcd-registration-service",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "license": "GPL-3.0-or-later",
   "description": "Gaussian PLY to SLAM PCD registration service",
   "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": ">=20",
+    "node": ">=20.19",
     "pnpm": ">=10"
   },
   "scripts": {
@@ -14,12 +15,22 @@
     "setup:local": "node scripts/local-runtime.mjs setup",
     "dev": "node scripts/local-runtime.mjs dev",
     "start": "node scripts/local-runtime.mjs start",
-    "build": "node scripts/local-runtime.mjs build-native",
+    "build": "pnpm run build:native && pnpm run build:web",
     "build:native": "node scripts/local-runtime.mjs build-native",
+    "build:web": "vite build --config web/vite.config.ts",
     "test": "node scripts/local-runtime.mjs test",
     "docker:build": "docker compose -f docker/docker-compose.yml build registration-api",
     "docker:up": "docker compose -f docker/docker-compose.yml up -d registration-api",
     "docker:down": "docker compose -f docker/docker-compose.yml down",
     "docker:logs": "docker compose -f docker/docker-compose.yml logs -f registration-api"
+  },
+  "dependencies": {
+    "playcanvas": "2.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/webxr": "^0.5.24",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
   }
 }

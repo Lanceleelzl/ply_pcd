@@ -1,3 +1,12 @@
+FROM node:22-bookworm-slim AS web-builder
+
+WORKDIR /src
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile --ignore-scripts
+COPY web web
+COPY config config
+RUN pnpm run build:web
+
 FROM ubuntu:24.04 AS builder
 
 RUN apt-get update \
@@ -39,6 +48,7 @@ COPY --from=builder /opt/registration/bin/registration_worker /usr/local/bin/reg
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/ply-pcd-registration/
 COPY LICENSES /usr/share/licenses/ply-pcd-registration/LICENSES
 COPY service /opt/registration-service
+COPY --from=web-builder /src/service/static /opt/registration-service/static
 
 USER registration
 WORKDIR /data

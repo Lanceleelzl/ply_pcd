@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "registration/icp_registration.hpp"
+#include "registration/gaussian_preview.hpp"
 #include "registration/matrix.hpp"
 #include "registration/pcd_reader.hpp"
 #include "registration/ply_reader.hpp"
+#include "registration/point_cloud_preview.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -23,6 +25,7 @@ void printUsage()
         << "  registration_worker inspect-ply <file.ply>\n"
         << "  registration_worker inspect-pcd <file.pcd>\n"
         << "  registration_worker invert-matrix <matrix.txt>\n"
+        << "  registration_worker prepare-preview --ply <model.ply> --pcd <data.pcd> --output-dir <dir> [options]\n"
         << "  registration_worker register --ply <model.ply> --pcd <data.pcd> --output-dir <dir> [options]\n\n"
         << "Register options:\n"
         << "  --min-rms-decrease <value>  Default: 1e-5\n"
@@ -32,7 +35,41 @@ void printUsage()
         << "  --random-seed <count>        Default: 42\n"
         << "  --max-threads <count>        Default: 0\n"
         << "  --adjust-scale               Default: disabled\n"
-        << "  --filter-farthest            Default: disabled\n";
+        << "  --filter-farthest            Default: disabled\n"
+        << "  --initial-matrix <file>      Initial rigid PCD-to-PLY matrix\n";
+}
+
+struct PreviewArguments
+{
+    std::filesystem::path ply;
+    std::filesystem::path pcd;
+    std::filesystem::path outputDirectory;
+    std::size_t plyLimit = 300000;
+    std::size_t pcdLimit = 300000;
+};
+
+PreviewArguments parsePreviewArguments(int argc, char** argv)
+{
+    PreviewArguments result;
+    for (int index = 2; index < argc; ++index)
+    {
+        const std::string option = argv[index];
+        const auto value = [&]() -> std::string {
+            if (index + 1 >= argc) throw std::runtime_error("Missing value after " + option);
+            return argv[++index];
+        };
+        if (option == "--ply") result.ply = value();
+        else if (option == "--pcd") result.pcd = value();
+        else if (option == "--output-dir") result.outputDirectory = value();
+        else if (option == "--ply-limit") result.plyLimit = std::stoull(value());
+        else if (option == "--pcd-limit") result.pcdLimit = std::stoull(value());
+        else throw std::runtime_error("Unknown prepare-preview option: " + option);
+    }
+    if (result.ply.empty() || result.pcd.empty() || result.outputDirectory.empty())
+        throw std::runtime_error("prepare-preview requires --ply, --pcd and --output-dir");
+    if (result.plyLimit < 3 || result.pcdLimit < 3)
+        throw std::runtime_error("Preview point limits must be at least 3");
+    return result;
 }
 
 struct RegisterArguments
@@ -64,6 +101,7 @@ RegisterArguments parseRegisterArguments(int argc, char** argv)
         else if (option == "--max-threads") result.options.maxThreadCount = std::stoi(value());
         else if (option == "--adjust-scale") result.options.adjustScale = true;
         else if (option == "--filter-farthest") result.options.filterOutFarthestPoints = true;
+        else if (option == "--initial-matrix") result.options.initialPcdToPly = registration::Matrix4d::fromFile(value());
         else throw std::runtime_error("Unknown register option: " + option);
     }
     if (result.ply.empty() || result.pcd.empty() || result.outputDirectory.empty())
@@ -115,6 +153,8 @@ int runRegistration(const RegisterArguments& arguments)
     };
     writeMatrix("pcd_to_ply_matrix.txt", result.pcdToPly);
     writeMatrix("ply_to_pcd_matrix.txt", result.plyToPcd);
+    writeMatrix("initial_pcd_to_ply_matrix.txt", result.initialPcdToPly);
+    writeMatrix("icp_refinement_pcd_to_ply_matrix.txt", result.refinementPcdToPly);
     writeMatrix("pcd_to_ply_cloudcompare_matrix.txt", pcdToPlyCloudCompare);
     writeMatrix("ply_to_pcd_cloudcompare_matrix.txt", plyToPcdCloudCompare);
 
@@ -126,6 +166,11 @@ int runRegistration(const RegisterArguments& arguments)
            << "  \"status\": \"success\",\n"
            << "  \"formula\": \"p_pcd = T_ply_to_pcd * p_ply\",\n"
            << "  \"matrix_convention\": \"column_vector\",\n"
+           << "  \"initial_pcd_to_ply\": ";
+    writeMatrixJson(output, result.initialPcdToPly, 2);
+    output << ",\n  \"icp_refinement_pcd_to_ply\": ";
+    writeMatrixJson(output, result.refinementPcdToPly, 2);
+    output << ",\n"
            << "  \"pcd_to_ply\": ";
     writeMatrixJson(output, result.pcdToPly, 2);
     output << ",\n  \"ply_to_pcd\": ";
@@ -154,6 +199,54 @@ int runRegistration(const RegisterArguments& arguments)
     log << "stage=complete final_rms=" << result.finalRms
         << " final_point_count=" << result.finalPointCount
         << " elapsed_seconds=" << elapsedSeconds << '\n';
+    std::cout << "{\"status\":\"success\",\"output_dir\":\""
+              << arguments.outputDirectory.generic_string() << "\"}\n";
+    return 0;
+}
+
+int runPreview(const PreviewArguments& arguments)
+{
+    std::filesystem::create_directories(arguments.outputDirectory);
+    const auto ply = registration::PlyReader().read(arguments.ply);
+    const auto pcd = registration::PcdReader().read(arguments.pcd);
+    const registration::PointCloudPreview writer;
+    const auto plyPreview = writer.write(ply.cloud, arguments.plyLimit,
+                                         arguments.outputDirectory / "ply-points.bin");
+    const auto pcdPreview = writer.write(pcd.cloud, arguments.pcdLimit,
+                                         arguments.outputDirectory / "pcd-points.bin");
+    bool gaussianAvailable = false;
+    std::string gaussianError;
+    try
+    {
+        registration::GaussianPreview().write(
+            arguments.ply, plyPreview.selectedIndices,
+            arguments.outputDirectory / "ply-gaussian-preview.ply");
+        gaussianAvailable = true;
+    }
+    catch (const std::exception& error)
+    {
+        gaussianError = error.what();
+    }
+    std::ofstream metadata(arguments.outputDirectory / "metadata.json");
+    if (!metadata) throw std::runtime_error("Cannot create preview metadata");
+    const auto writeSummary = [&](const char* name, const registration::PreviewResult& result, bool comma) {
+        metadata << "    \"" << name << "\": {\n"
+                 << "      \"source_point_count\": " << result.sourcePointCount << ",\n"
+                 << "      \"preview_point_count\": " << result.previewPointCount << ",\n"
+                 << "      \"bounds\": {\"min\": [" << result.bounds.min[0] << ", "
+                 << result.bounds.min[1] << ", " << result.bounds.min[2] << "], \"max\": ["
+                 << result.bounds.max[0] << ", " << result.bounds.max[1] << ", "
+                 << result.bounds.max[2] << "]}\n"
+                 << "    }" << (comma ? "," : "") << "\n";
+    };
+    metadata << "{\n  \"format\": \"PCPV0001\",\n"
+             << "  \"gaussian_available\": " << (gaussianAvailable ? "true" : "false") << ",\n";
+    if (!gaussianAvailable)
+        metadata << "  \"gaussian_error\": \"" << gaussianError << "\",\n";
+    metadata << "  \"clouds\": {\n";
+    writeSummary("ply", plyPreview, true);
+    writeSummary("pcd", pcdPreview, false);
+    metadata << "  }\n}\n";
     std::cout << "{\"status\":\"success\",\"output_dir\":\""
               << arguments.outputDirectory.generic_string() << "\"}\n";
     return 0;
@@ -192,6 +285,10 @@ int main(int argc, char** argv)
         if (command == "register")
         {
             return runRegistration(parseRegisterArguments(argc, argv));
+        }
+        if (command == "prepare-preview")
+        {
+            return runPreview(parsePreviewArguments(argc, argv));
         }
 
         if (argc != 3)

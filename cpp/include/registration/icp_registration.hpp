@@ -19,10 +19,13 @@ struct IcpOptions
     bool filterOutFarthestPoints = false;
     int maxThreadCount = 0;
     std::uint32_t randomSeed = 42;
+    Matrix4d initialPcdToPly;
 };
 
 struct IcpResult
 {
+    Matrix4d initialPcdToPly;
+    Matrix4d refinementPcdToPly;
     Matrix4d pcdToPly;
     Matrix4d plyToPcd;
     double scale = 1.0;

@@ -3,6 +3,7 @@
 /out/
 /cmake-build-*/
 /node_modules/
+/service/static/
 *.obj
 *.o
 *.lib
@@ -39,6 +40,7 @@ __pycache__/
 Thumbs.db
 
 # AI local configuration
+.playwright-cli/
 .claude/
 .codex/
 

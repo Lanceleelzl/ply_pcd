@@ -23,6 +23,9 @@ async function readLocalConfig() {
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
     throw new Error("config/local.json: port must be an integer between 1 and 65535");
   }
+  if (!Number.isInteger(config.web_port) || config.web_port < 1 || config.web_port > 65535) {
+    throw new Error("config/local.json: web_port must be an integer between 1 and 65535");
+  }
   return config;
 }
 
@@ -210,12 +213,12 @@ async function setup() {
   run(uvExecutable, ["python", "install", "3.12"], { env: environment });
   run(uvExecutable, ["sync", "--python", "3.12", "--no-dev"], { env: environment });
   await ensureWorker();
-  console.log(`[setup] Local runtime is ready. Run pnpm run dev and open http://localhost:${config.port}`);
+  console.log("[setup] Local runtime is ready.");
 }
 
-async function serve() {
+async function serve(development) {
   await setup();
-  const { port } = await readLocalConfig();
+  const { port, web_port: webPort } = await readLocalConfig();
   const environment = {
     ...process.env,
     REGISTRATION_RUNTIME_ROOT: runtimeDirectory,
@@ -225,14 +228,30 @@ async function serve() {
     REGISTRATION_RESULT_RETENTION_HOURS: process.env.REGISTRATION_RESULT_RETENTION_HOURS || "168",
     REGISTRATION_CLEANUP_INTERVAL_SECONDS: process.env.REGISTRATION_CLEANUP_INTERVAL_SECONDS || "3600",
   };
-  console.log(`[local] Starting service at http://localhost:${port}`);
-  const child = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port), "--log-config", join(root, "service", "logging.json")], {
+  console.log(`[local] Starting API at http://localhost:${port}`);
+  const api = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port), "--log-config", join(root, "service", "logging.json")], {
     cwd: root,
     env: environment,
     stdio: "inherit",
   });
-  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => child.kill(signal));
-  const code = await new Promise((resolveExit) => child.on("exit", resolveExit));
+  const children = [api];
+  if (development) {
+    console.log(`[local] Starting web development server at http://localhost:${webPort}`);
+    children.push(spawn(process.execPath, [join(root, "node_modules", "vite", "bin", "vite.js"), "--config", "web/vite.config.ts"], {
+      cwd: root,
+      env: environment,
+      stdio: "inherit",
+      shell: false,
+    }));
+  }
+  const stopChildren = (signal) => children.forEach((child) => {
+    if (!child.killed) child.kill(signal);
+  });
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stopChildren(signal));
+  const code = await new Promise((resolveExit) => {
+    children.forEach((child) => child.on("exit", resolveExit));
+  });
+  stopChildren("SIGTERM");
   process.exitCode = code ?? 1;
 }
 
@@ -247,7 +266,8 @@ async function test() {
 
 const command = process.argv[2];
 if (command === "setup") await setup();
-else if (command === "dev" || command === "start") await serve();
+else if (command === "dev") await serve(true);
+else if (command === "start") await serve(false);
 else if (command === "build-native") { await buildNative(); await ensureWorker(); }
 else if (command === "test") await test();
 else throw new Error(`Unknown local runtime command: ${command}`);

@@ -6,7 +6,7 @@
 
 ```text
 Windows 10／11 x64
-Node.js >= 20
+Node.js >= 20.19
 pnpm >= 10
 ```
 
@@ -26,7 +26,7 @@ pnpm run dev
 打开：
 
 ```text
-http://localhost:8765
+http://localhost:5173
 ```
 
 `pnpm install` 自动执行：
@@ -101,11 +101,12 @@ pnpm run build:native
 
 ```json
 {
-  "port": 8765
+  "port": 8765,
+  "web_port": 5173
 }
 ```
 
-修改并保存端口后，重新执行 `pnpm run dev` 即可生效。端口必须是 `1` 至 `65535` 之间的整数。
+`port` 是 FastAPI 端口，`web_port` 是 Vite 开发页面端口。修改并保存后，重新执行 `pnpm run dev` 即可生效，端口必须是 `1` 至 `65535` 之间的整数。
 
 本地服务只监听 `127.0.0.1`。如需局域网或公网访问，应通过经过鉴权和 HTTPS 配置的反向代理部署，不应直接修改为全网监听。
 

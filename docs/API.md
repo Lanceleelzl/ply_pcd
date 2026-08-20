@@ -17,6 +17,8 @@
 
 服务接收 Gaussian Splatting PLY 模型和无人机 SLAM PCD 点云，使用 PCD 作为移动点云、PLY 作为固定点云执行 ICP，然后返回双向坐标转换矩阵。
 
+人工粗配准流程先创建会话并生成轻量预览，浏览器只允许移动 PCD。提交的 `initial_pcd_to_ply` 先作用于原始 PCD，ICP 返回增量矩阵，最终计算 `T_pcd_to_ply = T_icp_delta × T_manual_pcd_to_ply`。
+
 业务系统最终应使用：
 
 ```text
@@ -371,3 +373,67 @@ REGISTRATION_CLEANUP_INTERVAL_SECONDS
 - 明确的 CORS Origin 白名单。
 - 磁盘容量与任务失败监控。
 - 多实例场景下的持久化任务队列和共享对象存储。
+
+## 16．人工粗配准接口
+
+### 创建会话
+
+```http
+POST /api/v1/manual-registration-sessions
+Content-Type: multipart/form-data
+```
+
+上传字段仍为 `ply` 和 `pcd`。服务保存原始文件并异步生成体素采样预览，返回 `session_id`、`status_url` 和兼容字段 `editor_url`。Web 前端使用 `/?session={session_id}` 在主页内打开统一配准工作台；API 调用方不需要依赖页面地址。
+
+### 查询会话
+
+```http
+GET /api/v1/manual-registration-sessions/{session_id}
+```
+
+状态为 `ready` 后返回 `ply_preview_url`、`pcd_preview_url`、点数和包围盒。Gaussian 属性可用时还返回 `gaussian_preview_url`；该资源只有用户切换 Gaussian 显示时才下载。
+
+### 获取预览
+
+```http
+GET /api/v1/manual-registration-sessions/{session_id}/preview/ply
+GET /api/v1/manual-registration-sessions/{session_id}/preview/pcd
+GET /api/v1/manual-registration-sessions/{session_id}/preview/gaussian
+```
+
+`ply` 和 `pcd` 使用项目内部 `PCPV0001` 二进制点云格式。`gaussian` 是保留相同采样索引完整 Gaussian 属性的 binary little-endian PLY。
+
+### 提交初始矩阵并精配准
+
+```http
+POST /api/v1/manual-registration-sessions/{session_id}/register
+Content-Type: application/json
+```
+
+```json
+{
+  "initial_pcd_to_ply": [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ],
+  "min_rms_decrease": 0.00001,
+  "sampling_limit": 50000,
+  "overlap": 1.0,
+  "random_seed": 42
+}
+```
+
+初始矩阵必须是有限、无缩放、正交且行列式接近 `+1` 的刚体 `4×4` 矩阵，最后一行必须为 `[0, 0, 0, 1]`。接口返回标准异步配准任务，结果新增：
+
+```text
+initial_pcd_to_ply
+icp_refinement_pcd_to_ply
+pcd_to_ply
+ply_to_pcd
+```
+
+人工会话与任务结果使用相同的默认 `168` 小时保留期限。
+
+Web 工作台会在提交时读取当前 PCD 变换作为 `initial_pcd_to_ply`。精配准完成后，三维视口显示最终 `PCD→PLY` 对齐效果，左侧保留提交时的粗配准矩阵，并将推荐业务矩阵明确显示为 `PLY→PCD`。

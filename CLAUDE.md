@@ -45,6 +45,11 @@ p_target = T_source_to_target * p_source
 - 本地 Python 由项目内固定版本 uv 管理，依赖以 `uv.lock` 为准，不修改系统 Python 和 PATH。
 - 本地服务端口由 `config/local.json` 管理，监听地址固定为 `127.0.0.1`。
 - Docker Desktop 构建 Linux 镜像，最终以同一 Linux 镜像部署到服务器。
+- 人工粗配准功能在 `feat/manual-coarse-registration` 分支开发，完成验证前不合并 `main`。
+- 粗配准固定以 PLY 为不可移动参考、PCD 为唯一可平移和旋转的数据云，不允许人工缩放。
+- 浏览器默认加载由原始数据生成的轻量点云预览；Gaussian 效果使用同一采样集合，预览数据不参与最终 ICP。
+- 人工矩阵方向固定为 `T_manual_pcd_to_ply`；ICP 最终组合为 `T_pcd_to_ply = T_icp_delta * T_manual_pcd_to_ply`。
+- 前端三维引擎使用 PlayCanvas；PCD 解析继续复用项目 C++ 解析器，不引入第二套 PCD 解析库。
 
 ## 上游基线
 

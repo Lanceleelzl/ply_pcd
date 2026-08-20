@@ -15,11 +15,13 @@ set(CCCORELIB_SHARED OFF CACHE BOOL "" FORCE)
 add_subdirectory(libs/cloudcompare_core EXCLUDE_FROM_ALL)
 
 add_library(registration_io STATIC
+    cpp/src/gaussian_preview.cpp
     cpp/src/icp_registration.cpp
     cpp/src/matrix.cpp
     cpp/src/pcd_reader.cpp
     cpp/src/ply_reader.cpp
     cpp/src/point_cloud.cpp
+    cpp/src/point_cloud_preview.cpp
 )
 
 target_include_directories(registration_io PUBLIC cpp/include)
