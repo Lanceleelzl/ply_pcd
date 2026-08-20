@@ -14,6 +14,8 @@ services:
       - 0.0.0.0
       - --port
       - "8765"
+      - --log-config
+      - /opt/registration-service/logging.json
     environment:
       REGISTRATION_RUNTIME_ROOT: /data/runtime
       REGISTRATION_WORKER_PATH: /usr/local/bin/registration_worker

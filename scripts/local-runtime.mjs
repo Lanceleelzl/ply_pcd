@@ -226,7 +226,7 @@ async function serve() {
     REGISTRATION_CLEANUP_INTERVAL_SECONDS: process.env.REGISTRATION_CLEANUP_INTERVAL_SECONDS || "3600",
   };
   console.log(`[local] Starting service at http://localhost:${port}`);
-  const child = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port)], {
+  const child = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port), "--log-config", join(root, "service", "logging.json")], {
     cwd: root,
     env: environment,
     stdio: "inherit",
