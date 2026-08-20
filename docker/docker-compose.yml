@@ -13,7 +13,7 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "8080"
+      - "8765"
     environment:
       REGISTRATION_RUNTIME_ROOT: /data/runtime
       REGISTRATION_WORKER_PATH: /usr/local/bin/registration_worker
@@ -22,7 +22,7 @@ services:
       REGISTRATION_RESULT_RETENTION_HOURS: "168"
       REGISTRATION_CLEANUP_INTERVAL_SECONDS: "3600"
     ports:
-      - "8080:8080"
+      - "8765:8765"
     volumes:
       - ../runtime:/data/runtime
     restart: unless-stopped

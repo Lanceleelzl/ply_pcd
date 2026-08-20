@@ -16,6 +16,15 @@ const venvPython = platform() === "win32"
   : join(root, ".venv", "bin", "python");
 const runtimeDirectory = join(root, "runtime");
 const activeWorker = join(runtimeDirectory, "local", "bin", platform() === "win32" ? "registration_worker.exe" : "registration_worker");
+const localConfigPath = join(root, "config", "local.json");
+
+async function readLocalConfig() {
+  const config = JSON.parse(await readFile(localConfigPath, "utf8"));
+  if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
+    throw new Error("config/local.json: port must be an integer between 1 and 65535");
+  }
+  return config;
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, stdio: "inherit", shell: false, ...options });
@@ -195,17 +204,18 @@ async function ensureWorker() {
 }
 
 async function setup() {
+  const config = await readLocalConfig();
   await ensureUv();
   const environment = managedEnvironment();
   run(uvExecutable, ["python", "install", "3.12"], { env: environment });
   run(uvExecutable, ["sync", "--python", "3.12", "--no-dev"], { env: environment });
   await ensureWorker();
-  console.log("[setup] Local runtime is ready. Run pnpm run dev and open http://localhost:8080");
+  console.log(`[setup] Local runtime is ready. Run pnpm run dev and open http://localhost:${config.port}`);
 }
 
 async function serve() {
   await setup();
-  const port = process.env.PORT || "8080";
+  const { port } = await readLocalConfig();
   const environment = {
     ...process.env,
     REGISTRATION_RUNTIME_ROOT: runtimeDirectory,
@@ -216,7 +226,7 @@ async function serve() {
     REGISTRATION_CLEANUP_INTERVAL_SECONDS: process.env.REGISTRATION_CLEANUP_INTERVAL_SECONDS || "3600",
   };
   console.log(`[local] Starting service at http://localhost:${port}`);
-  const child = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", port], {
+  const child = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port)], {
     cwd: root,
     env: environment,
     stdio: "inherit",

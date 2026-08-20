@@ -43,6 +43,7 @@ p_target = T_source_to_target * p_source
 - Windows 普通使用者通过 `pnpm install` 使用仓库内预编译静态 Worker，不要求安装 Visual Studio、CMake 或 Python。
 - `pnpm run build:native` 在 VS2022 环境编译并替换预编译 Worker，同时更新源码指纹和 SHA-256 清单。
 - 本地 Python 由项目内固定版本 uv 管理，依赖以 `uv.lock` 为准，不修改系统 Python 和 PATH。
+- 本地服务端口由 `config/local.json` 管理，监听地址固定为 `127.0.0.1`。
 - Docker Desktop 构建 Linux 镜像，最终以同一 Linux 镜像部署到服务器。
 
 ## 上游基线

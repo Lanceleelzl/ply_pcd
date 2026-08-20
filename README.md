@@ -35,7 +35,9 @@ pnpm install
 pnpm run dev
 ```
 
-浏览器打开 `http://localhost:8080`，选择一个 `.ply` 和一个 `.pcd` 文件即可创建异步配准任务。OpenAPI 文档位于 `http://localhost:8080/docs`。
+浏览器打开 `http://localhost:8765`，选择一个 `.ply` 和一个 `.pcd` 文件即可创建异步配准任务。OpenAPI 文档位于 `http://localhost:8765/docs`。
+
+如需修改本地端口，编辑 `config/local.json` 后重新启动服务，无需设置系统或终端环境变量。
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
 
@@ -75,7 +77,7 @@ pnpm run docker:build
 pnpm run docker:up
 ```
 
-Docker 与本地服务默认都使用 `8080` 端口，切换前先停止另一种运行方式。
+Docker 与本地服务默认都使用 `8765` 端口，切换前先停止另一种运行方式。
 
 检查默认 PCD：
 

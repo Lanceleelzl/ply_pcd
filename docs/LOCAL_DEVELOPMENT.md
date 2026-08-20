@@ -26,7 +26,7 @@ pnpm run dev
 打开：
 
 ```text
-http://localhost:8080
+http://localhost:8765
 ```
 
 `pnpm install` 自动执行：
@@ -97,16 +97,15 @@ pnpm run build:native
 
 ## 5．本地配置
 
-可在启动前设置环境变量：
+本地监听端口在 `config/local.json` 中配置：
 
-```powershell
-$env:PORT="8081"
-$env:REGISTRATION_MAX_CONCURRENT_JOBS="1"
-$env:REGISTRATION_WORKER_TIMEOUT_SECONDS="1800"
-$env:REGISTRATION_RESULT_RETENTION_HOURS="168"
-$env:REGISTRATION_CLEANUP_INTERVAL_SECONDS="3600"
-pnpm run dev
+```json
+{
+  "port": 8765
+}
 ```
+
+修改并保存端口后，重新执行 `pnpm run dev` 即可生效。端口必须是 `1` 至 `65535` 之间的整数。
 
 本地服务只监听 `127.0.0.1`。如需局域网或公网访问，应通过经过鉴权和 HTTPS 配置的反向代理部署，不应直接修改为全网监听。
 
@@ -129,7 +128,7 @@ Docker 使用从同一份 `uv.lock` 导出的 `service/requirements.lock.txt`，
 
 ## 7．本地与 Docker 切换
 
-本地和 Docker 默认都使用 `8080`，同一时间只能启动一个：
+本地和 Docker 默认都使用 `8765`，同一时间只能启动一个：
 
 ```powershell
 pnpm run docker:down

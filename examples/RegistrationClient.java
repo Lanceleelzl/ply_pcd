@@ -15,7 +15,7 @@ public final class RegistrationClient {
     private static final Pattern JOB_ID = Pattern.compile("\\\"job_id\\\":\\\"([^\\\"]+)\\\"");
 
     public static void main(String[] args) throws Exception {
-        String baseUrl = args.length > 0 ? args[0] : "http://localhost:8080";
+        String baseUrl = args.length > 0 ? args[0] : "http://localhost:8765";
         Path ply = Path.of(args.length > 1 ? args[1] : "source/ply/point_cloud.ply");
         Path pcd = Path.of(args.length > 2 ? args[2] : "source/pcd/GlobalMap.pcd");
         String boundary = "----Registration" + UUID.randomUUID();

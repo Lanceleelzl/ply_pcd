@@ -371,7 +371,7 @@ Worker 直接接收路径。Docker 将 `source` 只读挂载到 `/data/source`�
 用户访问：
 
 ```text
-http://localhost:8080
+http://localhost:8765
 ```
 
 选择 PLY 和 PCD 后创建异步任务。上传必须流式写入：

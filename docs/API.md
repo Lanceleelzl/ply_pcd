@@ -8,7 +8,7 @@
 | API 版本 | `v1` |
 | 服务版本 | `0.1.0` |
 | 协议 | HTTP／JSON／multipart/form-data |
-| 本地 Base URL | `http://localhost:8080` |
+| 本地 Base URL | `http://localhost:8765` |
 | OpenAPI | `/openapi.json` |
 | Swagger UI | `/docs` |
 | 认证 | 当前版本未启用，禁止直接暴露到公网 |
@@ -109,7 +109,7 @@ Content-Type: multipart/form-data
 ### 7.2 cURL 示例
 
 ```bash
-curl -X POST "http://localhost:8080/api/v1/registrations" \
+curl -X POST "http://localhost:8765/api/v1/registrations" \
   -F "ply=@point_cloud.ply" \
   -F "pcd=@GlobalMap.pcd" \
   -F "min_rms_decrease=0.00001" \

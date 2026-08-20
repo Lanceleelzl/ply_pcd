@@ -6,7 +6,7 @@ from pathlib import Path
 import requests
 
 
-base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
+base_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8765"
 ply_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("source/ply/point_cloud.ply")
 pcd_path = Path(sys.argv[3]) if len(sys.argv) > 3 else Path("source/pcd/GlobalMap.pcd")
 

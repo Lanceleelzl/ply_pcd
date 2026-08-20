@@ -55,6 +55,7 @@
 - 已提供 Windows x64 静态预编译 Worker、源码指纹和二进制 SHA-256；普通用户无需 Visual Studio、CMake、Python 或 VC++ Runtime。
 - 已实现 VS2022 检测、C++ 源码变化检测和 `pnpm run build:native` 自动编译、替换预编译 Worker及更新清单。
 - 已提供标准 `pnpm run dev／start／test／docker:*` 命令和本地运行文档。
+- 已将本地与 Docker 默认服务端口统一调整为 `8765`；本地端口由 `config/local.json` 管理。
 - 本地 Python 全部传递依赖已由 `uv.lock` 锁定；Docker 改用带哈希的完整 requirements 锁文件。
 
 ## 进行中
