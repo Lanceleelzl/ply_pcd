@@ -8,6 +8,7 @@
 *.lib
 *.dll
 *.exe
+!/runtime-bin/win32-x64/registration_worker.exe
 *.pdb
 *.so
 *.a
