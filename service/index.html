@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PLY／PCD 坐标配准</title>
+  <style>
+    body{font:16px/1.55 system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#172033}
+    form,pre,.primary{border:1px solid #d8deea;border-radius:10px;padding:20px;background:#f8fafc}
+    label{display:block;margin:12px 0}button{padding:10px 18px;margin:12px 8px 0 0}pre{overflow:auto;min-height:80px}
+    .primary{display:none;margin-top:22px;border:2px solid #16734b;background:#f0fff8}.primary h2{color:#12613f;margin-top:0}
+    .formula{font-family:monospace;font-weight:700}.hint{color:#43506a}details{margin-top:18px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 22px}.grid input,.grid select{display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:5px}
+    .warning{padding:12px;border-left:4px solid #c77b00;background:#fff8e8;color:#654400}.metrics{font-weight:600;line-height:1.8}
+  </style>
+</head>
+<body>
+  <h1>PLY／PCD 坐标配准</h1>
+  <p>PCD 作为移动点云配准到 PLY，服务返回主要业务矩阵 PLY→PCD。</p>
+  <form id="form">
+    <label>Gaussian PLY：<input name="ply" type="file" accept=".ply" required></label>
+    <label>SLAM PCD：<input name="pcd" type="file" accept=".pcd" required></label>
+    <label>配准模式：
+      <select id="mode">
+        <option value="validated" selected>推荐模式</option>
+        <option value="experimental">扩大采样实验模式</option>
+        <option value="custom">自定义</option>
+      </select>
+    </label>
+    <details>
+      <summary>高级参数</summary>
+      <div class="grid">
+        <label>RMS 收敛阈值
+          <input id="minRms" name="min_rms_decrease" type="number" value="0.00001" min="0.00000001" max="0.001" step="any" required>
+          <small>仅控制停止条件，不是最终误差目标。</small>
+        </label>
+        <label>最大采样点数
+          <input id="sampling" name="sampling_limit" type="number" value="50000" min="10000" max="500000" step="1000" required>
+          <small>经 CloudCompare 手工验证的默认值为 50000。</small>
+        </label>
+        <label>有效重叠率
+          <input id="overlap" name="overlap" type="number" value="1.0" min="0.5" max="1" step="0.01" required>
+          <small>表示 PCD 中预计有效匹配点的比例。</small>
+        </label>
+        <label>随机种子
+          <input id="seed" name="random_seed" type="number" value="42" min="0" max="4294967295" step="1" required>
+          <small>用于结果复现，不直接提高精度。</small>
+        </label>
+      </div>
+      <p class="warning">降低 overlap 会排除距离较远的点，可能降低 RMS，但不代表全局配准更准确。</p>
+      <button id="reset" type="button">恢复推荐值</button>
+    </details>
+    <button type="submit">上传并开始配准</button>
+  </form>
+  <h2>任务状态</h2><pre id="output">尚未提交</pre>
+  <section id="primary" class="primary">
+    <h2>最终业务矩阵：PLY → PCD</h2>
+    <p class="formula">p_pcd = T_ply_to_pcd × p_ply</p>
+    <p class="hint">程序计算请使用下面的高精度矩阵。它会把 Gaussian PLY 中的点转换到 SLAM PCD 坐标系。</p>
+    <div id="metrics" class="metrics"></div>
+    <pre id="matrix"></pre>
+    <button id="copy" type="button">复制 PLY→PCD 矩阵</button>
+    <p><a id="download" href="#">下载矩阵文件</a></p>
+    <details><summary>查看完整结果和辅助矩阵</summary><pre id="details"></pre></details>
+  </section>
+  <script>
+    const form=document.querySelector('#form'), output=document.querySelector('#output');
+    const primary=document.querySelector('#primary'), matrix=document.querySelector('#matrix');
+    const mode=document.querySelector('#mode'), minRms=document.querySelector('#minRms');
+    const sampling=document.querySelector('#sampling'), overlap=document.querySelector('#overlap'), seed=document.querySelector('#seed');
+    const show=value=>output.textContent=JSON.stringify(value,null,2);
+    const matrixText=value=>value.map(row=>row.map(number=>Number(number).toFixed(12)).join(' ')).join('\n');
+    const applyPreset=name=>{
+      minRms.value='0.00001'; seed.value='42';
+      sampling.value=name==='experimental'?'150000':'50000';
+      overlap.value=name==='experimental'?'0.95':'1.0';
+    };
+    mode.addEventListener('change',()=>{if(mode.value!=='custom')applyPreset(mode.value)});
+    [minRms,sampling,overlap,seed].forEach(input=>input.addEventListener('input',()=>mode.value='custom'));
+    document.querySelector('#reset').addEventListener('click',()=>{mode.value='validated';applyPreset('validated')});
+    const renderResult=(jobId,result)=>{
+      matrix.textContent=matrixText(result.recommended_matrix.value);
+      const p=result.parameters, m=result.metrics;
+      document.querySelector('#metrics').innerHTML=`RMS：${Number(m.final_rms).toFixed(6)} m（约 ${(Number(m.final_rms)*100).toFixed(2)} cm）<br>`+
+        `采样点数：${p.sampling_limit}　重叠率：${(p.overlap*100).toFixed(0)}%　随机种子：${p.random_seed}`+
+        `<p class="warning">RMS 是采样点最近邻残差，不等于无人机最终定位误差。</p>`;
+      document.querySelector('#details').textContent=JSON.stringify(result,null,2);
+      document.querySelector('#download').href=`/api/v1/registrations/${jobId}/files/ply_to_pcd_matrix.txt`;
+      primary.style.display='block';
+    };
+    document.querySelector('#copy').addEventListener('click',()=>navigator.clipboard.writeText(matrix.textContent));
+    form.addEventListener('submit',async event=>{
+      event.preventDefault(); primary.style.display='none'; output.textContent='正在上传…';
+      const created=await fetch('/api/v1/registrations',{method:'POST',body:new FormData(form)}).then(r=>r.json());
+      show(created); if(!created.job_id)return;
+      const timer=setInterval(async()=>{
+        const status=await fetch(created.status_url).then(r=>r.json()); show(status);
+        if(status.status==='succeeded'){
+          clearInterval(timer); const result=await fetch(status.result_url).then(r=>r.json()); renderResult(created.job_id,result);
+        } else if(status.status==='failed') clearInterval(timer);
+      },1000);
+    });
+  </script>
+</body>
+</html>

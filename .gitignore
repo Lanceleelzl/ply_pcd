@@ -1,0 +1,41 @@
+# Build outputs
+/build/
+/out/
+/cmake-build-*/
+*.obj
+*.o
+*.lib
+*.dll
+*.exe
+*.pdb
+*.so
+*.a
+
+# Runtime data
+/runtime/
+registration_trace_log.csv
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# IDE and system
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AI local configuration
+.claude/
+.codex/
+
+# Local source data is not published by default
+/source/

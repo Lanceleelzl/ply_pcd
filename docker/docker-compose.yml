@@ -1,0 +1,42 @@
+services:
+  registration-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ply-pcd-registration:dev
+    entrypoint:
+      - /opt/registration-venv/bin/uvicorn
+    command:
+      - app:app
+      - --app-dir
+      - /opt/registration-service
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    environment:
+      REGISTRATION_RUNTIME_ROOT: /data/runtime
+      REGISTRATION_WORKER_PATH: /usr/local/bin/registration_worker
+      REGISTRATION_MAX_CONCURRENT_JOBS: "1"
+      REGISTRATION_WORKER_TIMEOUT_SECONDS: "1800"
+      REGISTRATION_RESULT_RETENTION_HOURS: "168"
+      REGISTRATION_CLEANUP_INTERVAL_SECONDS: "3600"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../runtime:/data/runtime
+    restart: unless-stopped
+
+  registration-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ply-pcd-registration:dev
+    profiles:
+      - tools
+    volumes:
+      - ../source:/data/source:ro
+      - ../runtime:/data/runtime
+    command:
+      - inspect-pcd
+      - /data/source/pcd/GlobalMap.pcd

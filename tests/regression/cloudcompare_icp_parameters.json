@@ -1,0 +1,18 @@
+{
+  "source": "CloudCompare manual registration",
+  "matrix_direction": "pcd_to_ply",
+  "data": "source/pcd/GlobalMap.pcd",
+  "model": "source/ply/point_cloud.ply",
+  "convergence": "rms_difference",
+  "min_rms_decrease": 0.00001,
+  "final_overlap_ratio": 1.0,
+  "adjust_scale": false,
+  "normals": "ignored",
+  "max_thread_count": 22,
+  "matrix_decimal_places": 6,
+  "notes": [
+    "The PCD-to-PLY matrix was supplied by the user from a successful CloudCompare registration.",
+    "The PLY-to-PCD matrix was computed by inverting the supplied six-decimal matrix.",
+    "The exact CloudCompare random sampling seed and full-precision internal matrix are unknown."
+  ]
+}

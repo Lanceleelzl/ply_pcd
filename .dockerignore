@@ -1,0 +1,10 @@
+.git
+.vs
+.vscode
+build
+runtime
+source
+registration_trace_log.csv
+**/__pycache__
+**/*.pyc
+

@@ -1,0 +1,17 @@
+PLY/PCD Registration Service
+Copyright (C) 2026 Lee
+
+This project contains an extracted copy of CCCoreLib from CloudCompare:
+https://github.com/CloudCompare/CloudCompare
+
+Upstream commit:
+da62b8e0155cee4237335476477cb1088c54c2f3
+
+CCCoreLib source files retain their LGPL-2.0-or-later copyright and
+license notices. The bundled nanoflann dependency retains its BSD license.
+
+This project is not an official CloudCompare project and is not endorsed
+by the CloudCompare maintainers.
+
+New project code is distributed under GPL-3.0-or-later.
+
