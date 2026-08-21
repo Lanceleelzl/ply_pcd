@@ -102,9 +102,10 @@ Content-Type: multipart/form-data
 | `ply` | binary | 是 | — | 文件名以 `.ply` 结尾，非空 | Gaussian PLY 模型 |
 | `pcd` | binary | 是 | — | 文件名以 `.pcd` 结尾，非空 | SLAM PCD 点云 |
 | `min_rms_decrease` | number | 否 | `0.00001` | `1e-8 <= value <= 1e-3` | RMS 收敛阈值，不是最终误差目标 |
-| `sampling_limit` | integer | 否 | `50000` | `10000 <= value <= 500000` | ICP 最大采样点数；默认值已通过 CloudCompare 手工验证 |
+| `sampling_limit` | integer | 否 | `50000` | `10000 <= value <= 500000` | ICP 最大采样点数；`50000` 是 CloudCompare 默认值，本项目已进行复现验证 |
 | `overlap` | number | 否 | `1.0` | `0.5 <= value <= 1` | PCD 中预计有效匹配点比例；默认值已通过 CloudCompare 手工验证 |
 | `random_seed` | integer | 否 | `42` | `0 <= value <= 4294967295` | 随机采样种子，用于结果复现 |
+| `precision_mode` | string | 否 | `recommended` | `recommended` 或 `high_accuracy` | 推荐模式为单阶段 CloudCompare 默认参数基线；高采样模式追加三次重复性验证 |
 
 不要手工设置 multipart 的 `boundary`；浏览器、Java HTTP 客户端或 HTTP 库应自动生成。
 
@@ -391,7 +392,7 @@ Content-Type: multipart/form-data
 GET /api/v1/manual-registration-sessions/{session_id}
 ```
 
-状态为 `ready` 后返回 `ply_preview_url`、`pcd_preview_url`、点数和包围盒。Gaussian 属性可用时还返回 `gaussian_preview_url`；该资源只有用户切换 Gaussian 显示时才下载。
+状态为 `ready` 后返回 `ply_preview_url`、`pcd_preview_url`、点数和包围盒。Gaussian 属性可用时还返回 `gaussian_preview_url`；该资源指向会话中保存的原始 PLY，只有用户切换完整 Gaussian 显示时才流式下载。
 
 ### 获取预览
 
@@ -401,7 +402,7 @@ GET /api/v1/manual-registration-sessions/{session_id}/preview/pcd
 GET /api/v1/manual-registration-sessions/{session_id}/preview/gaussian
 ```
 
-`ply` 和 `pcd` 使用项目内部 `PCPV0001` 二进制点云格式。`gaussian` 是保留相同采样索引完整 Gaussian 属性的 binary little-endian PLY。
+`ply` 和 `pcd` 使用项目内部 `PCPV0001` 二进制点云格式。`gaussian` 返回未经抽样的原始 binary little-endian Gaussian PLY，可能占用较高网络带宽和 GPU 显存。
 
 ### 提交初始矩阵并精配准
 
@@ -418,12 +419,29 @@ Content-Type: application/json
     [0, 0, 1, 0],
     [0, 0, 0, 1]
   ],
+  "precision_mode": "high_accuracy",
   "min_rms_decrease": 0.00001,
   "sampling_limit": 50000,
   "overlap": 1.0,
   "random_seed": 42
 }
 ```
+
+`high_accuracy` 先使用请求中的 `sampling_limit` 和 `random_seed` 得到基线矩阵，再以该矩阵为初值、`500000` 点上限和三个连续种子执行精配准。结果的 `precision` 字段返回：
+
+```text
+mode
+high_accuracy_sampling_limit
+stability_runs
+translation_stability_m
+rotation_stability_deg
+translation_threshold_m
+rotation_threshold_deg
+stable
+candidates
+```
+
+默认稳定阈值为平移 `0.02 m`、旋转 `0.2°`。`stable=true` 只表示多次 ICP 结果稳定，不能替代独立控制点或实飞误差验证。
 
 初始矩阵必须是有限、无缩放、正交且行列式接近 `+1` 的刚体 `4×4` 矩阵，最后一行必须为 `[0, 0, 0, 1]`。接口返回标准异步配准任务，结果新增：
 

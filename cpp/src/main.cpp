@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "registration/icp_registration.hpp"
-#include "registration/gaussian_preview.hpp"
 #include "registration/matrix.hpp"
 #include "registration/pcd_reader.hpp"
 #include "registration/ply_reader.hpp"
@@ -9,15 +8,66 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace
 {
+bool hasGaussianProperties(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return false;
+    std::unordered_set<std::string> properties;
+    std::string line;
+    bool binaryLittleEndian = false;
+    bool inVertex = false;
+    while (std::getline(input, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::istringstream values(line);
+        std::string keyword;
+        values >> keyword;
+        if (keyword == "format")
+        {
+            std::string format;
+            values >> format;
+            binaryLittleEndian = format == "binary_little_endian";
+        }
+        else if (keyword == "element")
+        {
+            std::string name;
+            values >> name;
+            inVertex = name == "vertex";
+        }
+        else if (keyword == "property" && inVertex)
+        {
+            std::string type;
+            std::string name;
+            values >> type >> name;
+            properties.insert(name);
+        }
+        else if (keyword == "end_header")
+        {
+            break;
+        }
+    }
+    return binaryLittleEndian
+        && properties.count("f_dc_0") != 0 && properties.count("f_dc_1") != 0 && properties.count("f_dc_2") != 0
+        && properties.count("opacity") != 0
+        && properties.count("scale_0") != 0 && properties.count("scale_1") != 0 && properties.count("scale_2") != 0
+        && properties.count("rot_0") != 0 && properties.count("rot_1") != 0
+        && properties.count("rot_2") != 0 && properties.count("rot_3") != 0;
+}
+
 void printUsage()
 {
     std::cout
@@ -78,6 +128,9 @@ struct RegisterArguments
     std::filesystem::path pcd;
     std::filesystem::path outputDirectory;
     registration::IcpOptions options;
+    std::string precisionMode = "recommended";
+    unsigned highAccuracySamplingLimit = 500000;
+    unsigned stabilityRuns = 3;
 };
 
 RegisterArguments parseRegisterArguments(int argc, char** argv)
@@ -102,13 +155,43 @@ RegisterArguments parseRegisterArguments(int argc, char** argv)
         else if (option == "--adjust-scale") result.options.adjustScale = true;
         else if (option == "--filter-farthest") result.options.filterOutFarthestPoints = true;
         else if (option == "--initial-matrix") result.options.initialPcdToPly = registration::Matrix4d::fromFile(value());
+        else if (option == "--precision-mode") result.precisionMode = value();
+        else if (option == "--high-accuracy-sampling-limit") result.highAccuracySamplingLimit = static_cast<unsigned>(std::stoul(value()));
+        else if (option == "--stability-runs") result.stabilityRuns = static_cast<unsigned>(std::stoul(value()));
         else throw std::runtime_error("Unknown register option: " + option);
     }
     if (result.ply.empty() || result.pcd.empty() || result.outputDirectory.empty())
         throw std::runtime_error("register requires --ply, --pcd and --output-dir");
     if (result.options.samplingLimit < 3) throw std::runtime_error("sampling-limit must be at least 3");
     if (result.options.minRmsDecrease <= 0.0) throw std::runtime_error("min-rms-decrease must be positive");
+    if (result.precisionMode != "recommended" && result.precisionMode != "high_accuracy")
+        throw std::runtime_error("precision-mode must be recommended or high_accuracy");
+    if (result.highAccuracySamplingLimit < result.options.samplingLimit)
+        throw std::runtime_error("high-accuracy-sampling-limit must not be below sampling-limit");
+    if (result.stabilityRuns < 3 || result.stabilityRuns > 10)
+        throw std::runtime_error("stability-runs must be between 3 and 10");
     return result;
+}
+
+double translationDistance(const registration::Matrix4d& left, const registration::Matrix4d& right)
+{
+    double squared = 0.0;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+        const double difference = left.at(axis, 3) - right.at(axis, 3);
+        squared += difference * difference;
+    }
+    return std::sqrt(squared);
+}
+
+double rotationDistanceDegrees(const registration::Matrix4d& left, const registration::Matrix4d& right)
+{
+    double trace = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column)
+            trace += left.at(row, column) * right.at(row, column);
+    const double cosine = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    return std::acos(cosine) * 57.2957795130823208768;
 }
 
 void writeMatrixJson(std::ostream& output, const registration::Matrix4d& matrix, int indent)
@@ -142,7 +225,43 @@ int runRegistration(const RegisterArguments& arguments)
     log << "stage=icp seed=" << arguments.options.randomSeed
         << " sampling_limit=" << arguments.options.samplingLimit
         << " overlap=" << arguments.options.finalOverlapRatio << '\n';
-    const auto result = registration::IcpRegistration().registerPcdToPly(pcd.cloud, ply.cloud, arguments.options);
+    const registration::IcpRegistration registrationEngine;
+    const auto manualInitial = arguments.options.initialPcdToPly;
+    auto result = registrationEngine.registerPcdToPly(pcd.cloud, ply.cloud, arguments.options);
+    std::vector<registration::IcpResult> stabilityCandidates;
+    double translationStabilityMeters = 0.0;
+    double rotationStabilityDegrees = 0.0;
+    if (arguments.precisionMode == "high_accuracy")
+    {
+        registration::IcpOptions refinementOptions = arguments.options;
+        refinementOptions.samplingLimit = arguments.highAccuracySamplingLimit;
+        refinementOptions.initialPcdToPly = result.pcdToPly;
+        stabilityCandidates.reserve(arguments.stabilityRuns);
+        for (unsigned run = 0; run < arguments.stabilityRuns; ++run)
+        {
+            refinementOptions.randomSeed = arguments.options.randomSeed + run;
+            log << "stage=high_accuracy run=" << run
+                << " seed=" << refinementOptions.randomSeed
+                << " sampling_limit=" << refinementOptions.samplingLimit << '\n';
+            stabilityCandidates.push_back(
+                registrationEngine.registerPcdToPly(pcd.cloud, ply.cloud, refinementOptions));
+        }
+        const auto& baseline = stabilityCandidates.front().pcdToPly;
+        double translationSquared = 0.0;
+        double rotationSquared = 0.0;
+        for (const auto& candidate : stabilityCandidates)
+        {
+            const double translation = translationDistance(candidate.pcdToPly, baseline);
+            const double rotation = rotationDistanceDegrees(candidate.pcdToPly, baseline);
+            translationSquared += translation * translation;
+            rotationSquared += rotation * rotation;
+        }
+        translationStabilityMeters = std::sqrt(translationSquared / stabilityCandidates.size());
+        rotationStabilityDegrees = std::sqrt(rotationSquared / stabilityCandidates.size());
+        result = stabilityCandidates.front();
+        result.initialPcdToPly = manualInitial;
+        result.refinementPcdToPly = result.pcdToPly * manualInitial.inverse();
+    }
     const auto pcdToPlyCloudCompare = result.pcdToPly.toFloatCompatible();
     const auto plyToPcdCloudCompare = result.plyToPcd.toFloatCompatible();
 
@@ -194,6 +313,28 @@ int runRegistration(const RegisterArguments& arguments)
            << "    \"random_seed\": " << arguments.options.randomSeed << ",\n"
            << "    \"adjust_scale\": " << (arguments.options.adjustScale ? "true" : "false") << ",\n"
            << "    \"filter_farthest\": " << (arguments.options.filterOutFarthestPoints ? "true" : "false") << "\n"
+           << "  },\n"
+           << "  \"precision\": {\n"
+           << "    \"mode\": \"" << arguments.precisionMode << "\",\n"
+           << "    \"high_accuracy_sampling_limit\": " << arguments.highAccuracySamplingLimit << ",\n"
+           << "    \"stability_runs\": " << (arguments.precisionMode == "high_accuracy" ? stabilityCandidates.size() : 1) << ",\n"
+           << "    \"translation_stability_m\": " << translationStabilityMeters << ",\n"
+           << "    \"rotation_stability_deg\": " << rotationStabilityDegrees << ",\n"
+           << "    \"translation_threshold_m\": 0.020000000000,\n"
+           << "    \"rotation_threshold_deg\": 0.200000000000,\n"
+           << "    \"stable\": " << ((translationStabilityMeters <= 0.02 && rotationStabilityDegrees <= 0.2) ? "true" : "false") << ",\n"
+           << "    \"candidates\": [";
+    for (std::size_t index = 0; index < stabilityCandidates.size(); ++index)
+    {
+        const auto& candidate = stabilityCandidates[index];
+        output << (index == 0 ? "\n" : ",\n")
+               << "      {\"seed\": " << (arguments.options.randomSeed + static_cast<unsigned>(index))
+               << ", \"final_rms\": " << candidate.finalRms << ", \"pcd_to_ply\": ";
+        writeMatrixJson(output, candidate.pcdToPly, 6);
+        output << '}';
+    }
+    if (!stabilityCandidates.empty()) output << '\n';
+    output << "    ]\n"
            << "  }\n"
            << "}\n";
     log << "stage=complete final_rms=" << result.finalRms
@@ -214,19 +355,7 @@ int runPreview(const PreviewArguments& arguments)
                                          arguments.outputDirectory / "ply-points.bin");
     const auto pcdPreview = writer.write(pcd.cloud, arguments.pcdLimit,
                                          arguments.outputDirectory / "pcd-points.bin");
-    bool gaussianAvailable = false;
-    std::string gaussianError;
-    try
-    {
-        registration::GaussianPreview().write(
-            arguments.ply, plyPreview.selectedIndices,
-            arguments.outputDirectory / "ply-gaussian-preview.ply");
-        gaussianAvailable = true;
-    }
-    catch (const std::exception& error)
-    {
-        gaussianError = error.what();
-    }
+    const bool gaussianAvailable = hasGaussianProperties(arguments.ply);
     std::ofstream metadata(arguments.outputDirectory / "metadata.json");
     if (!metadata) throw std::runtime_error("Cannot create preview metadata");
     const auto writeSummary = [&](const char* name, const registration::PreviewResult& result, bool comma) {
@@ -242,7 +371,7 @@ int runPreview(const PreviewArguments& arguments)
     metadata << "{\n  \"format\": \"PCPV0001\",\n"
              << "  \"gaussian_available\": " << (gaussianAvailable ? "true" : "false") << ",\n";
     if (!gaussianAvailable)
-        metadata << "  \"gaussian_error\": \"" << gaussianError << "\",\n";
+        metadata << "  \"gaussian_error\": \"PLY does not contain a supported Gaussian attribute set\",\n";
     metadata << "  \"clouds\": {\n";
     writeSummary("ply", plyPreview, true);
     writeSummary("pcd", pcdPreview, false);

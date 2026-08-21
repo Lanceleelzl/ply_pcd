@@ -34,6 +34,7 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 class ManualRegistrationRequest(BaseModel):
     initial_pcd_to_ply: list[list[float]]
+    precision_mode: str = "recommended"
     min_rms_decrease: float = 1.0e-5
     sampling_limit: int = 50000
     overlap: float = 1.0
@@ -232,7 +233,8 @@ async def health() -> dict[str, str]:
 
 
 def _validate_registration_parameters(
-    min_rms_decrease: float, sampling_limit: int, overlap: float, random_seed: int
+    min_rms_decrease: float, sampling_limit: int, overlap: float, random_seed: int,
+    precision_mode: str = "recommended",
 ) -> None:
     if not 1.0e-8 <= min_rms_decrease <= 1.0e-3:
         raise HTTPException(status_code=400, detail="min_rms_decrease must be between 1e-8 and 1e-3")
@@ -242,6 +244,8 @@ def _validate_registration_parameters(
         raise HTTPException(status_code=400, detail="overlap must be between 0.5 and 1.0")
     if not 0 <= random_seed <= 4294967295:
         raise HTTPException(status_code=400, detail="Invalid registration parameters")
+    if precision_mode not in {"recommended", "high_accuracy"}:
+        raise HTTPException(status_code=400, detail="precision_mode must be recommended or high_accuracy")
 
 
 def _validate_initial_matrix(matrix: list[list[float]]) -> None:
@@ -333,15 +337,19 @@ async def get_manual_registration_preview(session_id: str, cloud: str) -> FileRe
     filenames = {
         "ply": "ply-points.bin",
         "pcd": "pcd-points.bin",
-        "gaussian": "ply-gaussian-preview.ply",
     }
-    if cloud not in filenames:
+    if cloud == "gaussian":
+        path = _manual_session_directory(session_id) / "input" / "model.ply"
+        filename = "original-gaussian-model.ply"
+    elif cloud in filenames:
+        path = _manual_session_directory(session_id) / "preview" / filenames[cloud]
+        filename = filenames[cloud]
+    else:
         raise HTTPException(status_code=404, detail="Preview not found")
-    path = _manual_session_directory(session_id) / "preview" / filenames[cloud]
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Preview not found")
     media_type = "application/octet-stream" if cloud != "gaussian" else "application/ply"
-    return FileResponse(path, media_type=media_type, filename=filenames[cloud])
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 @app.post("/api/v1/manual-registration-sessions/{session_id}/register", status_code=202)
@@ -350,7 +358,8 @@ async def register_manual_session(
 ) -> dict[str, Any]:
     _validate_initial_matrix(request.initial_pcd_to_ply)
     _validate_registration_parameters(
-        request.min_rms_decrease, request.sampling_limit, request.overlap, request.random_seed
+        request.min_rms_decrease, request.sampling_limit, request.overlap, request.random_seed,
+        request.precision_mode,
     )
     session_directory = _manual_session_directory(session_id)
     session_status = _read_status(session_directory)
@@ -386,6 +395,7 @@ async def register_manual_session(
         "--sampling-limit", str(request.sampling_limit),
         "--overlap", str(request.overlap),
         "--random-seed", str(request.random_seed),
+        "--precision-mode", request.precision_mode,
     ]
     task = asyncio.create_task(_run_worker(job_id, command))
     _background_tasks.add(task)
@@ -401,12 +411,13 @@ async def create_registration(
     sampling_limit: Annotated[int, Form()] = 50000,
     overlap: Annotated[float, Form()] = 1.0,
     random_seed: Annotated[int, Form()] = 42,
+    precision_mode: Annotated[str, Form()] = "recommended",
 ) -> dict[str, Any]:
     if not (ply.filename or "").lower().endswith(".ply"):
         raise HTTPException(status_code=400, detail="ply file must use .ply extension")
     if not (pcd.filename or "").lower().endswith(".pcd"):
         raise HTTPException(status_code=400, detail="pcd file must use .pcd extension")
-    _validate_registration_parameters(min_rms_decrease, sampling_limit, overlap, random_seed)
+    _validate_registration_parameters(min_rms_decrease, sampling_limit, overlap, random_seed, precision_mode)
 
     job_id = str(uuid.uuid4())
     job_directory = _job_directory(job_id)
@@ -442,6 +453,7 @@ async def create_registration(
         "--sampling-limit", str(sampling_limit),
         "--overlap", str(overlap),
         "--random-seed", str(random_seed),
+        "--precision-mode", precision_mode,
     ]
     task = asyncio.create_task(_run_worker(job_id, command))
     _background_tasks.add(task)

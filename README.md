@@ -39,13 +39,13 @@ pnpm run dev
 
 如需修改端口，编辑 `config/local.json` 中的 `port`（API）和 `web_port`（开发页面）后重新启动服务，无需设置系统或终端环境变量。
 
-工作台左侧按“数据→可选粗配准→ICP→结果”展示完整流程，粗配准工具浮动在三维视口内。PLY 固定，只有 PCD 可以平移和旋转，禁止缩放；不做人工调整时可直接执行 ICP。Gaussian 效果按需加载同一采样集合的轻量 PLY。人工矩阵作为 `T_manual_pcd_to_ply` 提交，最终组合为 `T_pcd_to_ply = T_icp_delta × T_manual_pcd_to_ply`，业务最终使用页面显式标记的 `PLY→PCD` 矩阵。
+工作台左侧按“数据→可选粗配准→ICP→结果”展示完整流程，粗配准工具浮动在三维视口内。PLY 固定，只有 PCD 可以平移和旋转，禁止缩放；不做人工调整时可直接执行 ICP。粗配准默认使用轻量中心点，Gaussian 视觉确认按需流式加载原始 PLY，切回中心点时释放 GPU 资源。人工矩阵作为 `T_manual_pcd_to_ply` 提交，最终组合为 `T_pcd_to_ply = T_icp_delta × T_manual_pcd_to_ply`，业务最终使用页面显式标记的 `PLY→PCD` 矩阵。
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
 
 网页会将 `T_ply_to_pcd` 明确标记为「最终业务矩阵：PLY → PCD」。程序计算使用高精度 `ply_to_pcd`；CloudCompare 手工验证使用 `ply_to_pcd_cloudcompare`。
 
-上传页默认选择推荐模式：`min_rms_decrease=0.00001`、`sampling_limit=50000`、`overlap=1.0`、`random_seed=42`。扩大采样实验模式使用 `150000／0.95`，但实测精度不如默认组合；高级设置允许在受控范围内修改全部四个参数。
+工作台默认选择推荐模式：`min_rms_decrease=0.00001`、`sampling_limit=50000`、`overlap=1.0`、`random_seed=42`。其中 `50000` 是 CloudCompare 的默认采样上限，并非用户手工设置；本项目使用固定种子形成可复现基线。高采样稳定性模式先执行该默认参数基线，再以 `500000` 点上限运行三个连续固定种子，输出平移和旋转重复性。更多采样可降低随机子集造成的统计波动，但重复性和 RMS 都不能单独证明绝对坐标精度，生产使用仍需控制点或实飞验证。自定义模式允许在受控范围内修改单阶段参数。ICP 始终读取原始 PLY／PCD，浏览器预览数据不参与计算。
 
 任务完成或失败后，服务立即删除上传的 PLY／PCD 输入副本。矩阵、JSON 和日志默认保留 168 小时，并每 3600 秒执行一次过期清理。可在 `docker/docker-compose.yml` 中调整：
 

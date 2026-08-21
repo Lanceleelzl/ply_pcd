@@ -8,6 +8,7 @@ type Matrix4 = number[][];
 interface SessionStatus {
   status: string;
   error?: string;
+  inputs?: { ply_bytes: number; pcd_bytes: number };
   ply_preview_url?: string;
   pcd_preview_url?: string;
   gaussian_preview_url?: string;
@@ -20,6 +21,7 @@ interface SessionStatus {
 }
 
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
+const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 async function waitForSession(sessionId: string, statusElement: HTMLElement): Promise<SessionStatus> {
   while (true) {
@@ -59,6 +61,9 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   const [plyCloud, pcdCloud] = await Promise.all([
     loadPreview(session.ply_preview_url!), loadPreview(session.pcd_preview_url!)
   ]);
+  const gaussianButtonLabel = session.inputs?.ply_bytes
+    ? `完整 Gaussian（${formatBytes(session.inputs.ply_bytes)}）`
+    : '完整 Gaussian';
 
   root.innerHTML = `
     <main class="editor integrated-editor">
@@ -72,21 +77,32 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
             <details><summary>查看 T_manual_pcd_to_ply</summary><pre id="matrix" class="matrix"></pre></details>
           </section>
           <section class="workflow-step"><h2><span>3</span> ICP 精配准</h2>
-            <label class="parameter-label">参数模式<select id="parameter-mode"><option value="recommended">推荐模式</option><option value="custom">自定义模式</option></select></label>
+            <label class="parameter-label">精度模式<select id="parameter-mode"><option value="recommended">推荐模式（CloudCompare 默认参数基线）</option><option value="high_accuracy">高采样稳定性模式（三次重复性验证）</option><option value="custom">自定义单阶段参数</option></select></label>
+            <p id="precision-hint" class="step-hint">采用 CloudCompare 默认采样上限 50,000；本项目使用固定种子复现验证，并非用户手工设置。</p>
             <div class="icp-grid">
               <label>RMS 阈值<input id="min-rms" type="number" value="0.00001" step="0.000001"></label>
-              <label>采样上限<input id="sampling-limit" type="number" value="50000" step="1000"></label>
+              <label><span id="sampling-limit-label">采样上限</span><input id="sampling-limit" type="number" value="50000" step="1000"></label>
               <label>重叠率<input id="overlap" type="number" value="1" min="0.01" max="1" step="0.01"></label>
               <label>随机种子<input id="random-seed" type="number" value="42" min="0" step="1"></label>
+            </div>
+            <div id="high-accuracy-parameters" class="mode-parameters" hidden>
+              <strong>第二阶段实际参数</strong>
+              <div class="icp-grid">
+                <label>采样上限<input type="text" value="500000" disabled></label>
+                <label>当前 PCD 输入点<input type="text" value="${Math.min(pcdCloud.count, 500000)}${pcdCloud.count <= 500000 ? '（未截断）' : '（已截断）'}" disabled></label>
+                <label>重复运行<input type="text" value="3 次" disabled></label>
+                <label>随机种子<input type="text" value="42／43／44" disabled></label>
+                <label>稳定性判据<input type="text" value="≤0.02 m／≤0.2°" disabled></label>
+              </div>
             </div>
             <button id="register" class="primary full-width">直接执行 ICP 精配准</button>
           </section>
           <section class="workflow-step"><h2><span>4</span> 任务与结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
-            <section id="result" class="result" hidden><h3>推荐业务矩阵：PLY→PCD</h3><p class="result-formula">p_pcd = T_ply_to_pcd × p_ply</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div></section>
+            <section id="result" class="result" hidden><h3>推荐业务矩阵：PLY→PCD</h3><p class="result-formula">p_pcd = T_ply_to_pcd × p_ply</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-final-matrix" class="full-width" type="button">复制最终 PLY→PCD 矩阵</button></section>
           </section>
         </aside>
         <section class="viewport"><canvas id="viewport"></canvas>
-          <div class="viewport-toolbar toolbar"><strong>粗配准工具</strong><button id="translate" class="active">平移 G</button><button id="rotate">旋转 R</button><button id="reset">重置 PCD</button><button id="fit">适应全部</button><button id="gaussian" ${session.gaussian_preview_url ? '' : 'class="disabled" disabled'}>Gaussian 效果</button></div>
+          <div class="viewport-toolbar toolbar"><strong>粗配准工具</strong><button id="translate" class="active">平移 G</button><button id="rotate">旋转 R</button><button id="reset">重置 PCD</button><button id="fit">适应全部</button><button id="gaussian" ${session.gaussian_preview_url ? '' : 'class="disabled" disabled'}>${gaussianButtonLabel}</button></div>
           <div class="badge">PLY ${plyCloud.count.toLocaleString()} 点　PCD ${pcdCloud.count.toLocaleString()} 点</div>
           <div class="view-gizmo" aria-label="快速视角"><div class="view-cube-scene"><div class="view-cube"><button class="cube-face face-x" data-direction="1,0,0" title="沿 +X 查看">X</button><button class="cube-face face-nx" data-direction="-1,0,0" title="沿 -X 查看">−X</button><button class="cube-face face-y" data-direction="0,1,0" title="沿 +Y 查看">Y</button><button class="cube-face face-ny" data-direction="0,-1,0" title="沿 -Y 查看">−Y</button><button class="cube-face face-z" data-direction="0,0,1" title="顶视图（沿 +Z 查看）">Z</button><button class="cube-face face-nz" data-direction="0,0,-1" title="底视图（沿 -Z 查看）">−Z</button>${[-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => `<button class="cube-corner" data-direction="${x},${y},${z}" style="--cx:${x};--cy:${y};--cz:${z}" title="等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z"></button>`))).join('')}</div></div><div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div></div>
           <div class="viewport-help">左键空白处：旋转　中键：平移　滚轮：缩放　左键手柄：变换 PCD　右键：未绑定</div>
@@ -103,6 +119,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   const application = new pc.Application(canvas, { mouse, touch, keyboard });
   application.setCanvasResolution(pc.RESOLUTION_AUTO);
   application.start();
+  application.scene.gsplat.alphaClip = 0.1;
   const viewport = root.querySelector<HTMLElement>('.viewport')!;
   const resizeViewport = () => {
     application.graphicsDevice.resizeCanvas(viewport.clientWidth, viewport.clientHeight);
@@ -111,40 +128,68 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   window.addEventListener('resize', resizeViewport);
 
   const camera = new pc.Entity('Camera');
-  camera.addComponent('camera', { clearColor: new pc.Color(0.035, 0.055, 0.085), farClip: 10000 });
+  camera.addComponent('camera', {
+    clearColor: new pc.Color(0.035, 0.055, 0.085),
+    farClip: 10000,
+    toneMapping: pc.TONEMAP_ACES
+  });
   application.root.addChild(camera);
   const plyEntity = createPointCloudEntity(application, plyCloud, new pc.Color(0.68, 0.72, 0.78), 'Fixed PLY');
   const pcdEntity = createPointCloudEntity(application, pcdCloud, new pc.Color(1.0, 0.72, 0.08), 'Movable PCD');
   application.root.addChild(plyEntity);
   application.root.addChild(pcdEntity);
   let gaussianEntity: pc.Entity | null = null;
+  let gaussianAsset: pc.Asset | null = null;
   let gaussianVisible = false;
   const gaussianButton = root.querySelector<HTMLButtonElement>('#gaussian')!;
   gaussianButton.addEventListener('click', async () => {
     if (!session.gaussian_preview_url) return;
     gaussianButton.disabled = true;
-    if (!gaussianEntity) {
-      gaussianButton.textContent = 'Gaussian 加载中…';
-      const asset = new pc.Asset('Gaussian PLY preview', 'gsplat', {
+    try {
+      if (gaussianVisible && gaussianEntity && gaussianAsset) {
+        gaussianEntity.destroy();
+        gaussianAsset.unload();
+        application.assets.remove(gaussianAsset);
+        gaussianEntity = null;
+        gaussianAsset = null;
+        gaussianVisible = false;
+        plyEntity.enabled = true;
+        gaussianButton.textContent = gaussianButtonLabel;
+        gaussianButton.classList.remove('active');
+        return;
+      }
+      gaussianButton.textContent = '完整 Gaussian 加载中…';
+      gaussianAsset = new pc.Asset('Original Gaussian PLY', 'gsplat', {
         url: session.gaussian_preview_url,
-        filename: 'ply-gaussian-preview.ply'
+        filename: 'original-gaussian-model.ply'
       });
-      application.assets.add(asset);
+      application.assets.add(gaussianAsset);
       await new Promise<void>((resolve, reject) => {
-        asset.ready(() => resolve());
-        asset.once('error', (error: unknown) => reject(error));
-        application.assets.load(asset);
+        gaussianAsset!.ready(() => resolve());
+        gaussianAsset!.once('error', (error: unknown) => reject(error));
+        application.assets.load(gaussianAsset!);
       });
-      gaussianEntity = new pc.Entity('Fixed Gaussian PLY');
-      gaussianEntity.addComponent('gsplat', { asset });
+      gaussianEntity = new pc.Entity('Fixed Original Gaussian PLY');
+      gaussianEntity.addComponent('gsplat', { asset: gaussianAsset });
       application.root.addChild(gaussianEntity);
+      gaussianVisible = true;
+      plyEntity.enabled = false;
+      gaussianButton.textContent = '释放 Gaussian／显示中心点';
+      gaussianButton.classList.add('active');
+    } catch (error) {
+      if (gaussianAsset) {
+        gaussianAsset.unload();
+        application.assets.remove(gaussianAsset);
+      }
+      gaussianAsset = null;
+      gaussianEntity = null;
+      gaussianVisible = false;
+      plyEntity.enabled = true;
+      gaussianButton.textContent = 'Gaussian 加载失败';
+      console.error(error);
+    } finally {
+      gaussianButton.disabled = false;
     }
-    gaussianVisible = !gaussianVisible;
-    gaussianEntity.enabled = gaussianVisible;
-    plyEntity.enabled = !gaussianVisible;
-    gaussianButton.textContent = gaussianVisible ? '显示中心点' : 'Gaussian 效果';
-    gaussianButton.classList.toggle('active', gaussianVisible);
-    gaussianButton.disabled = false;
   });
 
   const bounds = combinedBounds(plyCloud, pcdCloud);
@@ -359,11 +404,53 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
     root.querySelector<HTMLInputElement>('#overlap')!, root.querySelector<HTMLInputElement>('#random-seed')!
   ];
-  const updateParameterMode = () => parameterInputs.forEach(input => { input.disabled = parameterMode.value === 'recommended'; });
+  const precisionHint = root.querySelector<HTMLElement>('#precision-hint')!;
+  const highAccuracyParameters = root.querySelector<HTMLElement>('#high-accuracy-parameters')!;
+  const samplingLimitLabel = root.querySelector<HTMLElement>('#sampling-limit-label')!;
+  const recommendedValues = ['0.00001', '50000', '1', '42'];
+  const updateParameterMode = () => {
+    const custom = parameterMode.value === 'custom';
+    const highAccuracy = parameterMode.value === 'high_accuracy';
+    if (!custom) parameterInputs.forEach((input, index) => { input.value = recommendedValues[index]; });
+    parameterInputs.forEach(input => { input.disabled = !custom; });
+    highAccuracyParameters.hidden = !highAccuracy;
+    samplingLimitLabel.textContent = highAccuracy ? '第一阶段采样上限' : '采样上限';
+    precisionHint.textContent = highAccuracy
+      ? '提高采样上限可降低随机子集带来的统计波动；三个种子只验证结果重复性，不代表绝对精度。第二阶段耗时明显增加。'
+      : custom
+        ? '自定义参数属于单阶段实验模式，修改后必须重新进行 CloudCompare 或控制点验证。'
+        : '采用 CloudCompare 默认采样上限 50,000；本项目使用固定种子复现验证，并非用户手工设置。';
+  };
   parameterMode.addEventListener('change', updateParameterMode);
   updateParameterMode();
 
   const jobStatus = root.querySelector<HTMLElement>('#job-status')!;
+  const copyFinalMatrixButton = root.querySelector<HTMLButtonElement>('#copy-final-matrix')!;
+  let finalMatrixText = '';
+  const copyText = async (value: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  };
+  copyFinalMatrixButton.addEventListener('click', async () => {
+    if (!finalMatrixText) return;
+    try {
+      await copyText(finalMatrixText);
+      copyFinalMatrixButton.textContent = '已复制 PLY→PCD 矩阵';
+      window.setTimeout(() => { copyFinalMatrixButton.textContent = '复制最终 PLY→PCD 矩阵'; }, 1800);
+    } catch {
+      copyFinalMatrixButton.textContent = '复制失败，请手动复制';
+    }
+  });
   const timeText = () => new Date().toLocaleTimeString('zh-CN', { hour12: false });
   const logLines: string[] = [];
   const appendLog = (message: string) => {
@@ -385,6 +472,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           initial_pcd_to_ply: entityMatrix(pcdEntity),
+          precision_mode: parameterMode.value === 'high_accuracy' ? 'high_accuracy' : 'recommended',
           min_rms_decrease: Number(parameterInputs[0].value),
           sampling_limit: Number(parameterInputs[1].value),
           overlap: Number(parameterInputs[2].value),
@@ -403,9 +491,14 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
           const result = await fetch(status.result_url).then(value => value.json());
           registrationComplete = true;
           root.querySelector<HTMLElement>('#result')!.hidden = false;
-          root.querySelector<HTMLElement>('#result-matrix')!.textContent = matrixText(result.recommended_matrix.value);
+          finalMatrixText = matrixText(result.recommended_matrix.value);
+          root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalMatrixText;
           const rms = Number(result.metrics.final_rms);
           root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${rms.toFixed(6)} m／${(rms * 100).toFixed(3)} cm　点数：${result.metrics.final_point_count}　耗时：${Number(result.metrics.elapsed_seconds).toFixed(2)} s`;
+          if (result.precision?.mode === 'high_accuracy') {
+            const stability = result.precision;
+            root.querySelector<HTMLElement>('#result-metrics')!.textContent += `\n重复性：平移 ${Number(stability.translation_stability_m).toFixed(4)} m／旋转 ${Number(stability.rotation_stability_deg).toFixed(4)}°　${stability.stable ? '通过（仍需控制点验证）' : '未通过'}`;
+          }
           if (result.pcd_to_ply) applyPcdToPly(result.pcd_to_ply);
           translateGizmo.detach(); rotateGizmo.detach();
           translateButton.disabled = true; rotateButton.disabled = true; resetButton.disabled = true;

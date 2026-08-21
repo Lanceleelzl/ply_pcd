@@ -120,6 +120,24 @@
   margin: 10px 0;
 }
 
+.mode-parameters {
+  margin: 10px 0;
+  padding: 9px;
+  border: 1px solid #3b4a61;
+  border-radius: 6px;
+  background: #111b2a;
+  color: #c8d3e2;
+  font-size: 11px;
+}
+
+.mode-parameters .icp-grid {
+  margin-bottom: 0;
+}
+
+.result #copy-final-matrix {
+  margin-top: 10px;
+}
+
 .full-width {
   width: 100%;
 }
