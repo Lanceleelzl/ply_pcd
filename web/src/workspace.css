@@ -138,6 +138,41 @@
   margin-top: 10px;
 }
 
+.result-warning {
+  padding: 8px;
+  border: 1px solid #a97831;
+  border-radius: 5px;
+  background: #2a2115;
+  color: #ffd28a;
+  font-size: 11px;
+}
+
+.result-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.result-history-card {
+  padding: 9px;
+  border: 1px solid #344155;
+  border-radius: 7px;
+  background: #101a29;
+  font-size: 11px;
+}
+
+.result-history-card h4,
+.result-history-card p {
+  margin: 0 0 6px;
+}
+
+.history-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 7px;
+}
+
 .full-width {
   width: 100%;
 }

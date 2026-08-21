@@ -18,6 +18,40 @@ interface SessionStatus {
       pcd: { preview_point_count: number };
     };
   };
+  registrations?: Array<{
+    job_id: string;
+    status: string;
+    result_url?: string;
+    initial_pcd_to_ply: Matrix4;
+    precision_mode: string;
+    parameters: {
+      min_rms_decrease: number;
+      sampling_limit: number;
+      overlap: number;
+      random_seed: number;
+    };
+  }>;
+}
+
+interface RegistrationResult {
+  recommended_matrix: { value: Matrix4 };
+  pcd_to_ply?: Matrix4;
+  metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
+  precision?: {
+    mode: string;
+    translation_stability_m: number;
+    rotation_stability_deg: number;
+    stable: boolean;
+  };
+}
+
+interface RegistrationRound {
+  number: number;
+  jobId: string;
+  mode: string;
+  parameters: { minRmsDecrease: number; samplingLimit: number; overlap: number; randomSeed: number };
+  initialPcdToPly: Matrix4;
+  result: RegistrationResult;
 }
 
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -98,7 +132,8 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
             <button id="register" class="primary full-width">直接执行 ICP 精配准</button>
           </section>
           <section class="workflow-step"><h2><span>4</span> 任务与结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
-            <section id="result" class="result" hidden><h3>推荐业务矩阵：PLY→PCD</h3><p class="result-formula">p_pcd = T_ply_to_pcd × p_ply</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-final-matrix" class="full-width" type="button">复制最终 PLY→PCD 矩阵</button></section>
+            <section id="result" class="result" hidden><h3>当前已完成业务矩阵：PLY→PCD</h3><p class="result-formula">p_pcd = T_ply_to_pcd × p_ply</p><p id="result-stale" class="result-warning" hidden>当前 PCD 姿态或参数已改变。下方仍是上一次已完成矩阵，请重新执行 ICP 后再用于航点转换。</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-final-matrix" class="full-width" type="button">复制最终 PLY→PCD 矩阵</button></section>
+            <div id="result-history" class="result-history"></div>
           </section>
         </aside>
         <section class="viewport"><canvas id="viewport"></canvas>
@@ -266,10 +301,21 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     }
   };
   createInputs('position', 'p'); createInputs('rotation', 'r');
+  let registrationRunning = false;
+  let resultStale = false;
+  let lastCompletedRound: RegistrationRound | null = null;
+  const registrationRounds: RegistrationRound[] = [];
+  const markResultStale = () => {
+    if (!lastCompletedRound || registrationRunning) return;
+    resultStale = true;
+    root.querySelector<HTMLElement>('#result-stale')!.hidden = false;
+    root.querySelector<HTMLButtonElement>('#copy-final-matrix')!.textContent = '复制上一次已完成矩阵';
+  };
   const applyInputs = () => {
-    if (registrationComplete) return;
+    if (registrationRunning) return;
     pcdEntity.setLocalPosition(Number(inputs.px.value), Number(inputs.py.value), Number(inputs.pz.value));
     pcdEntity.setLocalEulerAngles(Number(inputs.rx.value), Number(inputs.ry.value), Number(inputs.rz.value));
+    markResultStale();
   };
   Object.values(inputs).forEach(input => input.addEventListener('input', applyInputs));
 
@@ -278,10 +324,8 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   const translateButton = root.querySelector<HTMLButtonElement>('#translate')!;
   const rotateButton = root.querySelector<HTMLButtonElement>('#rotate')!;
   const resetButton = root.querySelector<HTMLButtonElement>('#reset')!;
-  let registrationComplete = false;
   let activeGizmoMode: 'translate' | 'rotate' = 'translate';
   application.on('update', () => {
-    if (registrationComplete) return;
     const position = pcdEntity.getLocalPosition();
     const rotation = pcdEntity.getLocalEulerAngles();
     const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
@@ -289,12 +333,16 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
       if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3);
     });
     matrixElement.textContent = matrixText(entityMatrix(pcdEntity));
-    const manuallyAdjusted = position.lengthSq() > 1e-12 || rotation.lengthSq() > 1e-12;
-    if (!registerButton.disabled) registerButton.textContent = manuallyAdjusted ? '使用当前粗配准执行 ICP' : '直接执行 ICP 精配准';
+    if (!registrationRunning) {
+      const manuallyAdjusted = position.lengthSq() > 1e-12 || rotation.lengthSq() > 1e-12;
+      registerButton.textContent = lastCompletedRound
+        ? resultStale ? '使用当前姿态／参数再次执行 ICP' : '以当前结果再次精配准'
+        : manuallyAdjusted ? '使用当前粗配准执行 ICP' : '直接执行 ICP 精配准';
+    }
   });
 
   const setMode = (mode: 'translate' | 'rotate') => {
-    if (registrationComplete) return;
+    if (registrationRunning) return;
     activeGizmoMode = mode;
     translateGizmo.detach();
     rotateGizmo.detach();
@@ -313,8 +361,9 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   });
   setMode('translate');
   resetButton.addEventListener('click', () => {
-    if (registrationComplete) return;
+    if (registrationRunning) return;
     pcdEntity.setLocalPosition(0, 0, 0); pcdEntity.setLocalEulerAngles(0, 0, 0);
+    markResultStale();
   });
   root.querySelector('#fit')!.addEventListener('click', fitCamera);
   root.querySelector('#new-task')!.addEventListener('click', () => { location.href = '/'; });
@@ -421,8 +470,9 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
         ? '自定义参数属于单阶段实验模式，修改后必须重新进行 CloudCompare 或控制点验证。'
         : '采用 CloudCompare 默认采样上限 50,000；本项目使用固定种子复现验证，并非用户手工设置。';
   };
-  parameterMode.addEventListener('change', updateParameterMode);
+  parameterMode.addEventListener('change', () => { updateParameterMode(); markResultStale(); });
   updateParameterMode();
+  parameterInputs.forEach(input => input.addEventListener('input', markResultStale));
 
   const jobStatus = root.querySelector<HTMLElement>('#job-status')!;
   const copyFinalMatrixButton = root.querySelector<HTMLButtonElement>('#copy-final-matrix')!;
@@ -464,19 +514,126 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     pcdEntity.setLocalPosition(transform.getTranslation());
     pcdEntity.setLocalEulerAngles(transform.getEulerAngles());
   };
+  const setRegistrationRunning = (running: boolean) => {
+    registrationRunning = running;
+    registerButton.disabled = running;
+    parameterMode.disabled = running;
+    translateButton.disabled = running;
+    rotateButton.disabled = running;
+    resetButton.disabled = running;
+    if (running) {
+      translateGizmo.detach();
+      rotateGizmo.detach();
+      Object.values(inputs).forEach(input => { input.disabled = true; });
+      parameterInputs.forEach(input => { input.disabled = true; });
+      registerButton.textContent = 'ICP 精配准执行中…';
+    } else {
+      updateParameterMode();
+      setMode(activeGizmoMode);
+    }
+  };
+  const showActiveRound = (round: RegistrationRound) => {
+    lastCompletedRound = round;
+    root.querySelector<HTMLElement>('#result')!.hidden = false;
+    finalMatrixText = matrixText(round.result.recommended_matrix.value);
+    root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalMatrixText;
+    const rms = Number(round.result.metrics.final_rms);
+    const metrics = root.querySelector<HTMLElement>('#result-metrics')!;
+    metrics.textContent = `RMS：${rms.toFixed(6)} m／${(rms * 100).toFixed(3)} cm　点数：${round.result.metrics.final_point_count}　耗时：${Number(round.result.metrics.elapsed_seconds).toFixed(2)} s`;
+    if (round.result.precision?.mode === 'high_accuracy') {
+      const stability = round.result.precision;
+      metrics.textContent += `\n重复性：平移 ${Number(stability.translation_stability_m).toFixed(4)} m／旋转 ${Number(stability.rotation_stability_deg).toFixed(4)}°　${stability.stable ? '通过（仍需控制点验证）' : '未通过'}`;
+    }
+    resultStale = false;
+    root.querySelector<HTMLElement>('#result-stale')!.hidden = true;
+    copyFinalMatrixButton.textContent = '复制最终 PLY→PCD 矩阵';
+  };
+  const renderRound = (round: RegistrationRound) => {
+    const history = root.querySelector<HTMLElement>('#result-history')!;
+    const card = document.createElement('article');
+    card.className = 'result-history-card';
+    const rms = Number(round.result.metrics.final_rms);
+    card.innerHTML = `<h4>第 ${round.number} 轮　${round.mode === 'high_accuracy' ? '高采样稳定性模式' : round.mode === 'custom' ? '自定义模式' : '推荐模式'}</h4>
+      <p>RMS：${rms.toFixed(6)} m　点数：${round.result.metrics.final_point_count}　耗时：${Number(round.result.metrics.elapsed_seconds).toFixed(2)} s</p>
+      <p>参数：${round.parameters.minRmsDecrease}／${round.parameters.samplingLimit}／${round.parameters.overlap}／种子 ${round.parameters.randomSeed}</p>
+      <details><summary>查看本轮初始 PCD→PLY</summary><pre class="matrix">${matrixText(round.initialPcdToPly)}</pre></details>
+      <details><summary>查看本轮最终 PLY→PCD</summary><pre class="matrix">${matrixText(round.result.recommended_matrix.value)}</pre></details>
+      <div class="history-actions"><button type="button" data-action="restore">恢复本轮结果到视口</button><button type="button" data-action="copy">复制本轮 PLY→PCD</button></div>`;
+    card.querySelector<HTMLButtonElement>('[data-action="restore"]')!.addEventListener('click', () => {
+      if (registrationRunning || !round.result.pcd_to_ply) return;
+      applyPcdToPly(round.result.pcd_to_ply);
+      parameterMode.value = round.mode;
+      updateParameterMode();
+      parameterInputs[0].value = String(round.parameters.minRmsDecrease);
+      parameterInputs[1].value = String(round.parameters.samplingLimit);
+      parameterInputs[2].value = String(round.parameters.overlap);
+      parameterInputs[3].value = String(round.parameters.randomSeed);
+      showActiveRound(round);
+      appendLog(`已将第 ${round.number} 轮结果恢复到视口`);
+    });
+    card.querySelector<HTMLButtonElement>('[data-action="copy"]')!.addEventListener('click', async event => {
+      const button = event.currentTarget as HTMLButtonElement;
+      try {
+        await copyText(matrixText(round.result.recommended_matrix.value));
+        button.textContent = '已复制';
+        window.setTimeout(() => { button.textContent = '复制本轮 PLY→PCD'; }, 1800);
+      } catch { button.textContent = '复制失败'; }
+    });
+    history.prepend(card);
+  };
+  const restoreSessionHistory = async () => {
+    const completed = (session.registrations ?? []).filter(item => item.status === 'succeeded' && item.result_url);
+    for (const entry of completed) {
+      const result = await fetch(entry.result_url!).then(response => response.json()) as RegistrationResult;
+      const restoredMode = entry.precision_mode === 'high_accuracy'
+        ? 'high_accuracy'
+        : entry.parameters.min_rms_decrease === 0.00001
+          && entry.parameters.sampling_limit === 50000
+          && entry.parameters.overlap === 1
+          && entry.parameters.random_seed === 42 ? 'recommended' : 'custom';
+      const round: RegistrationRound = {
+        number: registrationRounds.length + 1,
+        jobId: entry.job_id,
+        mode: restoredMode,
+        parameters: {
+          minRmsDecrease: entry.parameters.min_rms_decrease,
+          samplingLimit: entry.parameters.sampling_limit,
+          overlap: entry.parameters.overlap,
+          randomSeed: entry.parameters.random_seed
+        },
+        initialPcdToPly: entry.initial_pcd_to_ply,
+        result
+      };
+      registrationRounds.push(round);
+      renderRound(round);
+    }
+    const latest = registrationRounds.at(-1);
+    if (latest?.result.pcd_to_ply) {
+      applyPcdToPly(latest.result.pcd_to_ply);
+      showActiveRound(latest);
+      appendLog(`已恢复 ${registrationRounds.length} 轮历史结果`);
+    }
+  };
+  await restoreSessionHistory();
   registerButton.addEventListener('click', async () => {
-    registerButton.disabled = true;
+    const initialPcdToPly = entityMatrix(pcdEntity);
+    const selectedMode = parameterMode.value;
+    const parameters = {
+      minRmsDecrease: Number(parameterInputs[0].value), samplingLimit: Number(parameterInputs[1].value),
+      overlap: Number(parameterInputs[2].value), randomSeed: Number(parameterInputs[3].value)
+    };
+    setRegistrationRunning(true);
     appendLog('正在提交当前 PCD→PLY 初始矩阵');
     try {
       const response = await fetch(`/api/v1/manual-registration-sessions/${sessionId}/register`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          initial_pcd_to_ply: entityMatrix(pcdEntity),
-          precision_mode: parameterMode.value === 'high_accuracy' ? 'high_accuracy' : 'recommended',
-          min_rms_decrease: Number(parameterInputs[0].value),
-          sampling_limit: Number(parameterInputs[1].value),
-          overlap: Number(parameterInputs[2].value),
-          random_seed: Number(parameterInputs[3].value)
+          initial_pcd_to_ply: initialPcdToPly,
+          precision_mode: selectedMode === 'high_accuracy' ? 'high_accuracy' : 'recommended',
+          min_rms_decrease: parameters.minRmsDecrease,
+          sampling_limit: parameters.samplingLimit,
+          overlap: parameters.overlap,
+          random_seed: parameters.randomSeed
         })
       });
       const created = await response.json();
@@ -488,32 +645,24 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
         if (status.status !== previousStatus) { appendLog(`任务状态：${status.status}`); previousStatus = status.status; }
         if (status.status === 'failed') throw new Error(status.error ?? 'ICP 执行失败');
         if (status.status === 'succeeded') {
-          const result = await fetch(status.result_url).then(value => value.json());
-          registrationComplete = true;
-          root.querySelector<HTMLElement>('#result')!.hidden = false;
-          finalMatrixText = matrixText(result.recommended_matrix.value);
-          root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalMatrixText;
-          const rms = Number(result.metrics.final_rms);
-          root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${rms.toFixed(6)} m／${(rms * 100).toFixed(3)} cm　点数：${result.metrics.final_point_count}　耗时：${Number(result.metrics.elapsed_seconds).toFixed(2)} s`;
-          if (result.precision?.mode === 'high_accuracy') {
-            const stability = result.precision;
-            root.querySelector<HTMLElement>('#result-metrics')!.textContent += `\n重复性：平移 ${Number(stability.translation_stability_m).toFixed(4)} m／旋转 ${Number(stability.rotation_stability_deg).toFixed(4)}°　${stability.stable ? '通过（仍需控制点验证）' : '未通过'}`;
-          }
+          const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
+          const round: RegistrationRound = {
+            number: registrationRounds.length + 1, jobId: created.job_id, mode: selectedMode,
+            parameters, initialPcdToPly, result
+          };
+          registrationRounds.push(round);
+          showActiveRound(round);
           if (result.pcd_to_ply) applyPcdToPly(result.pcd_to_ply);
-          translateGizmo.detach(); rotateGizmo.detach();
-          translateButton.disabled = true; rotateButton.disabled = true; resetButton.disabled = true;
-          Object.values(inputs).forEach(input => { input.disabled = true; });
-          parameterMode.disabled = true;
-          parameterInputs.forEach(input => { input.disabled = true; });
+          renderRound(round);
           appendLog('精配准完成，视口已显示最终结果');
-          registerButton.textContent = 'ICP 精配准已完成';
+          setRegistrationRunning(false);
           break;
         }
         await sleep(1000);
       }
     } catch (error) {
       appendLog(`失败：${String(error)}`);
-      registerButton.disabled = false;
+      setRegistrationRunning(false);
     }
   });
 
@@ -527,7 +676,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   let lastX = 0;
   let lastY = 0;
   const onTransformStart = () => { gizmoTransforming = true; navigationMode = null; };
-  const onTransformEnd = () => { gizmoTransforming = false; };
+  const onTransformEnd = () => { gizmoTransforming = false; markResultStale(); };
   translateGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, onTransformStart);
   translateGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, onTransformEnd);
   rotateGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, onTransformStart);

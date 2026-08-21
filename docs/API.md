@@ -347,7 +347,8 @@ export async function registerPlyToPcd(baseUrl, plyFile, pcdFile) {
 
 ## 14．文件保留与并发
 
-- 上传的 PLY／PCD 副本在任务成功或失败后立即删除。
+- 普通单次配准上传的 PLY／PCD 副本在任务成功或失败后立即删除。
+- 人工配准会话的原始 PLY／PCD 保留到会话过期，以支持同一会话多轮 ICP；各轮任务不会复制大体积点云。
 - 结果、矩阵和日志默认保留 `168` 小时。
 - 默认每 `3600` 秒检查一次过期任务。
 - 默认同时运行 `1` 个 ICP 任务，其他任务保持 `queued`。
@@ -392,7 +393,7 @@ Content-Type: multipart/form-data
 GET /api/v1/manual-registration-sessions/{session_id}
 ```
 
-状态为 `ready` 后返回 `ply_preview_url`、`pcd_preview_url`、点数和包围盒。Gaussian 属性可用时还返回 `gaussian_preview_url`；该资源指向会话中保存的原始 PLY，只有用户切换完整 Gaussian 显示时才流式下载。
+状态为 `ready` 后返回 `ply_preview_url`、`pcd_preview_url`、点数和包围盒。Gaussian 属性可用时还返回 `gaussian_preview_url`；该资源指向会话中保存的原始 PLY，只有用户切换完整 Gaussian 显示时才流式下载。执行过 ICP 后，响应还包含 `registrations` 历史数组和当前 `active_job_id`；每条记录保存任务状态、实际参数、提交时的绝对 `initial_pcd_to_ply` 以及成功后的 `result_url`。
 
 ### 获取预览
 
@@ -454,4 +455,6 @@ ply_to_pcd
 
 人工会话与任务结果使用相同的默认 `168` 小时保留期限。
 
-Web 工作台会在提交时读取当前 PCD 变换作为 `initial_pcd_to_ply`。精配准完成后，三维视口显示最终 `PCD→PLY` 对齐效果，左侧保留提交时的粗配准矩阵，并将推荐业务矩阵明确显示为 `PLY→PCD`。
+同一人工会话同一时间只允许一个 `queued／running` ICP 任务；重复提交返回 `409`。任务结束后可以继续移动 PCD、切换模式或修改参数并再次调用本接口。每轮都重新读取会话中的原始 PLY／PCD，不在上一轮已变换点坐标上重复累积变换。
+
+Web 工作台会在提交时读取当前 PCD 绝对变换作为 `initial_pcd_to_ply`。精配准完成后，三维视口显示最终 `PCD→PLY` 对齐效果，同时恢复粗配准和参数控件。页面保留多轮历史；若结果完成后又改变当前姿态或参数，上一次 `PLY→PCD` 矩阵会标记为已过期，但仍可查看和复制。

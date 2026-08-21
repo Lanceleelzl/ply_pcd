@@ -29,6 +29,7 @@ app = FastAPI(title="PLY/PCD Registration Service", version="0.1.0")
 STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+_manual_submission_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
@@ -75,6 +76,29 @@ def _read_status(job_directory: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
+    session_id = job_status.get("manual_session_id")
+    if not session_id:
+        return
+    session_directory = _manual_session_directory(session_id)
+    session_status = _read_status(session_directory)
+    registrations = session_status.setdefault("registrations", [])
+    entry = next((item for item in registrations if item.get("job_id") == job_status["job_id"]), None)
+    if entry is None:
+        return
+    for field in (
+        "status", "started_at_unix", "finished_at_unix", "result_url", "error_code", "error"
+    ):
+        if field in job_status:
+            entry[field] = job_status[field]
+    if job_status.get("status") in {"succeeded", "failed"}:
+        if session_status.get("active_job_id") == job_status["job_id"]:
+            session_status["active_job_id"] = None
+    else:
+        session_status["active_job_id"] = job_status["job_id"]
+    _write_status(session_directory, session_status)
+
+
 async def _save_upload(upload: UploadFile, destination: Path) -> int:
     total = 0
     with destination.open("wb") as output:
@@ -92,6 +116,7 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
         status["status"] = "running"
         status["started_at_unix"] = time.time()
         _write_status(job_directory, status)
+        _sync_manual_session_job(status)
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -108,6 +133,7 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
                 status.update(status="failed", error_code="worker_timeout", error="Registration timed out")
                 status["finished_at_unix"] = time.time()
                 _write_status(job_directory, status)
+                _sync_manual_session_job(status)
                 shutil.rmtree(job_directory / "input", ignore_errors=True)
                 return
 
@@ -131,6 +157,7 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
             status.update(status="failed", error_code="worker_start_failed", error=str(error))
         status["finished_at_unix"] = time.time()
         _write_status(job_directory, status)
+        _sync_manual_session_job(status)
         shutil.rmtree(job_directory / "input", ignore_errors=True)
 
 
@@ -210,6 +237,13 @@ def _cleanup_completed_jobs() -> None:
             continue
         if status.get("status") not in {"ready", "failed"}:
             continue
+        active_job_id = status.get("active_job_id")
+        if active_job_id:
+            try:
+                if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
+                    continue
+            except HTTPException:
+                pass
         if float(status.get("updated_at_unix", 0)) < expires_before:
             shutil.rmtree(session_directory)
 
@@ -361,29 +395,55 @@ async def register_manual_session(
         request.min_rms_decrease, request.sampling_limit, request.overlap, request.random_seed,
         request.precision_mode,
     )
-    session_directory = _manual_session_directory(session_id)
-    session_status = _read_status(session_directory)
-    if session_status.get("status") != "ready":
-        raise HTTPException(status_code=409, detail=f"Manual session status is {session_status.get('status')}")
-    job_id = str(uuid.uuid4())
-    job_directory = _job_directory(job_id)
-    input_directory = job_directory / "input"
-    result_directory = job_directory / "result"
-    input_directory.mkdir(parents=True)
-    result_directory.mkdir()
-    matrix_path = input_directory / "initial_pcd_to_ply.txt"
-    matrix_path.write_text(
-        "\n".join(" ".join(f"{value:.17g}" for value in row) for row in request.initial_pcd_to_ply) + "\n",
-        encoding="utf-8",
-    )
-    status: dict[str, Any] = {
-        "job_id": job_id,
-        "status": "queued",
-        "created_at_unix": time.time(),
-        "manual_session_id": session_id,
-        "inputs": session_status["inputs"],
-    }
-    _write_status(job_directory, status)
+    async with _manual_submission_lock:
+        session_directory = _manual_session_directory(session_id)
+        session_status = _read_status(session_directory)
+        if session_status.get("status") != "ready":
+            raise HTTPException(status_code=409, detail=f"Manual session status is {session_status.get('status')}")
+        active_job_id = session_status.get("active_job_id")
+        if active_job_id:
+            try:
+                active_status = _read_status(_job_directory(active_job_id)).get("status")
+            except HTTPException:
+                active_status = None
+            if active_status in {"queued", "running"}:
+                raise HTTPException(status_code=409, detail="Manual session already has an active registration")
+            session_status["active_job_id"] = None
+        job_id = str(uuid.uuid4())
+        job_directory = _job_directory(job_id)
+        input_directory = job_directory / "input"
+        result_directory = job_directory / "result"
+        input_directory.mkdir(parents=True)
+        result_directory.mkdir()
+        matrix_path = input_directory / "initial_pcd_to_ply.txt"
+        matrix_path.write_text(
+            "\n".join(" ".join(f"{value:.17g}" for value in row) for row in request.initial_pcd_to_ply) + "\n",
+            encoding="utf-8",
+        )
+        status: dict[str, Any] = {
+            "job_id": job_id,
+            "status": "queued",
+            "created_at_unix": time.time(),
+            "manual_session_id": session_id,
+            "inputs": session_status["inputs"],
+        }
+        _write_status(job_directory, status)
+        session_status.setdefault("registrations", []).append({
+            "job_id": job_id,
+            "status": "queued",
+            "created_at_unix": status["created_at_unix"],
+            "initial_pcd_to_ply": request.initial_pcd_to_ply,
+            "precision_mode": request.precision_mode,
+            "parameters": {
+                "min_rms_decrease": request.min_rms_decrease,
+                "sampling_limit": request.sampling_limit,
+                "overlap": request.overlap,
+                "random_seed": request.random_seed,
+            },
+            "status_url": f"/api/v1/registrations/{job_id}",
+        })
+        session_status["active_job_id"] = job_id
+        _write_status(session_directory, session_status)
     command = [
         WORKER_PATH,
         "register",
