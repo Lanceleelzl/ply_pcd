@@ -91,8 +91,69 @@
   font-size: 12px;
 }
 
-.badge {
+.viewport-toolbar button:disabled {
+  border-color: #3b4658;
+  background: #1a2433;
+  color: #748196;
+  opacity: .55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.model-visibility {
+  display: flex;
+  gap: 5px;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid #42516a;
+}
+
+.model-visibility button {
+  padding: 6px 9px;
+  border: 1px solid #52617a;
+  border-radius: 6px;
+  background: #1a2433e8;
+  color: #8290a5;
+  font-size: 12px;
+}
+
+.model-visibility button.active {
+  border-color: #4dbb92;
+  background: #24775fe8;
+  color: #fff;
+}
+
+.model-role-summary {
+  margin-top: 8px !important;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #0d1725;
+  color: #cbd5e1;
+}
+
+.viewport-progress {
+  position: absolute;
+  z-index: 4;
   top: 66px;
+  left: 12px;
+  padding: 7px 12px;
+  border: 1px solid #35445a;
+  border-radius: 7px;
+  background: #0d1725e8;
+  color: #a9c8ee;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  pointer-events: none;
+}
+
+.range-risk {
+  margin: 8px 0 2px;
+  padding: 8px;
+  border: 1px solid #a97831;
+  border-radius: 6px;
+  background: #2a2115;
+  color: #ffd28a;
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .parameter-label,
@@ -120,6 +181,13 @@
   margin: 10px 0;
 }
 
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin: 2px 0 9px;
+}
+
 .mode-parameters {
   margin: 10px 0;
   padding: 9px;
@@ -136,6 +204,10 @@
 
 .result #copy-final-matrix {
   margin-top: 10px;
+}
+
+.result details .full-width {
+  margin-top: 8px;
 }
 
 .result-warning {
@@ -175,6 +247,56 @@
 
 .full-width {
   width: 100%;
+}
+
+.registration-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.progress-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0 9px;
+  color: #b7c3d4;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.progress-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #4dbb92;
+}
+
+.registration-actions #register {
+  width: 100%;
+}
+
+.registration-actions #register.running::before {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-right: 8px;
+  border: 2px solid #ffffff55;
+  border-top-color: #fff;
+  border-radius: 50%;
+  vertical-align: -2px;
+  content: '';
+  animation: registration-spin .7s linear infinite;
+}
+
+.registration-actions .cancel-action {
+  border-color: #a94f58;
+  background: #48252b;
+  color: #ffd9dd;
+}
+
+@keyframes registration-spin {
+  to { transform: rotate(360deg); }
 }
 
 .timeline {

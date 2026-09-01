@@ -6,6 +6,7 @@
 //Local
 #include "PointProjectionTools.h"
 
+#include <functional>
 
 namespace CCCoreLib
 {
@@ -171,6 +172,7 @@ namespace CCCoreLib
 				, useC2MSignedDistances(false)
 				, robustC2MSignedDistances(true)
 				, normalsMatching(NO_NORMAL)
+				, iterationCallback()
 			{}
 
 			//! Convergence type
@@ -216,6 +218,9 @@ namespace CCCoreLib
 
 			//! Normals matching method
 			NORMALS_MATCHING normalsMatching;
+
+			//! Optional read-only notification after each accepted ICP transformation update.
+			std::function<void(unsigned, double, unsigned, const ScaledTransformation&)> iterationCallback;
 		};
 
 		//! Registers two clouds or a cloud and a mesh

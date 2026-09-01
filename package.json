@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "GPL-3.0-or-later",
-  "description": "Gaussian PLY to SLAM PCD registration service",
+  "description": "Gaussian PLY to SLAM PCD/LAS/LAZ registration service",
   "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=20.19",

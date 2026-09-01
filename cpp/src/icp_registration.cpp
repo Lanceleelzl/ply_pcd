@@ -95,18 +95,23 @@ Matrix4d toMatrix(const CCCoreLib::PointProjectionTools::Transformation& transfo
 }
 } // namespace
 
-IcpResult IcpRegistration::registerPcdToPly(const PointCloud& pcd,
-                                            const PointCloud& ply,
-                                            const IcpOptions& options) const
+IcpResult IcpRegistration::registerMovingToFixed(const PointCloud& moving,
+                                                 const PointCloud& fixed,
+                                                 const IcpOptions& options) const
 {
-    if (pcd.points.size() < 3 || ply.points.size() < 3)
+    if (moving.points.size() < 3 || fixed.points.size() < 3)
         throw std::runtime_error("ICP requires at least three points in each cloud");
     if (!(options.finalOverlapRatio > 0.0 && options.finalOverlapRatio <= 1.0))
         throw std::runtime_error("ICP overlap ratio must be in (0, 1]");
-    validateRigidTransform(options.initialPcdToPly);
+    const bool genericInitialProvided = options.initialMovingLocalToFixedLocal.values()
+        != Matrix4d().values();
+    const Matrix4d& initial = genericInitialProvided
+        ? options.initialMovingLocalToFixedLocal
+        : options.initialPcdToPly;
+    validateRigidTransform(initial);
 
-    auto dataCloud = toCloudCompareCloud(pcd, &options.initialPcdToPly);
-    auto modelCloud = toCloudCompareCloud(ply);
+    auto dataCloud = toCloudCompareCloud(moving, &initial);
+    auto modelCloud = toCloudCompareCloud(fixed);
 
     CCCoreLib::ICPRegistrationTools::Parameters parameters;
     parameters.convType = options.maxIterations == 0
@@ -120,6 +125,14 @@ IcpResult IcpRegistration::registerPcdToPly(const PointCloud& pcd,
     parameters.finalOverlapRatio = options.finalOverlapRatio;
     parameters.maxThreadCount = options.maxThreadCount;
     parameters.normalsMatching = CCCoreLib::ICPRegistrationTools::NO_NORMAL;
+    if (options.iterationCallback)
+    {
+        parameters.iterationCallback = [&](unsigned iteration, double rms, unsigned pointCount,
+                                           const CCCoreLib::PointProjectionTools::Transformation& cumulative) {
+            const Matrix4d movingLocalToFixedLocal = toMatrix(cumulative) * initial;
+            options.iterationCallback({iteration, rms, pointCount, movingLocalToFixedLocal});
+        };
+    }
     CCCoreLib::CloudSamplingTools::SetRandomSeed(options.randomSeed);
 
     CCCoreLib::PointProjectionTools::Transformation transform;
@@ -132,15 +145,27 @@ IcpResult IcpRegistration::registerPcdToPly(const PointCloud& pcd,
         throw std::runtime_error("CloudCompare ICP failed with status " + std::to_string(static_cast<int>(status)));
 
     IcpResult result;
-    result.initialPcdToPly = options.initialPcdToPly;
-    result.refinementPcdToPly = status == CCCoreLib::ICPRegistrationTools::ICP_APPLY_TRANSFO
+    result.initialMovingLocalToFixedLocal = initial;
+    result.refinementMovingLocalToFixedLocal = status == CCCoreLib::ICPRegistrationTools::ICP_APPLY_TRANSFO
         ? toMatrix(transform)
         : Matrix4d();
-    result.pcdToPly = result.refinementPcdToPly * result.initialPcdToPly;
-    result.plyToPcd = result.pcdToPly.inverse();
+    result.movingLocalToFixedLocal = result.refinementMovingLocalToFixedLocal
+        * result.initialMovingLocalToFixedLocal;
+    result.fixedLocalToMovingLocal = result.movingLocalToFixedLocal.inverse();
+    result.initialPcdToPly = result.initialMovingLocalToFixedLocal;
+    result.refinementPcdToPly = result.refinementMovingLocalToFixedLocal;
+    result.pcdToPly = result.movingLocalToFixedLocal;
+    result.plyToPcd = result.fixedLocalToMovingLocal;
     result.scale = transform.s;
     result.finalRms = finalRms;
     result.finalPointCount = finalPointCount;
     return result;
+}
+
+IcpResult IcpRegistration::registerPcdToPly(const PointCloud& pcd,
+                                            const PointCloud& ply,
+                                            const IcpOptions& options) const
+{
+    return registerMovingToFixed(pcd, ply, options);
 }
 } // namespace registration

@@ -1,11 +1,11 @@
-# PLY／PCD Registration Service API
+# 通用点云双向 Registration Service API
 
 ## 1．文档信息
 
 | 项目 | 内容 |
 |---|---|
 | API 名称 | PLY／PCD Registration Service API |
-| API 版本 | `v1` |
+| API 版本 | `v2`（推荐）／`v1`（兼容） |
 | 服务版本 | `0.1.0` |
 | 协议 | HTTP／JSON／multipart/form-data |
 | 本地 Base URL | `http://localhost:8765` |
@@ -60,6 +60,7 @@ failed    → 读取 error_code 和 error
 | `running` | C++ Worker 正在配准 | 否 |
 | `succeeded` | 配准完成，可以读取结果 | 是 |
 | `failed` | 参数、文件解析、Worker 或 ICP 失败 | 是 |
+| `cancelled` | 用户主动终止，Worker 已结束，可重新提交 | 是 |
 
 ## 5．接口列表
 
@@ -68,6 +69,7 @@ failed    → 读取 error_code 和 error
 | `GET` | `/health` | 健康检查 |
 | `POST` | `/api/v1/registrations` | 上传文件并创建配准任务 |
 | `GET` | `/api/v1/registrations/{job_id}` | 查询任务状态 |
+| `POST` | `/api/v1/registrations/{job_id}/cancel` | 终止 queued／running 配准任务 |
 | `GET` | `/api/v1/registrations/{job_id}/result` | 获取配准结果 |
 | `GET` | `/api/v1/registrations/{job_id}/files/{filename}` | 下载结果文件 |
 
@@ -100,7 +102,7 @@ Content-Type: multipart/form-data
 | 参数 | 类型 | 必填 | 默认值 | 约束 | 说明 |
 |---|---|---|---|---|---|
 | `ply` | binary | 是 | — | 文件名以 `.ply` 结尾，非空 | Gaussian PLY 模型 |
-| `pcd` | binary | 是 | — | 文件名以 `.pcd` 结尾，非空 | SLAM PCD 点云 |
+| `pcd` | binary | 是 | — | 文件名以 `.pcd`、`.las` 或 `.laz` 结尾，非空 | SLAM 定位参考点云；字段名为向后兼容保留 |
 | `min_rms_decrease` | number | 否 | `0.00001` | `1e-8 <= value <= 1e-3` | RMS 收敛阈值，不是最终误差目标 |
 | `sampling_limit` | integer | 否 | `50000` | `10000 <= value <= 500000` | ICP 最大采样点数；`50000` 是 CloudCompare 默认值，本项目已进行复现验证 |
 | `overlap` | number | 否 | `1.0` | `0.5 <= value <= 1` | PCD 中预计有效匹配点比例；默认值已通过 CloudCompare 手工验证 |
@@ -215,9 +217,9 @@ FastAPI 表单字段类型校验失败时返回 `422 Unprocessable Entity`。
 ```json
 {
   "recommended_matrix": {
-    "name": "T_ply_to_pcd",
-    "direction": "PLY_TO_PCD",
-    "formula": "p_pcd = T_ply_to_pcd * p_ply",
+    "name": "T_ply_to_reference",
+    "direction": "PLY_TO_REFERENCE_WORLD",
+    "formula": "p_reference_world = T_ply_to_reference * p_ply",
     "usage": "Use this matrix to transform Gaussian PLY points into the SLAM PCD coordinate system.",
     "value": [
       [0.770525392783, 0.636229039115, -0.038771495496, 2.007133790958],
@@ -248,7 +250,12 @@ FastAPI 表单字段类型校验失败时返回 `422 Unprocessable Entity`。
 
 | 字段 | 类型 | 用途 |
 |---|---|---|
-| `recommended_matrix.value` | number[4][4] | 最终业务使用的高精度 PLY→PCD 矩阵 |
+| `recommended_matrix.value` | number[4][4] | 最终业务使用的高精度 PLY→定位参考点云世界坐标矩阵 |
+| `reference_format` | string | `pcd`、`las` 或 `laz` |
+| `reference_origin` | number[3] | LAS／LAZ 局部化使用的双精度世界原点；PCD 为零 |
+| `ply_to_reference` | number[4][4] | 最终业务矩阵，已经恢复 LAS／LAZ 世界原点 |
+| `reference_to_ply` | number[4][4] | 世界参考坐标到 PLY 的反向矩阵 |
+| `reference_local_to_ply` | number[4][4] | 仅供三维预览恢复姿态的局部矩阵，不用于航点转换 |
 | `recommended_matrix.cloudcompare_value` | number[4][4] | CloudCompare 手工验证使用的 float32 兼容矩阵 |
 | `ply_to_pcd` | number[4][4] | 与推荐高精度矩阵相同 |
 | `pcd_to_ply` | number[4][4] | ICP 直接计算的反方向矩阵 |
@@ -385,7 +392,7 @@ POST /api/v1/manual-registration-sessions
 Content-Type: multipart/form-data
 ```
 
-上传字段仍为 `ply` 和 `pcd`。服务保存原始文件并异步生成体素采样预览，返回 `session_id`、`status_url` 和兼容字段 `editor_url`。Web 前端使用 `/?session={session_id}` 在主页内打开统一配准工作台；API 调用方不需要依赖页面地址。
+上传字段仍为 `ply` 和 `pcd`，其中 `pcd` 是为兼容既有调用保留的字段名，内容支持 PCD、LAS 或 LAZ。服务保存原始文件并异步生成体素采样预览，返回 `session_id`、`status_url` 和兼容字段 `editor_url`。Web 前端使用 `/?session={session_id}` 在主页内打开统一配准工作台；API 调用方不需要依赖页面地址。
 
 ### 查询会话
 
@@ -399,11 +406,11 @@ GET /api/v1/manual-registration-sessions/{session_id}
 
 ```http
 GET /api/v1/manual-registration-sessions/{session_id}/preview/ply
-GET /api/v1/manual-registration-sessions/{session_id}/preview/pcd
+GET /api/v1/manual-registration-sessions/{session_id}/preview/reference
 GET /api/v1/manual-registration-sessions/{session_id}/preview/gaussian
 ```
 
-`ply` 和 `pcd` 使用项目内部 `PCPV0001` 二进制点云格式。`gaussian` 返回未经抽样的原始 binary little-endian Gaussian PLY，可能占用较高网络带宽和 GPU 显存。
+`ply` 和 `reference` 使用项目内部 `PCPV0001` 二进制点云格式；兼容地址 `preview/pcd` 仍可用。`gaussian` 返回未经抽样的原始 binary little-endian Gaussian PLY，可能占用较高网络带宽和 GPU 显存。
 
 ### 提交初始矩阵并精配准
 
@@ -458,3 +465,145 @@ ply_to_pcd
 同一人工会话同一时间只允许一个 `queued／running` ICP 任务；重复提交返回 `409`。任务结束后可以继续移动 PCD、切换模式或修改参数并再次调用本接口。每轮都重新读取会话中的原始 PLY／PCD，不在上一轮已变换点坐标上重复累积变换。
 
 Web 工作台会在提交时读取当前 PCD 绝对变换作为 `initial_pcd_to_ply`。精配准完成后，三维视口显示最终 `PCD→PLY` 对齐效果，同时恢复粗配准和参数控件。页面保留多轮历史；若结果完成后又改变当前姿态或参数，上一次 `PLY→PCD` 矩阵会标记为已过期，但仍可查看和复制。
+
+## 15．通用双模型配准 API（v2）
+
+`v2` 不再使用文件格式推断方向。模型 A、模型 B 均支持 PLY、PCD、LAS 和 LAZ；业务输出方向与 ICP 移动模型分别指定。无论选择哪一个模型移动，结果始终同时返回两个世界坐标矩阵：
+
+```text
+p_b = T_a_to_b × p_a
+p_a = T_b_to_a × p_b
+T_b_to_a = inverse(T_a_to_b)
+```
+
+### 15.1 创建会话
+
+```http
+POST /api/v2/registration-sessions
+Content-Type: multipart/form-data
+```
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `model_a` | binary | 是 | — | `.ply`、`.pcd`、`.las` 或 `.laz` |
+| `model_b` | binary | 是 | — | `.ply`、`.pcd`、`.las` 或 `.laz` |
+| `output_direction` | string | 否 | `a_to_b` | 页面重点展示 `a_to_b` 或 `b_to_a` |
+| `moving_model` | string | 否 | `auto` | `a`、`b` 或 `auto`；只影响 ICP 计算角色，不改变业务方向 |
+
+```bash
+curl -X POST "http://localhost:8765/api/v2/registration-sessions" \
+  -F "model_a=@scene.ply" \
+  -F "model_b=@slam-map.laz" \
+  -F "output_direction=a_to_b" \
+  -F "moving_model=b"
+```
+
+成功返回 `202 Accepted`，响应包含 `session_id`、`status_url` 和 `editor_url`。查询：
+
+```http
+GET /api/v2/registration-sessions/{session_id}
+```
+
+状态为 `ready` 时，`metadata.models.a` 和 `metadata.models.b` 分别包含格式、原始点数、预览点数、局部原点和包围盒；`metadata.recommended_moving_model` 是根据包围盒尺度和点数给出的建议，不会限制用户选择。
+
+预览地址：
+
+```http
+GET /api/v2/registration-sessions/{session_id}/preview/model-a
+GET /api/v2/registration-sessions/{session_id}/preview/model-b
+GET /api/v2/registration-sessions/{session_id}/preview/gaussian-a
+GET /api/v2/registration-sessions/{session_id}/preview/gaussian-b
+```
+
+Gaussian 地址仅在对应输入为包含 Gaussian 属性的 PLY 时存在。轻量预览不参与最终 ICP。
+
+### 15.2 提交粗配准矩阵并执行 ICP
+
+```http
+POST /api/v2/registration-sessions/{session_id}/register
+Content-Type: application/json
+```
+
+```json
+{
+  "initial_moving_local_to_fixed_local": [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1]
+  ],
+  "output_direction": "a_to_b",
+  "moving_model": "b",
+  "min_rms_decrease": 0.00001,
+  "sampling_limit": 50000,
+  "overlap": 1.0,
+  "random_seed": 42
+}
+```
+
+`initial_moving_local_to_fixed_local` 必须与本次 `moving_model` 对应。例如 `moving_model=b` 时，它表示 B 局部坐标到 A 局部坐标的初始矩阵。对于 LAS／LAZ，大坐标世界原点由服务在双精度中组合，调用方不得把世界原点预先乘入该局部粗配准矩阵。
+
+服务始终生成轻量逐轮事件，不需要调用方根据界面勾选状态决定是否输出。兼容旧版服务端时可以固定传入 `show_registration_progress=true`；新版服务端仍会接受该字段，但不再由它控制 Worker。是否显示只由浏览器订阅行为决定，不改变采样、收敛条件或最终矩阵。
+
+响应仍返回标准异步任务；使用响应中的 `status_url` 查询，成功后读取 `result_url`。响应中的 `progress_url` 可用于订阅逐轮进度。结果重点字段：
+
+| 字段 | 说明 |
+|---|---|
+| `recommended_matrix` | 由 `output_direction` 选择的重点业务矩阵及明确公式 |
+| `a_to_b` | 模型 A 世界坐标到模型 B 世界坐标 |
+| `b_to_a` | 模型 B 世界坐标到模型 A 世界坐标 |
+| `moving_model`／`fixed_model` | 本轮实际 ICP 角色 |
+| `initial_moving_local_to_fixed_local` | 人工粗配准局部矩阵 |
+| `icp_refinement_moving_local_to_fixed_local` | ICP 在初始矩阵后的增量 |
+| `moving_local_to_fixed_local` | 增量与初始矩阵组合后的最终局部矩阵 |
+| `model_a.origin`／`model_b.origin` | 组合世界矩阵使用的双精度局部原点 |
+| `metrics`／`parameters` | RMS、参与点数、耗时和实际参数 |
+
+客户端不得根据 `moving_model` 猜测矩阵方向，应始终按字段名读取 `a_to_b` 或 `b_to_a`。`recommended_matrix.value` 只是其中一个方向的快捷入口。
+
+### 15.3 订阅 ICP 逐轮进度
+
+```http
+GET /api/v1/registrations/{job_id}/events
+Accept: text/event-stream
+```
+
+该 SSE 接口由 `v1` 和 `v2` 任务共用。每个已接受迭代产生一个 `iteration` 事件：
+
+```text
+event: iteration
+data: {"iteration":12,"rms":0.238421,"point_count":50000,"elapsed_seconds":3.84,"moving_local_to_fixed_local":[[...],[...],[...],[0,0,0,1]]}
+```
+
+`moving_local_to_fixed_local` 是当前移动模型局部坐标到固定模型局部坐标的累计中间矩阵，仅供视口动画和诊断，不是航点转换矩阵。任务结束时发送 `terminal` 事件；成功后必须读取 `result_url`，并以 `recommended_matrix.value`、`a_to_b` 或 `b_to_a` 的最终世界矩阵作为业务结果。任务被终止时，最后一个中间姿态未收敛，不得用于航点转换。
+
+运行中途开始显示时使用：
+
+```http
+GET /api/v1/registrations/{job_id}/events?from_latest=true
+```
+
+服务会先发送当前最新一轮，再继续推送后续迭代，不会从第一轮重新播放。
+
+### 15.4 终止配准任务
+
+```http
+POST /api/v1/registrations/{job_id}/cancel
+```
+
+该任务接口由 `v1` 和 `v2` 会话共用。只有 `queued` 或 `running` 状态可以终止；服务会结束对应 C++ Worker、将状态设置为 `cancelled`，并清除会话的 `active_job_id`。重复取消已取消任务按幂等方式返回 `cancelled`；取消已成功或已失败的任务返回 `409`。终止后可以保留当前浏览器粗配准姿态和参数并重新提交。
+
+### 15.5 CLI 等价调用
+
+```powershell
+registration_worker.exe register-models `
+  --model-a scene.ply `
+  --model-b slam-map.laz `
+  --moving-model b `
+  --output-direction a_to_b `
+  --initial-matrix initial-moving-to-fixed.txt `
+  --progress-jsonl `
+  --output-dir runtime\jobs\generic
+```
+
+启用 `--progress-jsonl` 后，标准输出先逐行输出 `type=iteration` 的紧凑 JSON，最后仍输出完整成功结果 JSON。输出目录包含 `registration.json`、`a_to_b_matrix.txt`、`b_to_a_matrix.txt` 和三个方向明确的局部矩阵文件。

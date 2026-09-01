@@ -8,9 +8,10 @@ type Matrix4 = number[][];
 interface SessionStatus {
   status: string;
   error?: string;
-  inputs?: { ply_bytes: number; pcd_bytes: number };
+  inputs?: { ply_bytes: number; pcd_bytes: number; reference_format?: string };
   ply_preview_url?: string;
   pcd_preview_url?: string;
+  reference_preview_url?: string;
   gaussian_preview_url?: string;
   metadata?: {
     clouds: {
@@ -36,6 +37,7 @@ interface SessionStatus {
 interface RegistrationResult {
   recommended_matrix: { value: Matrix4 };
   pcd_to_ply?: Matrix4;
+  reference_local_to_ply?: Matrix4;
   metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
   precision?: {
     mode: string;
@@ -90,10 +92,12 @@ function combinedBounds(ply: PreviewCloud, pcd: PreviewCloud): { center: pc.Vec3
 }
 
 export async function renderManualRegistration(root: HTMLElement, sessionId: string): Promise<void> {
-  root.innerHTML = `<main class="editor integrated-editor"><div class="workspace integrated-workspace"><aside class="panel workflow-panel"><div class="workflow-title"><div><h1>PLY／PCD 配准工作台</h1><small>正在准备三维场景</small></div></div><section class="workflow-step completed"><h2><span>1</span> 文件上传完成</h2></section><section class="workflow-step"><h2><span>2</span> 生成轻量预览</h2><pre id="loading-status" class="status timeline">预览状态：queued</pre></section><section class="workflow-step"><h2><span>3</span> 加载三维场景</h2><p class="step-hint">预览完成后自动加载，无需重复上传。</p></section></aside><section class="viewport preview-loading"><div><h2>正在准备点云预览</h2><p>大文件只在服务器端处理，浏览器加载轻量数据。</p></div></section></div></main>`;
+  root.innerHTML = `<main class="editor integrated-editor"><div class="workspace integrated-workspace"><aside class="panel workflow-panel"><div class="workflow-title"><div><h1>PLY／定位点云配准工作台</h1><small>正在准备三维场景</small></div></div><section class="workflow-step completed"><h2><span>1</span> 文件上传完成</h2></section><section class="workflow-step"><h2><span>2</span> 生成轻量预览</h2><pre id="loading-status" class="status timeline">预览状态：queued</pre></section><section class="workflow-step"><h2><span>3</span> 加载三维场景</h2><p class="step-hint">预览完成后自动加载，无需重复上传。</p></section></aside><section class="viewport preview-loading"><div><h2>正在准备点云预览</h2><p>大文件只在服务器端处理，浏览器加载轻量数据。</p></div></section></div></main>`;
   const session = await waitForSession(sessionId, root.querySelector('#loading-status')!);
+  const referenceFormat = (session.inputs?.reference_format ?? 'pcd').toUpperCase();
+  const referenceLabel = `${referenceFormat} 定位点云`;
   const [plyCloud, pcdCloud] = await Promise.all([
-    loadPreview(session.ply_preview_url!), loadPreview(session.pcd_preview_url!)
+    loadPreview(session.ply_preview_url!), loadPreview(session.reference_preview_url ?? session.pcd_preview_url!)
   ]);
   const gaussianButtonLabel = session.inputs?.ply_bytes
     ? `完整 Gaussian（${formatBytes(session.inputs.ply_bytes)}）`
@@ -103,9 +107,9 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     <main class="editor integrated-editor">
       <div class="workspace integrated-workspace">
         <aside class="panel workflow-panel">
-          <div class="workflow-title"><div><h1>PLY／PCD 配准工作台</h1><small>PLY 固定，PCD 可调整</small></div><button id="new-task">新建</button></div>
-          <section class="workflow-step completed"><h2><span>1</span> 数据与预览</h2><p>PLY ${plyCloud.count.toLocaleString()} 点<br>PCD ${pcdCloud.count.toLocaleString()} 点</p></section>
-          <section class="workflow-step"><h2><span>2</span> 人工粗配准（可选）</h2><p class="step-hint">在视口浮动工具栏选择平移或旋转，只调整黄色 PCD。</p>
+          <div class="workflow-title"><div><h1>PLY／定位点云配准工作台</h1><small>PLY 固定，${referenceLabel} 可调整</small></div><button id="new-task">新建</button></div>
+          <section class="workflow-step completed"><h2><span>1</span> 数据与预览</h2><p>PLY ${plyCloud.count.toLocaleString()} 点<br>${referenceLabel} ${pcdCloud.count.toLocaleString()} 点</p></section>
+          <section class="workflow-step"><h2><span>2</span> 人工粗配准（可选）</h2><p class="step-hint">在视口浮动工具栏选择平移或旋转，只调整黄色定位点云。</p>
             <h3>平移／m</h3><div class="field-grid" id="position"></div>
             <h3>旋转／°</h3><div class="field-grid" id="rotation"></div>
             <details><summary>查看 T_manual_pcd_to_ply</summary><pre id="matrix" class="matrix"></pre></details>
@@ -132,13 +136,13 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
             <button id="register" class="primary full-width">直接执行 ICP 精配准</button>
           </section>
           <section class="workflow-step"><h2><span>4</span> 任务与结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
-            <section id="result" class="result" hidden><h3>当前已完成业务矩阵：PLY→PCD</h3><p class="result-formula">p_pcd = T_ply_to_pcd × p_ply</p><p id="result-stale" class="result-warning" hidden>当前 PCD 姿态或参数已改变。下方仍是上一次已完成矩阵，请重新执行 ICP 后再用于航点转换。</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-final-matrix" class="full-width" type="button">复制最终 PLY→PCD 矩阵</button></section>
+            <section id="result" class="result" hidden><h3>最终业务矩阵：PLY→${referenceFormat} 世界坐标</h3><p class="result-formula">p_reference_world = T_ply_to_reference × p_ply</p><p id="result-stale" class="result-warning" hidden>当前定位点云姿态或参数已改变。下方仍是上一次已完成矩阵，请重新执行 ICP 后再用于航点转换。</p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-final-matrix" class="full-width" type="button">复制最终 PLY→${referenceFormat} 矩阵</button></section>
             <div id="result-history" class="result-history"></div>
           </section>
         </aside>
         <section class="viewport"><canvas id="viewport"></canvas>
           <div class="viewport-toolbar toolbar"><strong>粗配准工具</strong><button id="translate" class="active">平移 G</button><button id="rotate">旋转 R</button><button id="reset">重置 PCD</button><button id="fit">适应全部</button><button id="gaussian" ${session.gaussian_preview_url ? '' : 'class="disabled" disabled'}>${gaussianButtonLabel}</button></div>
-          <div class="badge">PLY ${plyCloud.count.toLocaleString()} 点　PCD ${pcdCloud.count.toLocaleString()} 点</div>
+          <div class="badge">PLY ${plyCloud.count.toLocaleString()} 点　${referenceFormat} ${pcdCloud.count.toLocaleString()} 点</div>
           <div class="view-gizmo" aria-label="快速视角"><div class="view-cube-scene"><div class="view-cube"><button class="cube-face face-x" data-direction="1,0,0" title="沿 +X 查看">X</button><button class="cube-face face-nx" data-direction="-1,0,0" title="沿 -X 查看">−X</button><button class="cube-face face-y" data-direction="0,1,0" title="沿 +Y 查看">Y</button><button class="cube-face face-ny" data-direction="0,-1,0" title="沿 -Y 查看">−Y</button><button class="cube-face face-z" data-direction="0,0,1" title="顶视图（沿 +Z 查看）">Z</button><button class="cube-face face-nz" data-direction="0,0,-1" title="底视图（沿 -Z 查看）">−Z</button>${[-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => `<button class="cube-corner" data-direction="${x},${y},${z}" style="--cx:${x};--cy:${y};--cz:${z}" title="等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z"></button>`))).join('')}</div></div><div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div></div>
           <div class="viewport-help">左键空白处：旋转　中键：平移　滚轮：缩放　左键手柄：变换 PCD　右键：未绑定</div>
         </section>
@@ -170,7 +174,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   });
   application.root.addChild(camera);
   const plyEntity = createPointCloudEntity(application, plyCloud, new pc.Color(0.68, 0.72, 0.78), 'Fixed PLY');
-  const pcdEntity = createPointCloudEntity(application, pcdCloud, new pc.Color(1.0, 0.72, 0.08), 'Movable PCD');
+  const pcdEntity = createPointCloudEntity(application, pcdCloud, new pc.Color(1.0, 0.72, 0.08), 'Movable Reference Cloud');
   application.root.addChild(plyEntity);
   application.root.addChild(pcdEntity);
   let gaussianEntity: pc.Entity | null = null;
@@ -495,8 +499,8 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     if (!finalMatrixText) return;
     try {
       await copyText(finalMatrixText);
-      copyFinalMatrixButton.textContent = '已复制 PLY→PCD 矩阵';
-      window.setTimeout(() => { copyFinalMatrixButton.textContent = '复制最终 PLY→PCD 矩阵'; }, 1800);
+      copyFinalMatrixButton.textContent = `已复制 PLY→${referenceFormat} 矩阵`;
+      window.setTimeout(() => { copyFinalMatrixButton.textContent = `复制最终 PLY→${referenceFormat} 矩阵`; }, 1800);
     } catch {
       copyFinalMatrixButton.textContent = '复制失败，请手动复制';
     }
@@ -546,7 +550,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     }
     resultStale = false;
     root.querySelector<HTMLElement>('#result-stale')!.hidden = true;
-    copyFinalMatrixButton.textContent = '复制最终 PLY→PCD 矩阵';
+    copyFinalMatrixButton.textContent = `复制最终 PLY→${referenceFormat} 矩阵`;
   };
   const renderRound = (round: RegistrationRound) => {
     const history = root.querySelector<HTMLElement>('#result-history')!;
@@ -556,12 +560,13 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     card.innerHTML = `<h4>第 ${round.number} 轮　${round.mode === 'high_accuracy' ? '高采样稳定性模式' : round.mode === 'custom' ? '自定义模式' : '推荐模式'}</h4>
       <p>RMS：${rms.toFixed(6)} m　点数：${round.result.metrics.final_point_count}　耗时：${Number(round.result.metrics.elapsed_seconds).toFixed(2)} s</p>
       <p>参数：${round.parameters.minRmsDecrease}／${round.parameters.samplingLimit}／${round.parameters.overlap}／种子 ${round.parameters.randomSeed}</p>
-      <details><summary>查看本轮初始 PCD→PLY</summary><pre class="matrix">${matrixText(round.initialPcdToPly)}</pre></details>
-      <details><summary>查看本轮最终 PLY→PCD</summary><pre class="matrix">${matrixText(round.result.recommended_matrix.value)}</pre></details>
-      <div class="history-actions"><button type="button" data-action="restore">恢复本轮结果到视口</button><button type="button" data-action="copy">复制本轮 PLY→PCD</button></div>`;
+      <details><summary>查看本轮初始定位点云→PLY</summary><pre class="matrix">${matrixText(round.initialPcdToPly)}</pre></details>
+      <details><summary>查看本轮最终 PLY→${referenceFormat}</summary><pre class="matrix">${matrixText(round.result.recommended_matrix.value)}</pre></details>
+      <div class="history-actions"><button type="button" data-action="restore">恢复本轮结果到视口</button><button type="button" data-action="copy">复制本轮 PLY→${referenceFormat}</button></div>`;
     card.querySelector<HTMLButtonElement>('[data-action="restore"]')!.addEventListener('click', () => {
-      if (registrationRunning || !round.result.pcd_to_ply) return;
-      applyPcdToPly(round.result.pcd_to_ply);
+      const localMatrix = round.result.reference_local_to_ply ?? round.result.pcd_to_ply;
+      if (registrationRunning || !localMatrix) return;
+      applyPcdToPly(localMatrix);
       parameterMode.value = round.mode;
       updateParameterMode();
       parameterInputs[0].value = String(round.parameters.minRmsDecrease);
@@ -576,7 +581,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
       try {
         await copyText(matrixText(round.result.recommended_matrix.value));
         button.textContent = '已复制';
-        window.setTimeout(() => { button.textContent = '复制本轮 PLY→PCD'; }, 1800);
+        window.setTimeout(() => { button.textContent = `复制本轮 PLY→${referenceFormat}`; }, 1800);
       } catch { button.textContent = '复制失败'; }
     });
     history.prepend(card);
@@ -608,8 +613,9 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
       renderRound(round);
     }
     const latest = registrationRounds.at(-1);
-    if (latest?.result.pcd_to_ply) {
-      applyPcdToPly(latest.result.pcd_to_ply);
+    const latestLocalMatrix = latest?.result.reference_local_to_ply ?? latest?.result.pcd_to_ply;
+    if (latest && latestLocalMatrix) {
+      applyPcdToPly(latestLocalMatrix);
       showActiveRound(latest);
       appendLog(`已恢复 ${registrationRounds.length} 轮历史结果`);
     }
@@ -652,7 +658,8 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
           };
           registrationRounds.push(round);
           showActiveRound(round);
-          if (result.pcd_to_ply) applyPcdToPly(result.pcd_to_ply);
+          const localMatrix = result.reference_local_to_ply ?? result.pcd_to_ply;
+          if (localMatrix) applyPcdToPly(localMatrix);
           renderRound(round);
           appendLog('精配准完成，视口已显示最终结果');
           setRegistrationRunning(false);

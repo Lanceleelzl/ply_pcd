@@ -6,9 +6,18 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 namespace registration
 {
+struct IcpIterationState
+{
+    unsigned iteration = 0;
+    double rms = -1.0;
+    unsigned pointCount = 0;
+    Matrix4d movingLocalToFixedLocal;
+};
+
 struct IcpOptions
 {
     double minRmsDecrease = 1.0e-5;
@@ -19,11 +28,17 @@ struct IcpOptions
     bool filterOutFarthestPoints = false;
     int maxThreadCount = 0;
     std::uint32_t randomSeed = 42;
+    Matrix4d initialMovingLocalToFixedLocal;
     Matrix4d initialPcdToPly;
+    std::function<void(const IcpIterationState&)> iterationCallback;
 };
 
 struct IcpResult
 {
+    Matrix4d initialMovingLocalToFixedLocal;
+    Matrix4d refinementMovingLocalToFixedLocal;
+    Matrix4d movingLocalToFixedLocal;
+    Matrix4d fixedLocalToMovingLocal;
     Matrix4d initialPcdToPly;
     Matrix4d refinementPcdToPly;
     Matrix4d pcdToPly;
@@ -36,6 +51,9 @@ struct IcpResult
 class IcpRegistration
 {
 public:
+    [[nodiscard]] IcpResult registerMovingToFixed(const PointCloud& moving,
+                                                  const PointCloud& fixed,
+                                                  const IcpOptions& options = {}) const;
     [[nodiscard]] IcpResult registerPcdToPly(const PointCloud& pcd,
                                              const PointCloud& ply,
                                              const IcpOptions& options = {}) const;

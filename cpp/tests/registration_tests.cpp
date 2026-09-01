@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "registration/icp_registration.hpp"
+#include "registration/bidirectional_registration.hpp"
 #include "registration/gaussian_preview.hpp"
 #include "registration/matrix.hpp"
 #include "registration/pcd_reader.hpp"
 #include "registration/ply_reader.hpp"
 #include "registration/point_cloud_preview.hpp"
+#include "registration/reference_cloud_reader.hpp"
+
+#include <laszip_api.h>
 
 #include <algorithm>
 #include <cmath>
@@ -61,6 +65,130 @@ void testRealPcd()
     const auto box = result.cloud.boundingBox();
     requireNear(box.min[0], -5.5668, 1.0e-3, "PCD min X mismatch");
     requireNear(box.max[1], 17.6904, 1.0e-3, "PCD max Y mismatch");
+}
+
+void writeLaszipFixture(const std::filesystem::path& path, bool compressed)
+{
+    const double points[][3] = {
+        {630499.95, 4834749.17, 62.15},
+        {630499.83, 4834748.88, 62.68},
+        {630499.54, 4834749.66, 62.66},
+        {630498.56, 4834749.41, 61.33},
+        {630499.35, 4834748.73, 63.68},
+    };
+    laszip_POINTER writer = nullptr;
+    require(laszip_create(&writer) == 0, "Cannot create LASzip test writer");
+    laszip_header_struct* header = nullptr;
+    require(laszip_get_header_pointer(writer, &header) == 0, "Cannot get LASzip test header");
+    header->version_major = 1;
+    header->version_minor = 2;
+    header->point_data_format = 0;
+    header->point_data_record_length = 20;
+    header->number_of_point_records = 5;
+    header->number_of_points_by_return[0] = 5;
+    header->x_scale_factor = header->y_scale_factor = header->z_scale_factor = 0.001;
+    header->x_offset = 630499.0;
+    header->y_offset = 4834749.0;
+    header->z_offset = 62.0;
+    header->min_x = 630498.56; header->max_x = 630499.95;
+    header->min_y = 4834748.73; header->max_y = 4834749.66;
+    header->min_z = 61.33; header->max_z = 63.68;
+    const auto filename = path.string();
+    require(laszip_open_writer(writer, filename.c_str(), compressed ? 1 : 0) == 0,
+            "Cannot open LASzip test output");
+    for (const auto& point : points)
+    {
+        require(laszip_set_coordinates(writer, point) == 0, "Cannot set LASzip test coordinate");
+        require(laszip_write_point(writer) == 0, "Cannot write LASzip test point");
+    }
+    require(laszip_close_writer(writer) == 0, "Cannot close LASzip test writer");
+    require(laszip_destroy(writer) == 0, "Cannot destroy LASzip test writer");
+}
+
+void testLasAndLazPrecision()
+{
+    const auto outputDirectory = sourcePath("runtime/test-output");
+    std::filesystem::create_directories(outputDirectory);
+    const auto lasPath = outputDirectory / "large-coordinate-fixture.las";
+    const auto lazPath = outputDirectory / "large-coordinate-fixture.laz";
+    writeLaszipFixture(lasPath, false);
+    writeLaszipFixture(lazPath, true);
+    const auto las = registration::ReferenceCloudReader().read(lasPath);
+    const auto laz = registration::ReferenceCloudReader().read(lazPath);
+    require(las.format == "las" && laz.format == "laz", "LAS/LAZ format detection mismatch");
+    require(las.cloud.points.size() == 5 && laz.cloud.points.size() == 5, "LAS/LAZ point count mismatch");
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+        requireNear(las.origin[axis], laz.origin[axis], 0.0, "LAS/LAZ origin mismatch");
+        requireNear(las.worldBounds.min[axis], laz.worldBounds.min[axis], 0.0, "LAS/LAZ min bounds mismatch");
+        requireNear(las.worldBounds.max[axis], laz.worldBounds.max[axis], 0.0, "LAS/LAZ max bounds mismatch");
+    }
+    for (std::size_t index = 0; index < las.cloud.points.size(); ++index)
+        for (std::size_t axis = 0; axis < 3; ++axis)
+            requireNear(las.cloud.points[index][axis], laz.cloud.points[index][axis], 0.0,
+                        "LAS/LAZ localized coordinate mismatch");
+    requireNear(las.origin[0], 630499.255, 1.0e-9, "LAS origin X mismatch");
+    requireNear(las.origin[1], 4834749.195, 1.0e-9, "LAS origin Y mismatch");
+    requireNear(las.origin[2], 62.505, 1.0e-9, "LAS origin Z mismatch");
+    requireNear(static_cast<double>(las.cloud.points[0][0]) + las.origin[0], 630499.95, 1.0e-7,
+                "LAS localized X lost precision");
+}
+
+void testReferenceOriginMatrixComposition()
+{
+    registration::Matrix4d localToPly;
+    localToPly.at(0, 3) = 1.25;
+    localToPly.at(1, 3) = -2.5;
+    localToPly.at(2, 3) = 0.75;
+    registration::Matrix4d worldToLocal;
+    worldToLocal.at(0, 3) = -630499.255;
+    worldToLocal.at(1, 3) = -4834749.195;
+    worldToLocal.at(2, 3) = -62.505;
+    const auto worldToPly = localToPly * worldToLocal;
+    const auto plyToWorld = worldToPly.inverse();
+    const auto identity = worldToPly * plyToWorld;
+    for (std::size_t row = 0; row < 4; ++row)
+        for (std::size_t column = 0; column < 4; ++column)
+            requireNear(identity.at(row, column), row == column ? 1.0 : 0.0, 1.0e-9,
+                        "Reference origin matrix round trip mismatch");
+    requireNear(plyToWorld.at(0, 3), 630498.005, 1.0e-9, "PLY-to-world X composition mismatch");
+    requireNear(plyToWorld.at(1, 3), 4834751.695, 1.0e-9, "PLY-to-world Y composition mismatch");
+    requireNear(plyToWorld.at(2, 3), 61.755, 1.0e-9, "PLY-to-world Z composition mismatch");
+}
+
+registration::ReferenceCloudReadResult syntheticModel(const registration::Point3d& origin)
+{
+    registration::ReferenceCloudReadResult result;
+    result.format = "ply";
+    result.origin = origin;
+    result.cloud.points = {
+        {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F},
+        {0.0F, 0.0F, 1.0F}, {1.0F, 1.0F, 1.0F}};
+    result.declaredPointCount = result.cloud.points.size();
+    result.worldBounds.min = origin;
+    result.worldBounds.max = {origin[0] + 1.0, origin[1] + 1.0, origin[2] + 1.0};
+    return result;
+}
+
+void testBidirectionalRegistrationRoles()
+{
+    for (const auto moving : {registration::MovingModel::A, registration::MovingModel::B})
+    {
+        registration::BidirectionalRegistrationOptions options;
+        options.movingModel = moving;
+        options.icp.samplingLimit = 100;
+        options.icp.randomSeed = 42;
+        const auto result = registration::BidirectionalRegistration().registerModels(
+            syntheticModel({1000.0, 2000.0, 3000.0}),
+            syntheticModel({1010.0, 2020.0, 3030.0}), options);
+        requireNear(result.aToB.at(0, 3), 10.0, 1.0e-9, "A-to-B X origin composition mismatch");
+        requireNear(result.aToB.at(1, 3), 20.0, 1.0e-9, "A-to-B Y origin composition mismatch");
+        requireNear(result.aToB.at(2, 3), 30.0, 1.0e-9, "A-to-B Z origin composition mismatch");
+        const auto identity = result.aToB * result.bToA;
+        for (std::size_t index = 0; index < 16; ++index)
+            requireNear(identity.values()[index], index % 5 == 0 ? 1.0 : 0.0, 1.0e-9,
+                        "Bidirectional result matrices are not inverse");
+    }
 }
 
 void testRealPly()
@@ -182,6 +310,9 @@ int main()
     {
         testGoldenMatrixInverse();
         testRealPcd();
+        testLasAndLazPrecision();
+        testReferenceOriginMatrixComposition();
+        testBidirectionalRegistrationRoles();
         testRealPly();
         testPreviewWriters();
         testInitialMatrixValidation();

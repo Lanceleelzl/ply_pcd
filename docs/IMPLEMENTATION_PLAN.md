@@ -1,4 +1,4 @@
-# PLY／PCD 坐标配准服务实施方案
+# Gaussian PLY／定位参考点云坐标配准服务实施方案
 
 ## 1．目标与边界
 
@@ -6,6 +6,7 @@
 
 - 室内扫描设备生成的 Gaussian Splatting PLY。
 - 无人机机载雷达 SLAM 生成的 PCD 全局定位地图。
+- LAS／LAZ 格式的定位参考点云；其角色、移动方向和业务输出与 PCD 相同。
 - 可选初始矩阵。
 - 可选 ICP 参数。
 
@@ -603,3 +604,54 @@ tests/regression/cloudcompare_icp_parameters.json
 - 会话状态保存各轮任务 ID、实际参数、初始矩阵、结果地址和状态；同一会话同一时间只允许一个活动任务。
 - 每轮成功后将 `T_final_pcd_to_ply` 应用到视口，并保存对应的 `T_final_ply_to_pcd` 业务矩阵。
 - 成功后再次修改 PCD 姿态或参数时，当前结果标记为已过期；历史矩阵仍可查看、复制或恢复到视口，但未经新一轮 ICP 不得作为当前姿态的有效结果。
+
+## 18．LAS／LAZ 定位参考点云
+
+### 18.1 解析与依赖
+
+- 固定引入 LASzip 官方 `3.5.0` 源码，commit 为 `fa089bd8b2b4ca5631e199d257374c32a125f73f`，随 CMake 静态编译。
+- 支持 LAS 1.0—1.4 与 LASzip 可解码的点格式 0—10；首期只读取 XYZ，不进行 CRS 重投影。
+- 浏览器不解析原始 LAS／LAZ。C++ Worker 解析后生成与 PCD 相同的轻量预览协议，PlayCanvas 只负责显示。
+
+### 18.2 大坐标精度
+
+LASzip 先以 `float64` 应用 LAS 文件头 scale／offset，得到世界坐标。选择文件头包围盒中心作为确定性 `reference_origin`，点坐标按以下顺序进入 ICP：
+
+```text
+p_reference_local_f32 = float32(p_reference_world_f64 - reference_origin_f64)
+```
+
+ICP 求得局部矩阵后，在双精度中组合世界原点：
+
+```text
+T_reference_world_to_ply = T_reference_local_to_ply × Translate(-reference_origin)
+T_ply_to_reference_world = Translate(reference_origin) × inverse(T_reference_local_to_ply)
+```
+
+公开结果必须返回 `reference_origin`、通用方向字段和参考点云格式。PCD 保持原点为零，并继续返回既有 `pcd_to_ply`／`ply_to_pcd` 兼容字段，确保历史调用不变。
+
+### 18.3 验证
+
+- 同一批坐标写成 LAS 与 LAZ 后，解码点数、世界包围盒和逐点坐标必须一致。
+- 使用大地坐标合成数据验证局部化前后矩阵组合，PLY→参考世界坐标往返误差使用双精度评估。
+- 使用真实 LAS／LAZ 与 CloudCompare 对比点数、包围盒、RMS 和矩阵；ICP RMS 不能替代控制点或实飞精度验收。
+
+## 19．通用双模型双向配准
+
+- 模型 A、模型 B 均支持 PLY、PCD、LAS、LAZ，文件格式不决定 ICP 角色。
+- 业务输出方向与 ICP 移动方向分离；用户可选择 `A_TO_B`／`B_TO_A`，并独立选择 `A`／`B`／`AUTO` 作为移动模型。
+- `AUTO` 只根据点数和包围盒范围给出推荐，不限制用户覆盖。
+- ICP 始终计算 `T_moving_local_to_fixed_local`；服务用 `origin_a` 和 `origin_b` 组合 `T_a_to_b`，并通过求逆得到 `T_b_to_a`。
+- 若 A 为移动模型：`T_a_to_b = Translate(origin_b) × T_a_local_to_b_local × Translate(-origin_a)`。
+- 若 B 为移动模型：先组合 `T_b_to_a`，再求逆得到 `T_a_to_b`。
+- 新接口使用 `/api/v2` 和 `model_a`／`model_b`；现有 `/api/v1` PLY＋参考点云接口保持兼容。
+
+## 20．ICP 实时过程可视化
+
+- CCCoreLib 只在本轮变换被接受后调用可选回调，报告迭代序号、RMS、有效点数和累计变换；关闭回调时计算路径保持不变。
+- C++ 适配层把累计增量与人工初始矩阵组合成完整 `T_moving_local_to_fixed_local`，Worker 以 JSON Lines 输出，不写入最终业务矩阵文件。
+- FastAPI 将逐轮消息写入任务目录并通过 SSE 转发；任务状态和最终结果仍沿用异步查询接口。
+- 通用任务始终生成轻量逐轮事件；PlayCanvas 默认关闭过程显示，但运行期间可随时开启或关闭。中途开启使用 `from_latest=true` 直接接入最新一轮，不回放历史；成功时以最终矩阵覆盖，取消时明确标记最后姿态未收敛且不可用于航点转换。
+- 逐轮状态显示在三维视口工具栏下方；当前移动／固定模型和颜色说明显示在左侧第 1 步“模型”区域。当移动模型包围盒对角线达到固定模型的 `1.25` 倍时，前端显式提示大范围点云移动匹配小范围点云的局部最优风险，并建议交换 ICP 角色，不改变用户选择的业务输出方向。
+- 视口左上角第一排粗配准工具栏末尾提供模型 A、B 的独立显示开关；隐藏只设置 PlayCanvas 实体可见性，不修改点云或矩阵，隐藏移动模型时同步卸载其变换手柄，ICP 运行期间仍允许切换。
+- 验证必须证明开启与关闭进度输出时最终矩阵和 RMS 完全一致，并覆盖 SSE、取消和前端控件恢复。

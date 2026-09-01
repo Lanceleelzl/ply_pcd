@@ -1,18 +1,20 @@
 async function openWorkspace(root: HTMLElement, sessionId: string): Promise<void> {
-  history.pushState({}, '', `/?session=${sessionId}`);
-  const { renderManualRegistration } = await import('./manual-registration');
-  await renderManualRegistration(root, sessionId);
+  history.pushState({}, '', `/?session=${sessionId}&api=v2`);
+  const { renderGenericRegistration } = await import('./generic-registration');
+  await renderGenericRegistration(root, sessionId);
 }
 
 export function renderHome(root: HTMLElement): void {
   root.innerHTML = `
     <main class="home">
-      <h1>PLY／PCD 坐标配准</h1>
-      <p class="hint">PCD 作为移动点云配准到固定的 Gaussian PLY，最终输出 PLY→PCD 业务矩阵。</p>
+      <h1>通用点云双向配准</h1>
+      <p class="hint">模型 A、B 均支持 PLY、PCD、LAS、LAZ；业务矩阵方向与 ICP 移动模型可以独立选择。</p>
       <section class="card">
         <form id="upload-form">
-          <label>Gaussian PLY<input name="ply" type="file" accept=".ply" required></label>
-          <label>SLAM PCD<input name="pcd" type="file" accept=".pcd" required></label>
+          <label>模型 A<input name="model_a" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+          <label>模型 B<input name="model_b" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+          <label>最终业务矩阵方向<select name="output_direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
+          <label>ICP 移动模型<select name="moving_model"><option value="auto">自动推荐</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>
           <div class="actions"><button class="primary" type="submit">上传并进入配准工作台</button></div>
         </form>
         <pre id="status" class="status">请选择文件。</pre>
@@ -28,7 +30,7 @@ export function renderHome(root: HTMLElement): void {
     try {
       const result = await new Promise<{ session_id: string }>((resolve, reject) => {
         const request = new XMLHttpRequest();
-        request.open('POST', '/api/v1/manual-registration-sessions');
+        request.open('POST', '/api/v2/registration-sessions');
         request.upload.addEventListener('progress', progress => {
           if (progress.lengthComputable) status.textContent = `正在上传：${Math.round(progress.loaded / progress.total * 100)}%`;
         });

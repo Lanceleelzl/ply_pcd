@@ -13,5 +13,8 @@ license notices. The bundled nanoflann dependency retains its BSD license.
 This project is not an official CloudCompare project and is not endorsed
 by the CloudCompare maintainers.
 
-New project code is distributed under GPL-3.0-or-later.
+This project bundles LASzip 3.5.0 from https://github.com/LASzip/LASzip
+at commit fa089bd8b2b4ca5631e199d257374c32a125f73f. LASzip is licensed
+under the Apache License 2.0 and is used for LAS/LAZ decoding.
 
+New project code is distributed under GPL-3.0-or-later.

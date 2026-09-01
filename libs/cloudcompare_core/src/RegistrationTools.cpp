@@ -819,6 +819,10 @@ ICPRegistrationTools::RESULT_TYPE ICPRegistrationTools::Register(	GenericIndexed
 
 				finalRMS = rms;
 				finalPointCount = data.cloud->size();
+				if (params.iterationCallback)
+				{
+					params.iterationCallback(iteration, rms, finalPointCount, transform);
+				}
 
 				//stop criterion
 				if (	(params.convType == MAX_ERROR_CONVERGENCE && deltaRMS < params.minRMSDecrease) //convergence reached

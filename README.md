@@ -1,15 +1,13 @@
-# PLY／PCD Registration Service
+# 通用点云双向 Registration Service
 
-本项目用于计算室内 Gaussian Splatting PLY 模型与无人机 SLAM PCD 地图之间的坐标转换矩阵。
+本项目用于计算两个 PLY／PCD／LAS／LAZ 点云模型之间的双向坐标转换矩阵。Gaussian Splatting PLY 与无人机 SLAM 地图是首要业务场景，但格式不再决定模型角色或矩阵方向。
 
-核心处理方向：
+通用接口将业务输出方向和 ICP 角色分开：
 
 ```text
-PCD 配准到 PLY
-      ↓
-获得 T_pcd_to_ply
-      ↓
-求逆获得 T_ply_to_pcd
+业务方向：A→B 或 B→A
+ICP 角色：移动 A／固定 B，移动 B／固定 A，或自动推荐
+固定输出：T_a_to_b 与 T_b_to_a
 ```
 
 当前已支持：
@@ -35,7 +33,7 @@ pnpm install
 pnpm run dev
 ```
 
-开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8765`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。选择一个 `.ply` 和一个 `.pcd` 后点击“上传并进入配准工作台”，页面会自动生成轻量预览并在同一工作台加载模型。
+开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8765`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las` 或 `.laz`；上传后页面会由 C++ Worker 解码并生成轻量预览，浏览器无需直接解析 LAZ。
 
 如需修改端口，编辑 `config/local.json` 中的 `port`（API）和 `web_port`（开发页面）后重新启动服务，无需设置系统或终端环境变量。
 
@@ -43,11 +41,19 @@ pnpm run dev
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
 
-网页会将 `T_ply_to_pcd` 明确标记为「最终业务矩阵：PLY → PCD」。程序计算使用高精度 `ply_to_pcd`；CloudCompare 手工验证使用 `ply_to_pcd_cloudcompare`。
+网页会将 `T_ply_to_reference` 明确标记为最终业务矩阵。对于 LAS／LAZ，该矩阵已经恢复 LAS 世界坐标原点，可直接用于航点坐标转换；`reference_local_to_ply` 只用于浏览器局部预览，不得作为业务矩阵。
+
+LAS／LAZ 坐标先由 LASzip 以双精度应用 scale／offset，再减去双精度包围盒中心原点后进入 ICP。最终使用 `T_ply_to_reference = Translate(reference_origin) × inverse(T_reference_local_to_ply)` 在双精度中恢复世界坐标，避免大坐标直接转单精度造成精度损失。项目不执行 CRS 重投影，PLY 与定位点云必须表达同一物理空间和长度单位。
 
 工作台默认选择推荐模式：`min_rms_decrease=0.00001`、`sampling_limit=50000`、`overlap=1.0`、`random_seed=42`。其中 `50000` 是 CloudCompare 的默认采样上限，并非用户手工设置；本项目使用固定种子形成可复现基线。高采样稳定性模式先执行该默认参数基线，再以 `500000` 点上限运行三个连续固定种子，输出平移和旋转重复性。更多采样可降低随机子集造成的统计波动，但重复性和 RMS 都不能单独证明绝对坐标精度，生产使用仍需控制点或实飞验证。自定义模式允许在受控范围内修改单阶段参数。ICP 始终读取原始 PLY／PCD，浏览器预览数据不参与计算。
 
 人工配准会话支持多轮迭代。每轮完成后会恢复 PCD 平移／旋转、模式切换和参数编辑；下一轮始终以视口中当前 PCD 的绝对 `PCD→PLY` 矩阵为初值，并重新读取会话保存的原始 PLY／PCD。页面保留每轮参数、初始矩阵、最终矩阵和指标；在结果后再次移动 PCD 或修改参数时，上一次矩阵会被明确标记为已过期，直至下一轮 ICP 完成。
+
+“在三维场景中显示配准过程”默认关闭，但在 ICP 运行期间始终可操作。中途勾选时，页面通过 SSE 直接读取当前最新一轮并继续更新移动模型；取消勾选只停止视口动画，不会终止 ICP，再次勾选会接回当前进度。实时姿态只用于观察收敛过程；成功时由最终结果矩阵覆盖，终止时停留的未收敛姿态不得用于航点转换。
+
+逐轮迭代、RMS、点数和耗时显示在三维视口工具栏下方。当前移动／固定模型及黄色／灰色说明显示在左侧第 1 步“模型”区域。若移动模型的包围盒对角线达到固定模型的 `1.25` 倍，页面会提示“大范围移动匹配小范围”的错误收敛风险，并建议交换 ICP 移动／固定角色；业务矩阵方向无需随之改变，直接读取服务返回的目标方向矩阵即可。
+
+三维视口左上角第一排粗配准工具栏末尾提供“A：显示”和“B：显示”开关，可独立隐藏或恢复两个模型。显示状态只影响浏览器视口，不影响粗配准矩阵、ICP 输入或最终结果；隐藏当前移动模型时，其变换手柄也会同步隐藏。显示开关在 ICP 运行期间仍可操作。
 
 任务完成或失败后，服务立即删除上传的 PLY／PCD 输入副本。矩阵、JSON 和日志默认保留 168 小时，并每 3600 秒执行一次过期清理。可在 `docker/docker-compose.yml` 中调整：
 
@@ -58,12 +64,16 @@ REGISTRATION_CLEANUP_INTERVAL_SECONDS
 
 清理范围仅限 `runtime/jobs/{job_id}`，不会处理只读的 `source` 原始数据。
 
-主要接口：
+推荐使用通用 `v2` 会话接口；现有 `v1` PLY→定位参考点云接口继续兼容：
 
 ```text
+POST /api/v2/registration-sessions
+GET  /api/v2/registration-sessions/{session_id}
+POST /api/v2/registration-sessions/{session_id}/register
 POST /api/v1/registrations
 GET  /api/v1/registrations/{job_id}
 GET  /api/v1/registrations/{job_id}/result
+GET  /api/v1/registrations/{job_id}/events
 GET  /api/v1/registrations/{job_id}/files/{filename}
 GET  /health
 ```
