@@ -47,7 +47,7 @@ p_target = T_source_to_target * p_source
 - 本地 Python 由项目内固定版本 uv 管理，依赖以 `uv.lock` 为准，不修改系统 Python 和 PATH。
 - 本地服务端口由 `config/local.json` 管理，监听地址固定为 `127.0.0.1`。
 - Docker Desktop 构建 Linux 镜像，最终以同一 Linux 镜像部署到服务器。
-- 人工粗配准功能在 `feat/manual-coarse-registration` 分支开发，完成验证前不合并 `main`。
+- 人工粗配准、通用双模型配准和 ICP 过程可视化功能已完成阶段验证，并合并到 `main`。
 - 粗配准只允许操作当前选定的 ICP 移动模型，不允许人工缩放；文件格式不得决定移动／固定角色。
 - 浏览器默认加载由原始数据生成的轻量点云预览；Gaussian 效果使用同一采样集合，预览数据不参与最终 ICP。
 - 人工矩阵方向固定为 `T_initial_moving_local_to_fixed_local`；ICP 最终组合为 `T_moving_local_to_fixed_local = T_icp_delta * T_initial_moving_local_to_fixed_local`。
