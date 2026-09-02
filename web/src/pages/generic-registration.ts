@@ -1,5 +1,6 @@
 import * as pc from 'playcanvas';
-import { createPointCloudEntity, loadPreview, type PreviewCloud } from '../point-cloud';
+import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
+import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
 
@@ -110,9 +111,17 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           <section id="result" class="result" hidden><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-result" class="full-width">复制最终业务矩阵</button><details><summary>查看反向矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向矩阵</button></details></section>
         </section>
       </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="translate" class="active">平移 G</button><button id="rotate">旋转 R</button><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置粗配准</button><button id="fit">适应全部</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
+      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置粗配准</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
+        <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
+          <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
+          <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
+          <div id="axis-clipping" hidden><div class="axis-clipping-grid">${['x', 'y', 'z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="clip-${axis}-min-enabled" type="checkbox">最小</label><input id="clip-${axis}-min" type="number" step="0.01"><label><input id="clip-${axis}-max-enabled" type="checkbox">最大</label><input id="clip-${axis}-max" type="number" step="0.01">`).join('')}</div><button id="axis-reset">重置轴向范围</button></div>
+          <div id="box-clipping" hidden><p class="clip-mode-hint">中心手柄可轴向／平面平移；仅拖动圆环时旋转。六个贴面箭头用于单独调整对应剖切面。</p><div class="clip-tool-row"><button id="clip-fit-a">适配 A</button><button id="clip-fit-b">适配 B</button><button id="clip-fit-all">适配全部</button></div></div>
+          <label class="clip-helper-option"><input id="clip-helper-visible" type="checkbox" checked>显示剖切辅助体与手柄</label>
+          <button id="clipping-clear" class="full-width">清除全部剖切</button>
+        </section>
         <div class="view-gizmo" aria-label="快速视角"><div class="view-cube-scene"><div class="view-cube"><button class="cube-face face-x" data-direction="1,0,0" title="沿 +X 查看">X</button><button class="cube-face face-nx" data-direction="-1,0,0" title="沿 -X 查看">−X</button><button class="cube-face face-y" data-direction="0,1,0" title="沿 +Y 查看">Y</button><button class="cube-face face-ny" data-direction="0,-1,0" title="沿 -Y 查看">−Y</button><button class="cube-face face-z" data-direction="0,0,1" title="顶视图（沿 +Z 查看）">Z</button><button class="cube-face face-nz" data-direction="0,0,-1" title="底视图（沿 -Z 查看）">−Z</button>${[-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => `<button class="cube-corner" data-direction="${x},${y},${z}" style="--cx:${x};--cy:${y};--cz:${z}" title="等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z"></button>`))).join('')}</div></div><div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div></div>
-        <div class="viewport-help">左键空白：旋转　中键：平移　滚轮：缩放　左键手柄：调整黄色移动模型</div></section>
+        <div id="viewport-help" class="viewport-help">左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型</div></section>
     </div></main>`;
 
   const outputDirection = root.querySelector<HTMLSelectElement>('#output-direction')!;
@@ -133,6 +142,23 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const entityB = createPointCloudEntity(application, cloudB, new pc.Color(0.68, 0.72, 0.78), 'Model B');
   application.root.addChild(entityA); application.root.addChild(entityB);
   const entities = { a: entityA, b: entityB };
+  const clouds = { a: cloudA, b: cloudB };
+  const pointMaterials: Record<ModelId, PointCloudMaterial> = {
+    a: entityA.render!.meshInstances[0].material as PointCloudMaterial,
+    b: entityB.render!.meshInstances[0].material as PointCloudMaterial,
+  };
+  const clipBox = new pc.Entity('Clipping Box');
+  clipBox.addComponent('render', { type: 'box' });
+  const clipBoxMaterial = new pc.StandardMaterial();
+  clipBoxMaterial.diffuse = new pc.Color(0.12, 0.82, 0.68);
+  clipBoxMaterial.emissive = new pc.Color(0.04, 0.24, 0.20);
+  clipBoxMaterial.opacity = 0.055;
+  clipBoxMaterial.blendType = pc.BLEND_NORMAL;
+  clipBoxMaterial.depthWrite = false;
+  clipBoxMaterial.update();
+  clipBox.render!.meshInstances.forEach(instance => { instance.material = clipBoxMaterial; });
+  application.root.addChild(clipBox);
+  clipBox.enabled = false;
   const modelVisible: Record<ModelId, boolean> = { a: true, b: true };
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
@@ -182,29 +208,90 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   };
   fitCamera();
 
-  const layer = pc.TranslateGizmo.createLayer(application, 'Moving Model Transform');
-  const translate = new pc.TranslateGizmo(camera.camera!, layer);
-  const rotate = new pc.RotateGizmo(camera.camera!, layer);
+  const movingTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Moving Model Translation');
+  const movingRotateLayer = pc.RotateGizmo.createLayer(application, 'Moving Model Rotation');
+  const clipTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Clipping Box Translation');
+  const clipRotateLayer = pc.RotateGizmo.createLayer(application, 'Clipping Box Rotation');
+  const translate = new pc.TranslateGizmo(camera.camera!, movingTranslateLayer);
+  const rotate = new pc.RotateGizmo(camera.camera!, movingRotateLayer);
+  const clipTranslate = new pc.TranslateGizmo(camera.camera!, clipTranslateLayer);
+  const clipRotate = new pc.RotateGizmo(camera.camera!, clipRotateLayer);
+  [translate, clipTranslate].forEach(gizmo => {
+    gizmo.axisGap = 0.08; gizmo.axisLineLength = 0.72; gizmo.axisPlaneSize = 0.14; gizmo.axisPlaneGap = 0.22;
+  });
+  [rotate, clipRotate].forEach(gizmo => { gizmo.centerRadius = 0.001; gizmo.ringTolerance = 0.025; });
   translate.mouseButtons[1] = translate.mouseButtons[2] = false;
   rotate.mouseButtons[1] = rotate.mouseButtons[2] = false;
-  let mode: 'translate' | 'rotate' = 'translate';
+  clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
+  clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
+  let clippingModeValue: 'off' | 'axis' | 'box' = 'off';
+  let clippingInteractionActive = false;
   let running = false;
   let gizmoTransforming = false;
-  let translateGizmoHovered = false;
-  let rotateGizmoHovered = false;
+  let translateGizmoHovered = false; let rotateGizmoHovered = false;
+  let translateGizmoTransforming = false; let rotateGizmoTransforming = false;
   const onTransformStart = () => { gizmoTransforming = true; navigation = null; };
   const onTransformEnd = () => { gizmoTransforming = false; };
-  translate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, onTransformStart);
-  translate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, onTransformEnd);
-  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, onTransformStart);
-  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, onTransformEnd);
-  translate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => { translateGizmoHovered = Boolean(meshInstance); });
-  rotate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => { rotateGizmoHovered = Boolean(meshInstance); });
+  const refreshMovingGizmoInput = () => {
+    translate.mouseButtons[0] = translateGizmoTransforming || !rotateGizmoTransforming;
+    rotate.mouseButtons[0] = rotateGizmoTransforming
+      || (!translateGizmoTransforming && !translateGizmoHovered && rotateGizmoHovered);
+  };
+  translate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
+    translateGizmoHovered = Boolean(meshInstance); refreshMovingGizmoInput();
+  });
+  rotate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
+    rotateGizmoHovered = Boolean(meshInstance); refreshMovingGizmoInput();
+  });
+  translate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
+    translateGizmoTransforming = true; refreshMovingGizmoInput(); onTransformStart();
+  });
+  translate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
+    translateGizmoTransforming = false; refreshMovingGizmoInput(); onTransformEnd();
+  });
+  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
+    rotateGizmoTransforming = true; refreshMovingGizmoInput(); onTransformStart();
+  });
+  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
+    rotateGizmoTransforming = false; refreshMovingGizmoInput(); onTransformEnd();
+  });
+  let clipTranslateHovered = false; let clipRotateHovered = false;
+  let clipTranslateTransforming = false; let clipRotateTransforming = false;
+  const refreshClipGizmoInput = () => {
+    clipTranslate.mouseButtons[0] = clipTranslateTransforming || !clipRotateTransforming;
+    clipRotate.mouseButtons[0] = clipRotateTransforming
+      || (!clipTranslateTransforming && !clipTranslateHovered && clipRotateHovered);
+  };
+  clipTranslate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
+    clipTranslateHovered = Boolean(meshInstance); refreshClipGizmoInput();
+  });
+  clipRotate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
+    clipRotateHovered = Boolean(meshInstance); refreshClipGizmoInput();
+  });
+  clipTranslate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
+    clipTranslateTransforming = true; refreshClipGizmoInput(); onTransformStart();
+  });
+  clipTranslate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
+    clipTranslateTransforming = false; refreshClipGizmoInput(); onTransformEnd();
+  });
+  clipRotate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
+    clipRotateTransforming = true; refreshClipGizmoInput(); onTransformStart();
+  });
+  clipRotate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
+    clipRotateTransforming = false; refreshClipGizmoInput(); onTransformEnd();
+  });
+  refreshMovingGizmoInput(); refreshClipGizmoInput();
   const movingEntity = () => entities[effectiveMoving()];
   const fixedEntity = () => entities[effectiveMoving() === 'a' ? 'b' : 'a'];
   const attach = () => {
-    translate.detach(); rotate.detach();
-    if (!running && modelVisible[effectiveMoving()]) (mode === 'translate' ? translate : rotate).attach(movingEntity());
+    translate.detach(); rotate.detach(); clipTranslate.detach(); clipRotate.detach();
+    if (clippingInteractionActive && clippingModeValue === 'box' && clipHelperVisible.checked) {
+      clipTranslate.attach(clipBox);
+      clipRotate.attach(clipBox);
+    } else if (!clippingInteractionActive && !running && modelVisible[effectiveMoving()]) {
+      translate.attach(movingEntity());
+      rotate.attach(movingEntity());
+    }
   };
 
   const visibilityButtons: Record<ModelId, HTMLButtonElement> = {
@@ -242,8 +329,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
     if (reset) { entityA.setLocalPosition(0, 0, 0); entityA.setLocalEulerAngles(0, 0, 0); entityB.setLocalPosition(0, 0, 0); entityB.setLocalEulerAngles(0, 0, 0); }
     const recolor = (entity: pc.Entity, color: pc.Color) => entity.render!.meshInstances.forEach(instance => {
-      const material = instance.material as pc.StandardMaterial;
-      material.diffuse = color; material.emissive = color; material.update();
+      (instance.material as PointCloudMaterial).setPointColor(color);
     });
     recolor(entities[moving], new pc.Color(1.0, 0.72, 0.08));
     recolor(entities[fixed], new pc.Color(0.68, 0.72, 0.78));
@@ -262,27 +348,155 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   outputDirection.addEventListener('change', () => { root.querySelector<HTMLElement>('#result')!.hidden = true; });
   refreshRoles();
 
+  const clipMinState = new pc.Vec3(); const clipMaxState = new pc.Vec3(); const worldToClipBox = new pc.Mat4();
+  const clipCornerLocal: pc.Vec3[] = []; const clipCornerWorld: pc.Vec3[] = [];
+  for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.5, 0.5]) {
+    clipCornerLocal.push(new pc.Vec3(x, y, z)); clipCornerWorld.push(new pc.Vec3());
+  }
+  const clipEdgeColor = new pc.Color(0.15, 1.0, 0.78);
+  let clippingHandles: ClippingHandles | null = null;
   application.on('update', () => {
     const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
     const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
     ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
     root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(entityMatrix(movingEntity()));
+    const currentClipMode = clippingMode.value;
+    clipMinState.set(-1e30, -1e30, -1e30); clipMaxState.set(1e30, 1e30, 1e30);
+    if (currentClipMode === 'axis') {
+      ['x', 'y', 'z'].forEach(axis => {
+        const component = axis as 'x' | 'y' | 'z';
+        if (axisInputs[`${axis}MinEnabled`].checked) clipMinState[component] = Number(axisInputs[`${axis}Min`].value);
+        if (axisInputs[`${axis}MaxEnabled`].checked) clipMaxState[component] = Number(axisInputs[`${axis}Max`].value);
+      });
+    }
+    const scale = clipBox.getLocalScale();
+    if (Math.abs(scale.x) < 0.001 || Math.abs(scale.y) < 0.001 || Math.abs(scale.z) < 0.001) {
+      clipBox.setLocalScale(Math.max(Math.abs(scale.x), 0.001), Math.max(Math.abs(scale.y), 0.001), Math.max(Math.abs(scale.z), 0.001));
+    }
+    worldToClipBox.copy(clipBox.getWorldTransform()).invert();
+    (['a', 'b'] as ModelId[]).forEach(model => {
+      const inScope = clippingScope.value === 'both' || clippingScope.value === model;
+      pointMaterials[model].setClipState(currentClipMode !== 'off' && inScope, clipMinState, clipMaxState, currentClipMode === 'box', worldToClipBox);
+    });
+    if (currentClipMode === 'box' && clipHelperVisible.checked && clippingHandles?.isBoxPresentationVisible()) {
+      const transform = clipBox.getWorldTransform();
+      clipCornerLocal.forEach((corner, index) => transform.transformPoint(corner, clipCornerWorld[index]));
+      for (let index = 0; index < clipCornerWorld.length; index++) for (const bit of [1, 2, 4]) {
+        const other = index ^ bit; if (index < other) application.drawLine(clipCornerWorld[index], clipCornerWorld[other], clipEdgeColor, false);
+      }
+    }
+    clippingHandles?.update();
   });
 
-  const translateButton = root.querySelector<HTMLButtonElement>('#translate')!;
-  const rotateButton = root.querySelector<HTMLButtonElement>('#rotate')!;
   const resetButton = root.querySelector<HTMLButtonElement>('#reset')!;
-  const setMode = (nextMode: 'translate' | 'rotate') => {
-    if (running) return;
-    mode = nextMode;
-    translateButton.classList.toggle('active', mode === 'translate');
-    rotateButton.classList.toggle('active', mode === 'rotate');
-    attach();
-  };
-  translateButton.addEventListener('click', () => setMode('translate'));
-  rotateButton.addEventListener('click', () => setMode('rotate'));
+  const clippingToggle = root.querySelector<HTMLButtonElement>('#clipping-toggle')!;
+  const clippingPanel = root.querySelector<HTMLElement>('#clipping-panel')!;
+  const clippingMode = root.querySelector<HTMLSelectElement>('#clipping-mode')!;
+  const clippingScope = root.querySelector<HTMLSelectElement>('#clipping-scope')!;
+  const axisClipping = root.querySelector<HTMLElement>('#axis-clipping')!;
+  const boxClipping = root.querySelector<HTMLElement>('#box-clipping')!;
+  const clipHelperVisible = root.querySelector<HTMLInputElement>('#clip-helper-visible')!;
   resetButton.addEventListener('click', () => { if (!running) applyMatrix(movingEntity(), identity()); });
   root.querySelector('#fit')!.addEventListener('click', fitCamera);
+  clippingToggle.addEventListener('click', () => {
+    clippingPanel.hidden = !clippingPanel.hidden;
+    clippingInteractionActive = !clippingPanel.hidden && clippingMode.value !== 'off';
+    attach();
+  });
+  root.querySelector('#clipping-close')!.addEventListener('click', () => { clippingPanel.hidden = true; clippingInteractionActive = false; attach(); });
+
+  const axisInputs = Object.fromEntries(['x', 'y', 'z'].flatMap(axis => [
+    [`${axis}MinEnabled`, root.querySelector<HTMLInputElement>(`#clip-${axis}-min-enabled`)!],
+    [`${axis}Min`, root.querySelector<HTMLInputElement>(`#clip-${axis}-min`)!],
+    [`${axis}MaxEnabled`, root.querySelector<HTMLInputElement>(`#clip-${axis}-max-enabled`)!],
+    [`${axis}Max`, root.querySelector<HTMLInputElement>(`#clip-${axis}-max`)!],
+  ])) as Record<string, HTMLInputElement>;
+  const originalBounds = (() => {
+    const min = new pc.Vec3(Math.min(cloudA.min.x, cloudB.min.x), Math.min(cloudA.min.y, cloudB.min.y), Math.min(cloudA.min.z, cloudB.min.z));
+    const max = new pc.Vec3(Math.max(cloudA.max.x, cloudB.max.x), Math.max(cloudA.max.y, cloudB.max.y), Math.max(cloudA.max.z, cloudB.max.z));
+    return { min, max };
+  })();
+  const resetAxisInputs = () => {
+    ['x', 'y', 'z'].forEach(axis => {
+      axisInputs[`${axis}MinEnabled`].checked = false;
+      axisInputs[`${axis}MaxEnabled`].checked = false;
+      axisInputs[`${axis}Min`].value = originalBounds.min[axis as 'x' | 'y' | 'z'].toFixed(3);
+      axisInputs[`${axis}Max`].value = originalBounds.max[axis as 'x' | 'y' | 'z'].toFixed(3);
+    });
+  };
+  resetAxisInputs();
+  root.querySelector('#axis-reset')!.addEventListener('click', resetAxisInputs);
+  const getAxisClipState = () => ({
+    min: new pc.Vec3(Number(axisInputs.xMin.value), Number(axisInputs.yMin.value), Number(axisInputs.zMin.value)),
+    max: new pc.Vec3(Number(axisInputs.xMax.value), Number(axisInputs.yMax.value), Number(axisInputs.zMax.value)),
+    minEnabled: Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, axisInputs[`${axis}MinEnabled`].checked])) as Record<ClipAxis, boolean>,
+    maxEnabled: Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, axisInputs[`${axis}MaxEnabled`].checked])) as Record<ClipAxis, boolean>,
+  });
+  const setAxisBoundary = (axis: ClipAxis, side: ClipSide, value: number) => {
+    const opposite = side === 'min' ? 'max' : 'min';
+    const oppositeEnabled = axisInputs[`${axis}${opposite === 'min' ? 'Min' : 'Max'}Enabled`].checked;
+    const oppositeValue = Number(axisInputs[`${axis}${opposite === 'min' ? 'Min' : 'Max'}`].value);
+    const bounded = oppositeEnabled ? (side === 'min' ? Math.min(value, oppositeValue) : Math.max(value, oppositeValue)) : value;
+    axisInputs[`${axis}${side === 'min' ? 'Min' : 'Max'}`].value = bounded.toFixed(3);
+    axisInputs[`${axis}${side === 'min' ? 'Min' : 'Max'}Enabled`].checked = true;
+  };
+  for (const axis of ['x', 'y', 'z'] as ClipAxis[]) for (const side of ['min', 'max'] as ClipSide[]) {
+    axisInputs[`${axis}${side === 'min' ? 'Min' : 'Max'}`].addEventListener('change', event => {
+      setAxisBoundary(axis, side, Number((event.currentTarget as HTMLInputElement).value));
+    });
+  }
+  clippingHandles = new ClippingHandles(
+    application, camera, canvas, clipBox, originalBounds.min, originalBounds.max,
+    () => clippingModeValue, getAxisClipState, setAxisBoundary,
+    () => clipHelperVisible.checked,
+    active => { gizmoTransforming = active; if (active) navigation = null; },
+  );
+
+  const worldBounds = (models: ModelId[]) => {
+    const min = new pc.Vec3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+    const max = new pc.Vec3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+    models.forEach(model => {
+      const cloud = clouds[model]; const transform = entities[model].getWorldTransform();
+      for (const x of [cloud.min.x, cloud.max.x]) for (const y of [cloud.min.y, cloud.max.y]) for (const z of [cloud.min.z, cloud.max.z]) {
+        const point = transform.transformPoint(new pc.Vec3(x, y, z)); min.min(point); max.max(point);
+      }
+    });
+    return { min, max };
+  };
+  const fitClipBox = (models: ModelId[]) => {
+    const target = worldBounds(models); const size = target.max.clone().sub(target.min);
+    clipBox.setPosition(target.min.clone().add(target.max).mulScalar(0.5));
+    clipBox.setEulerAngles(0, 0, 0);
+    clipBox.setLocalScale(Math.max(size.x, 0.001), Math.max(size.y, 0.001), Math.max(size.z, 0.001));
+  };
+  fitClipBox(['a', 'b']);
+  root.querySelector('#clip-fit-a')!.addEventListener('click', () => fitClipBox(['a']));
+  root.querySelector('#clip-fit-b')!.addEventListener('click', () => fitClipBox(['b']));
+  root.querySelector('#clip-fit-all')!.addEventListener('click', () => fitClipBox(['a', 'b']));
+  const refreshClippingMode = () => {
+    const current = clippingMode.value as typeof clippingModeValue;
+    clippingModeValue = current;
+    const clippingEnabled = current !== 'off';
+    clippingToggle.classList.toggle('active', clippingEnabled);
+    clippingToggle.setAttribute('aria-pressed', String(clippingEnabled));
+    clippingToggle.title = clippingEnabled ? '剖切已启用：点击打开或关闭剖切面板' : '打开剖切面板';
+    clippingInteractionActive = !clippingPanel.hidden && current !== 'off';
+    axisClipping.hidden = current !== 'axis'; boxClipping.hidden = current !== 'box';
+    clipBox.enabled = current === 'box' && clipHelperVisible.checked;
+    attach();
+    root.querySelector<HTMLElement>('#viewport-help')!.textContent = current === 'box'
+      ? '左键空白：旋转　中键：平移　滚轮：缩放　左键手柄：调整剖切长方体'
+      : '左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型';
+  };
+  clippingMode.addEventListener('change', refreshClippingMode);
+  clipHelperVisible.addEventListener('change', () => {
+    clipBox.enabled = clippingMode.value === 'box' && clipHelperVisible.checked;
+    attach();
+  });
+  root.querySelector('#clipping-clear')!.addEventListener('click', () => {
+    clippingMode.value = 'off'; resetAxisInputs(); fitClipBox(['a', 'b']); refreshClippingMode();
+  });
+  refreshClippingMode();
   root.querySelector('#new-task')!.addEventListener('click', () => { location.href = '/'; });
 
   const setViewDirection = (direction: pc.Vec3) => {
@@ -348,13 +562,24 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
 
   let navigation: 'orbit' | 'pan' | null = null; let lastX = 0; let lastY = 0;
   canvas.addEventListener('contextmenu', event => event.preventDefault());
+  canvas.addEventListener('pointermove', event => {
+    if (clippingHandles?.pointerMove(event)) {
+      canvas.style.cursor = clippingHandles.dragging ? 'grabbing' : 'grab';
+      navigation = null;
+    } else {
+      canvas.style.cursor = '';
+    }
+  }, { capture: true });
+  canvas.addEventListener('pointerleave', () => clippingHandles?.pointerLeave());
   canvas.addEventListener('pointerdown', event => {
-    const gizmoHovered = mode === 'translate' ? translateGizmoHovered : rotateGizmoHovered;
+    if (clippingHandles?.pointerDown(event)) { event.preventDefault(); event.stopImmediatePropagation(); navigation = null; return; }
+    const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
+    const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
     if (event.button === 2 || gizmoTransforming || (event.button === 0 && gizmoHovered)) return;
     if (event.button === 0) navigation = 'orbit'; else if (event.button === 1) navigation = 'pan'; else return;
     lastX = event.clientX; lastY = event.clientY;
-  });
-  window.addEventListener('pointerup', () => { navigation = null; });
+  }, { capture: true });
+  window.addEventListener('pointerup', event => { clippingHandles?.pointerUp(event); navigation = null; canvas.style.cursor = ''; });
   window.addEventListener('pointermove', event => {
     if (!navigation || gizmoTransforming) return; const dx = event.clientX - lastX; const dy = event.clientY - lastY; lastX = event.clientX; lastY = event.clientY;
     if (navigation === 'orbit') orbitCamera(dx * 180 / Math.max(1, canvas.clientWidth), dy * 180 / Math.max(1, canvas.clientHeight));
@@ -398,7 +623,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const cancelButton = root.querySelector<HTMLButtonElement>('#cancel-registration')!;
   const progressCheckbox = root.querySelector<HTMLInputElement>('#show-registration-progress')!;
   const iterationProgress = root.querySelector<HTMLElement>('#iteration-progress')!;
-  const registrationControls = [outputDirection, movingSelect, translateButton, rotateButton, resetButton,
+  const registrationControls = [outputDirection, movingSelect, resetButton,
     ...Object.values(inputs),
     root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
     root.querySelector<HTMLInputElement>('#overlap')!, root.querySelector<HTMLInputElement>('#random-seed')!];

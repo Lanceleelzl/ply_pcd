@@ -84,6 +84,8 @@
   border: 1px solid #42516a;
   border-radius: 8px;
   background: #111a27e8;
+  max-width: calc(100% - 165px);
+  flex-wrap: wrap;
 }
 
 .viewport-toolbar strong {
@@ -144,6 +146,152 @@
   font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
   pointer-events: none;
 }
+
+.viewport-toolbar #clipping-toggle.active {
+  border-color: #4dbb92;
+  background: #24775fe8;
+  color: #fff;
+}
+
+.clipping-panel {
+  position: absolute;
+  z-index: 6;
+  top: 64px;
+  left: 12px;
+  width: 330px;
+  max-height: calc(100% - 110px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #42516a;
+  border-radius: 9px;
+  background: #111b2af5;
+  box-shadow: 0 12px 32px #0008;
+  color: #d7dfeb;
+}
+
+.clipping-panel button,
+.clipping-panel select,
+.clipping-panel input[type="number"] {
+  min-height: 32px;
+  border: 1px solid #45536a;
+  border-radius: 6px;
+  background: #0f1724;
+  color: #eef3fb;
+}
+
+.clipping-panel button {
+  padding: 6px 10px;
+}
+
+.clipping-panel button:hover {
+  border-color: #4dbb92;
+  background: #1b3e38;
+}
+
+.clipping-panel select,
+.clipping-panel input[type="number"] {
+  padding: 6px 8px;
+}
+
+.clipping-panel[hidden] {
+  display: none;
+}
+
+.clipping-title,
+.clip-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clipping-title {
+  justify-content: space-between;
+}
+
+.clipping-title button {
+  padding: 1px 7px;
+  font-size: 18px;
+}
+
+.clipping-panel p {
+  margin: 7px 0 10px;
+  color: #9dacbf;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.clipping-panel > label {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 7px 0;
+  font-size: 12px;
+}
+
+.clipping-panel select,
+.clipping-panel input[type="number"] {
+  min-width: 0;
+  width: 100%;
+}
+
+.axis-clipping-grid {
+  display: grid;
+  grid-template-columns: 20px 58px minmax(0, 1fr) 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 8px;
+  font-size: 12px;
+}
+
+.axis-clipping-grid label {
+  white-space: nowrap;
+}
+
+.clip-tool-row {
+  margin: 8px 0;
+}
+
+.clip-tool-row button {
+  flex: 1;
+}
+
+.clip-tool-row button.active {
+  border-color: #4dbb92;
+  background: #24775f;
+  color: #fff;
+}
+
+.clip-helper-option {
+  display: flex !important;
+  grid-template-columns: none !important;
+  margin: 8px 0 !important;
+}
+
+.clip-mode-hint {
+  margin: 9px 0 !important;
+  padding: 8px;
+  border: 1px solid #344155;
+  border-radius: 6px;
+  background: #0d1725;
+  color: #a9b8cb !important;
+}
+
+.clip-handle-label {
+  position: absolute;
+  z-index: 5;
+  padding: 2px 4px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: #08111dcc;
+  font: 10px/1.1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  pointer-events: none;
+  transform: translate(9px, -50%);
+}
+
+.clip-handle-label.axis-x { color: #ff6868; }
+.clip-handle-label.axis-y { color: #55ed87; }
+.clip-handle-label.axis-z { color: #7085ff; }
 
 .range-risk {
   margin: 8px 0 2px;
@@ -333,8 +481,12 @@
     width: auto;
   }
 
-  .viewport-toolbar strong,
-  .viewport-toolbar button:nth-of-type(n + 4) {
-    display: none;
+  .viewport-toolbar {
+    gap: 5px;
+  }
+
+  .viewport-toolbar button {
+    padding: 5px 7px;
+    font-size: 11px;
   }
 }

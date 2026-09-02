@@ -7,6 +7,11 @@ export interface PreviewCloud {
   max: pc.Vec3;
 }
 
+export interface PointCloudMaterial extends pc.ShaderMaterial {
+  setPointColor(color: pc.Color): void;
+  setClipState(enabled: boolean, min: pc.Vec3, max: pc.Vec3, boxEnabled: boolean, worldToBox: pc.Mat4): void;
+}
+
 export async function loadPreview(url: string): Promise<PreviewCloud> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`加载预览失败：HTTP ${response.status}`);
@@ -23,15 +28,72 @@ export async function loadPreview(url: string): Promise<PreviewCloud> {
   return { positions: new Float32Array(buffer, 40, count * 3), count, min, max };
 }
 
+function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMaterial {
+  const material = new pc.ShaderMaterial({
+    uniqueName: `PointCloudClip-${name}`,
+    attributes: { aPosition: pc.SEMANTIC_POSITION },
+    vertexGLSL: `
+      attribute vec3 aPosition;
+      uniform mat4 matrix_model;
+      uniform mat4 matrix_viewProjection;
+      varying vec3 vWorldPosition;
+      void main(void) {
+        vec4 world = matrix_model * vec4(aPosition, 1.0);
+        vWorldPosition = world.xyz;
+        gl_Position = matrix_viewProjection * world;
+        gl_PointSize = 1.0;
+      }
+    `,
+    fragmentGLSL: `
+      precision highp float;
+      uniform vec3 uPointColor;
+      uniform float uClipEnabled;
+      uniform vec3 uClipMin;
+      uniform vec3 uClipMax;
+      uniform float uClipBoxEnabled;
+      uniform mat4 uClipWorldToBox;
+      varying vec3 vWorldPosition;
+      void main(void) {
+        if (uClipEnabled > 0.5) {
+          if (any(lessThan(vWorldPosition, uClipMin)) || any(greaterThan(vWorldPosition, uClipMax))) discard;
+          if (uClipBoxEnabled > 0.5) {
+            vec3 boxPoint = (uClipWorldToBox * vec4(vWorldPosition, 1.0)).xyz;
+            if (any(greaterThan(abs(boxPoint), vec3(0.5)))) discard;
+          }
+        }
+        gl_FragColor = vec4(uPointColor, 1.0);
+      }
+    `,
+  }) as PointCloudMaterial;
+  const pointColor = new Float32Array(3);
+  const clipMin = new Float32Array([-1e30, -1e30, -1e30]);
+  const clipMax = new Float32Array([1e30, 1e30, 1e30]);
+  const clipWorldToBox = new Float32Array(16);
+  material.setPointColor = nextColor => { pointColor.set([nextColor.r, nextColor.g, nextColor.b]); };
+  material.setPointColor(color);
+  material.setParameter('uPointColor', pointColor);
+  material.setParameter('uClipEnabled', 0);
+  material.setParameter('uClipMin', clipMin);
+  material.setParameter('uClipMax', clipMax);
+  material.setParameter('uClipBoxEnabled', 0);
+  clipWorldToBox.set(new pc.Mat4().data);
+  material.setParameter('uClipWorldToBox', clipWorldToBox);
+  material.setClipState = (enabled, min, max, boxEnabled, worldToBox) => {
+    material.setParameter('uClipEnabled', enabled ? 1 : 0);
+    clipMin.set([min.x, min.y, min.z]);
+    clipMax.set([max.x, max.y, max.z]);
+    material.setParameter('uClipBoxEnabled', boxEnabled ? 1 : 0);
+    clipWorldToBox.set(worldToBox.data);
+  };
+  material.update();
+  return material;
+}
+
 export function createPointCloudEntity(app: pc.Application, cloud: PreviewCloud, color: pc.Color, name: string): pc.Entity {
   const mesh = new pc.Mesh(app.graphicsDevice);
   mesh.setPositions(cloud.positions);
   mesh.update(pc.PRIMITIVE_POINTS);
-  const material = new pc.StandardMaterial();
-  material.diffuse = color;
-  material.emissive = color;
-  material.useLighting = false;
-  material.update();
+  const material = createPointCloudMaterial(color, name);
   const entity = new pc.Entity(name);
   entity.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, material)] });
   return entity;
