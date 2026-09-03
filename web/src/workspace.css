@@ -147,6 +147,32 @@
   pointer-events: none;
 }
 
+.model-visibility button.gaussian-toggle.available:not(.active) {
+  border-color: #7d8fe8;
+  background: #263252e8;
+  color: #e3e9ff;
+}
+
+.model-visibility button.gaussian-toggle.available:not(.active):hover {
+  border-color: #a6b4ff;
+  background: #34436de8;
+}
+
+.gaussian-status {
+  margin-top: 8px !important;
+  padding: 7px 8px;
+  border: 1px solid #7b6632;
+  border-radius: 6px;
+  background: #2a2415;
+  color: #f3d98b;
+}
+
+.gaussian-status.error {
+  border-color: #82434b;
+  background: #2c171b;
+  color: #f2aab3;
+}
+
 .viewport-toolbar #clipping-toggle.active {
   border-color: #4dbb92;
   background: #24775fe8;

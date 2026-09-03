@@ -14,6 +14,9 @@ interface SessionStatus {
   moving_model: 'auto' | ModelId;
   model_a_preview_url?: string;
   model_b_preview_url?: string;
+  gaussian_a_url?: string;
+  gaussian_b_url?: string;
+  inputs?: { model_a_bytes?: number; model_b_bytes?: number };
   metadata?: {
     recommended_moving_model: ModelId;
     models: Record<ModelId, {
@@ -43,6 +46,9 @@ interface IterationEvent {
 const identity = (): Matrix4 => [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
+const formatBytes = (bytes?: number) => bytes
+  ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
+  : '大小未知';
 
 function entityMatrix(entity: pc.Entity): Matrix4 {
   const data = entity.getWorldTransform().data;
@@ -90,7 +96,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     <main class="editor integrated-editor"><div class="workspace integrated-workspace">
       <aside class="panel workflow-panel">
         <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
-        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p></section>
+        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><p id="gaussian-status" class="gaussian-status" hidden></p></section>
         <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
           <div class="role-grid">
             <label class="parameter-label">最终业务矩阵<select id="output-direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
@@ -111,7 +117,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           <section id="result" class="result" hidden><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-result" class="full-width">复制最终业务矩阵</button><details><summary>查看反向矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向矩阵</button></details></section>
         </section>
       </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置粗配准</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
+      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置粗配准</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：${session.gaussian_a_url ? '显示原高斯' : '无高斯数据'}</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：${session.gaussian_b_url ? '显示原高斯' : '无高斯数据'}</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
           <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
           <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
@@ -135,8 +141,9 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const keyboard = new pc.Keyboard(window);
   const application = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), keyboard });
   application.setCanvasResolution(pc.RESOLUTION_AUTO); application.start();
+  application.scene.gsplat.alphaClip = 0.1;
   const camera = new pc.Entity('Camera');
-  camera.addComponent('camera', { clearColor: new pc.Color(0.035, 0.055, 0.085), farClip: 100000 });
+  camera.addComponent('camera', { clearColor: new pc.Color(0.035, 0.055, 0.085), farClip: 100000, toneMapping: pc.TONEMAP_ACES });
   application.root.addChild(camera);
   const entityA = createPointCloudEntity(application, cloudA, new pc.Color(0.68, 0.72, 0.78), 'Model A');
   const entityB = createPointCloudEntity(application, cloudB, new pc.Color(0.68, 0.72, 0.78), 'Model B');
@@ -160,6 +167,20 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   application.root.addChild(clipBox);
   clipBox.enabled = false;
   const modelVisible: Record<ModelId, boolean> = { a: true, b: true };
+  const gaussianUrls: Record<ModelId, string | undefined> = {
+    a: session.gaussian_a_url,
+    b: session.gaussian_b_url,
+  };
+  const gaussianBytes: Record<ModelId, number | undefined> = {
+    a: session.inputs?.model_a_bytes,
+    b: session.inputs?.model_b_bytes,
+  };
+  const gaussianDisplays: Record<ModelId, {
+    entity: pc.Entity | null; asset: pc.Asset | null; active: boolean; loading: boolean;
+  }> = {
+    a: { entity: null, asset: null, active: false, loading: false },
+    b: { entity: null, asset: null, active: false, loading: false },
+  };
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const cameraTarget = bounds.center.clone();
@@ -309,6 +330,100 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   (['a', 'b'] as ModelId[]).forEach(model => {
     visibilityButtons[model].addEventListener('click', () => setModelVisible(model, !modelVisible[model]));
     visibilityButtons[model].setAttribute('aria-pressed', 'true');
+  });
+
+  const gaussianButtons: Record<ModelId, HTMLButtonElement> = {
+    a: root.querySelector<HTMLButtonElement>('#gaussian-model-a')!,
+    b: root.querySelector<HTMLButtonElement>('#gaussian-model-b')!,
+  };
+  const gaussianStatus = root.querySelector<HTMLElement>('#gaussian-status')!;
+  const refreshGaussianStatus = (error?: string) => {
+    const activeModels = (['a', 'b'] as ModelId[]).filter(model => gaussianDisplays[model].active);
+    if (error) {
+      gaussianStatus.hidden = false;
+      gaussianStatus.classList.add('error');
+      gaussianStatus.textContent = error;
+      return;
+    }
+    gaussianStatus.classList.remove('error');
+    if (activeModels.length === 0) {
+      gaussianStatus.hidden = true;
+      gaussianStatus.textContent = '';
+      return;
+    }
+    gaussianStatus.hidden = false;
+    const models = activeModels.map(model => model.toUpperCase()).join('、');
+    gaussianStatus.textContent = clippingModeValue === 'off'
+      ? `模型 ${models} 正在显示完整 Gaussian；该模式仅用于视觉确认，不改变 ICP 输入。`
+      : `模型 ${models} 正在显示完整 Gaussian；当前剖切只作用于中心点预览，暂不裁剪 Gaussian。`;
+  };
+  const releaseGaussian = (model: ModelId) => {
+    const display = gaussianDisplays[model];
+    display.entity?.destroy();
+    if (display.asset) {
+      display.asset.unload();
+      application.assets.remove(display.asset);
+    }
+    display.entity = null;
+    display.asset = null;
+    display.active = false;
+    entities[model].render!.enabled = true;
+    const button = gaussianButtons[model];
+    button.textContent = `${model.toUpperCase()}：显示原高斯`;
+    button.classList.remove('active');
+    button.setAttribute('aria-pressed', 'false');
+    button.title = `加载模型 ${model.toUpperCase()} 原始 Gaussian（${formatBytes(gaussianBytes[model])}）`;
+  };
+  const toggleGaussian = async (model: ModelId) => {
+    const url = gaussianUrls[model];
+    const display = gaussianDisplays[model];
+    const button = gaussianButtons[model];
+    if (!url || display.loading) return;
+    display.loading = true;
+    button.disabled = true;
+    try {
+      if (display.active) {
+        releaseGaussian(model);
+        refreshGaussianStatus();
+        attach();
+        return;
+      }
+      button.textContent = `${model.toUpperCase()}：Gaussian 加载中…`;
+      const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
+        url,
+        filename: `model-${model}-original-gaussian.ply`,
+      });
+      display.asset = asset;
+      application.assets.add(asset);
+      await new Promise<void>((resolve, reject) => {
+        asset.ready(() => resolve());
+        asset.once('error', (loadError: unknown) => reject(loadError));
+        application.assets.load(asset);
+      });
+      const gaussianEntity = new pc.Entity(`Model ${model.toUpperCase()} Original Gaussian`);
+      gaussianEntity.addComponent('gsplat', { asset });
+      entities[model].addChild(gaussianEntity);
+      display.entity = gaussianEntity;
+      display.active = true;
+      entities[model].render!.enabled = false;
+      button.textContent = `${model.toUpperCase()}：切回中心点`;
+      button.classList.add('active');
+      button.setAttribute('aria-pressed', 'true');
+      button.title = `释放模型 ${model.toUpperCase()} Gaussian 并显示中心点`;
+      refreshGaussianStatus();
+      attach();
+    } catch (error) {
+      releaseGaussian(model);
+      refreshGaussianStatus(`模型 ${model.toUpperCase()} Gaussian 加载失败，已保留中心点：${String(error)}`);
+      console.error(error);
+    } finally {
+      display.loading = false;
+      button.disabled = false;
+    }
+  };
+  (['a', 'b'] as ModelId[]).forEach(model => {
+    gaussianButtons[model].setAttribute('aria-pressed', 'false');
+    gaussianButtons[model].addEventListener('click', () => void toggleGaussian(model));
   });
 
   const inputs: Record<string, HTMLInputElement> = {};
@@ -480,6 +595,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     clippingToggle.classList.toggle('active', clippingEnabled);
     clippingToggle.setAttribute('aria-pressed', String(clippingEnabled));
     clippingToggle.title = clippingEnabled ? '剖切已启用：点击打开或关闭剖切面板' : '打开剖切面板';
+    refreshGaussianStatus();
     clippingInteractionActive = !clippingPanel.hidden && current !== 'off';
     axisClipping.hidden = current !== 'axis'; boxClipping.hidden = current !== 'box';
     clipBox.enabled = current === 'box' && clipHelperVisible.checked;
