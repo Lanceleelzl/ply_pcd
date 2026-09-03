@@ -48,10 +48,7 @@ export class ClippingHandles {
   private drag: DragState | null = null;
   private readonly handleSize: number;
   private readonly axisPlanes: Record<ClipAxis, pc.Entity>;
-  private hoverCandidate: Handle | null = null;
   private revealedHandle: Handle | null = null;
-  private hoverStartedAt = 0;
-  private readonly hoverDelayMs = 350;
 
   constructor(
     private readonly app: pc.Application,
@@ -103,9 +100,6 @@ export class ClippingHandles {
   update(): void {
     const mode = this.getMode();
     const show = mode !== 'off' && this.helperVisible();
-    if (this.hoverCandidate && !this.revealedHandle && performance.now() - this.hoverStartedAt >= this.hoverDelayMs) {
-      this.revealedHandle = this.hoverCandidate;
-    }
     const center = this.sceneMin.clone().add(this.sceneMax).mulScalar(0.5);
     const state = this.getAxisState();
     const boxTransform = this.clipBox.getWorldTransform();
@@ -169,23 +163,26 @@ export class ClippingHandles {
       }
       return true;
     }
-    this.hoveredHandle = this.pick(point.x, point.y);
-    if (this.getMode() === 'box') {
+    const mode = this.getMode();
+    if (mode === 'axis') {
+      this.hoveredHandle = this.pick(point.x, point.y);
+      this.revealedHandle = this.axisHoverTarget(point.x, point.y) ?? this.hoveredHandle;
       this.hovered = Boolean(this.hoveredHandle);
       return this.hovered;
     }
-    const candidate = this.hoveredHandle ?? (this.getMode() === 'axis' ? this.axisHoverTarget(point.x, point.y) : null);
-    if (candidate !== this.hoverCandidate) {
-      this.hoverCandidate = candidate; this.hoverStartedAt = performance.now();
-      if (candidate !== this.revealedHandle) this.revealedHandle = null;
+    this.hoveredHandle = this.pick(point.x, point.y);
+    if (mode === 'box') {
+      this.hovered = Boolean(this.hoveredHandle);
+      return this.hovered;
     }
+    this.revealedHandle = null;
     this.hovered = Boolean(this.hoveredHandle);
     return this.hovered;
   }
 
   pointerLeave(): void {
     if (this.drag) return;
-    this.hoverCandidate = null; this.revealedHandle = null; this.hoveredHandle = null; this.hovered = false;
+    this.revealedHandle = null; this.hoveredHandle = null; this.hovered = false;
   }
 
   pointerDown(event: PointerEvent): boolean {
@@ -250,14 +247,20 @@ export class ClippingHandles {
   private axisHoverTarget(x: number, y: number): Handle | null {
     const center = this.sceneMin.clone().add(this.sceneMax).mulScalar(0.5);
     const centerScreen = this.camera.camera!.worldToScreen(center);
-    let best: Handle | null = null; let bestDistance = 10 * window.devicePixelRatio;
+    const diagonal = this.sceneMax.clone().sub(this.sceneMin).length();
+    let best: Handle | null = null; let bestDistance = 18 * window.devicePixelRatio;
     for (const handle of this.handles) {
       if (handle.kind !== 'axis') continue;
-      const end = this.camera.camera!.worldToScreen(handle.worldPosition);
-      const dx = end.x - centerScreen.x; const dy = end.y - centerScreen.y;
-      const lengthSquared = dx * dx + dy * dy; if (lengthSquared < 16) continue;
-      const t = Math.max(0.16, Math.min(1.08, ((x - centerScreen.x) * dx + (y - centerScreen.y) * dy) / lengthSquared));
-      const distance = Math.hypot(x - (centerScreen.x + dx * t), y - (centerScreen.y + dy * t));
+      const direction = axisVector(handle.axis).mulScalar(handle.side === 'min' ? -1 : 1);
+      const reference = center.clone().add(direction.mulScalar(Math.max(diagonal * 0.08, 0.1)));
+      const referenceScreen = this.camera.camera!.worldToScreen(reference);
+      const dx = referenceScreen.x - centerScreen.x; const dy = referenceScreen.y - centerScreen.y;
+      const length = Math.hypot(dx, dy); if (length < 4 * window.devicePixelRatio) continue;
+      const unitX = dx / length; const unitY = dy / length;
+      const fromCenterX = x - centerScreen.x; const fromCenterY = y - centerScreen.y;
+      const along = fromCenterX * unitX + fromCenterY * unitY;
+      if (along < 3 * window.devicePixelRatio) continue;
+      const distance = Math.abs(fromCenterX * unitY - fromCenterY * unitX);
       if (distance < bestDistance) { best = handle; bestDistance = distance; }
     }
     return best;
