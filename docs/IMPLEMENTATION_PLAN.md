@@ -20,7 +20,8 @@
 - 默认显示轻量中心点；用户按需切换后，PlayCanvas 直接以 `gsplat` 资源流式加载原始 PLY，并隐藏同一模型的中心点渲染，避免重复叠加。
 - Gaussian 实体作为对应模型变换实体的子节点，以同一局部坐标继承人工粗配准、ICP 逐轮和最终矩阵；模型显示开关控制整个父实体。
 - 切回中心点时销毁 Gaussian 实体、卸载 Asset 并从资源注册表移除，释放 GPU 与浏览器内存；加载失败时保留中心点并提供明确错误状态。
-- 第一版剖切 Shader 仍只作用于轻量中心点。完整 Gaussian 与剖切同时启用时显示明确提示，不伪造 Gaussian 剖切效果；原始 Gaussian 实时剖切留到下一版专用渲染管线实现。
+- 完整 Gaussian 使用 PlayCanvas `GSplatComponent.setWorkBufferModifier` 接入同一剖切状态。Modifier 接收 Work Buffer 阶段的世界坐标中心：坐标轴模式比较 `uClipMin／uClipMax`，长方体模式以 `uClipWorldToBox` 转入盒局部坐标并比较 `±0.5`，范围外将 Gaussian 尺度置零。
+- A／B Gaussian 使用同一 Shader 源码但各自设置组件级 `uClipEnabled`、模式和矩阵参数，确保「仅 A／仅 B／两者」与中心点一致。参数变化触发对应组件 Work Buffer 更新；拖动期间限频，释放时提交最终状态，静止时不重复更新。
 - 模型级切换使用明确动作文案与独立视觉样式：「显示原高斯」表示可执行操作，「切回中心点」表示当前处于 Gaussian 模式，「无高斯数据」表示输入不支持该功能。
 
 ## 1．目标与边界

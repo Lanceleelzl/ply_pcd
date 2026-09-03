@@ -1,5 +1,6 @@
 import * as pc from 'playcanvas';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
+import { GaussianClipController } from '../gaussian-clipping';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
@@ -176,10 +177,14 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     b: session.inputs?.model_b_bytes,
   };
   const gaussianDisplays: Record<ModelId, {
-    entity: pc.Entity | null; asset: pc.Asset | null; active: boolean; loading: boolean;
+    entity: pc.Entity | null;
+    asset: pc.Asset | null;
+    clipController: GaussianClipController | null;
+    active: boolean;
+    loading: boolean;
   }> = {
-    a: { entity: null, asset: null, active: false, loading: false },
-    b: { entity: null, asset: null, active: false, loading: false },
+    a: { entity: null, asset: null, clipController: null, active: false, loading: false },
+    b: { entity: null, asset: null, clipController: null, active: false, loading: false },
   };
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
@@ -355,10 +360,11 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     const models = activeModels.map(model => model.toUpperCase()).join('、');
     gaussianStatus.textContent = clippingModeValue === 'off'
       ? `模型 ${models} 正在显示完整 Gaussian；该模式仅用于视觉确认，不改变 ICP 输入。`
-      : `模型 ${models} 正在显示完整 Gaussian；当前剖切只作用于中心点预览，暂不裁剪 Gaussian。`;
+      : `模型 ${models} 正在显示完整 Gaussian，并与当前剖切范围同步；剖切仅影响视觉预览。`;
   };
   const releaseGaussian = (model: ModelId) => {
     const display = gaussianDisplays[model];
+    display.clipController = null;
     display.entity?.destroy();
     if (display.asset) {
       display.asset.unload();
@@ -404,6 +410,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       gaussianEntity.addComponent('gsplat', { asset });
       entities[model].addChild(gaussianEntity);
       display.entity = gaussianEntity;
+      display.clipController = new GaussianClipController(gaussianEntity.gsplat!);
+      syncClipState(true);
       display.active = true;
       entities[model].render!.enabled = false;
       button.textContent = `${model.toUpperCase()}：切回中心点`;
@@ -470,11 +478,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   }
   const clipEdgeColor = new pc.Color(0.15, 1.0, 0.78);
   let clippingHandles: ClippingHandles | null = null;
-  application.on('update', () => {
-    const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
-    const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
-    ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
-    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(entityMatrix(movingEntity()));
+  const syncClipState = (forceGaussian = false) => {
     const currentClipMode = clippingMode.value;
     clipMinState.set(-1e30, -1e30, -1e30); clipMaxState.set(1e30, 1e30, 1e30);
     if (currentClipMode === 'axis') {
@@ -491,8 +495,21 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     worldToClipBox.copy(clipBox.getWorldTransform()).invert();
     (['a', 'b'] as ModelId[]).forEach(model => {
       const inScope = clippingScope.value === 'both' || clippingScope.value === model;
-      pointMaterials[model].setClipState(currentClipMode !== 'off' && inScope, clipMinState, clipMaxState, currentClipMode === 'box', worldToClipBox);
+      const enabled = currentClipMode !== 'off' && inScope;
+      const boxEnabled = currentClipMode === 'box';
+      pointMaterials[model].setClipState(enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox);
+      gaussianDisplays[model].clipController?.setClipState(
+        enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox, forceGaussian,
+      );
     });
+  };
+  application.on('update', () => {
+    const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
+    const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
+    ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
+    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(entityMatrix(movingEntity()));
+    syncClipState();
+    const currentClipMode = clippingMode.value;
     if (currentClipMode === 'box' && clipHelperVisible.checked && clippingHandles?.isBoxPresentationVisible()) {
       const transform = clipBox.getWorldTransform();
       clipCornerLocal.forEach((corner, index) => transform.transformPoint(corner, clipCornerWorld[index]));
@@ -695,7 +712,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     if (event.button === 0) navigation = 'orbit'; else if (event.button === 1) navigation = 'pan'; else return;
     lastX = event.clientX; lastY = event.clientY;
   }, { capture: true });
-  window.addEventListener('pointerup', event => { clippingHandles?.pointerUp(event); navigation = null; canvas.style.cursor = ''; });
+  window.addEventListener('pointerup', event => {
+    clippingHandles?.pointerUp(event);
+    syncClipState(true);
+    navigation = null;
+    canvas.style.cursor = '';
+  });
   window.addEventListener('pointermove', event => {
     if (!navigation || gizmoTransforming) return; const dx = event.clientX - lastX; const dy = event.clientY - lastY; lastX = event.clientX; lastY = event.clientY;
     if (navigation === 'orbit') orbitCamera(dx * 180 / Math.max(1, canvas.clientWidth), dy * 180 / Math.max(1, canvas.clientHeight));
