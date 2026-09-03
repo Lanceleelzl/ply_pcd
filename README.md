@@ -35,7 +35,7 @@ pnpm run dev
 
 开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8765`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las` 或 `.laz`；上传后页面会由 C++ Worker 解码并生成轻量预览，浏览器无需直接解析 LAZ。
 
-如需修改端口，编辑 `config/local.json` 中的 `port`（API）和 `web_port`（开发页面）后重新启动服务，无需设置系统或终端环境变量。
+如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 
 工作台左侧按“数据→可选粗配准→ICP→结果”展示完整流程，粗配准工具浮动在三维视口内。PLY 固定，只有 PCD 可以平移和旋转，禁止缩放；不做人工调整时可直接执行 ICP。粗配准默认使用轻量中心点，Gaussian 视觉确认按需流式加载原始 PLY，切回中心点时释放 GPU 资源。人工矩阵作为 `T_manual_pcd_to_ply` 提交，最终组合为 `T_pcd_to_ply = T_icp_delta × T_manual_pcd_to_ply`，业务最终使用页面显式标记的 `PLY→PCD` 矩阵。
 
@@ -55,14 +55,15 @@ LAS／LAZ 坐标先由 LASzip 以双精度应用 scale／offset，再减去双�
 
 三维视口左上角第一排粗配准工具栏末尾提供“A：显示”和“B：显示”开关，可独立隐藏或恢复两个模型。显示状态只影响浏览器视口，不影响粗配准矩阵、ICP 输入或最终结果；隐藏当前移动模型时，其变换手柄也会同步隐藏。显示开关在 ICP 运行期间仍可操作。
 
-任务完成或失败后，服务立即删除上传的 PLY／PCD 输入副本。矩阵、JSON 和日志默认保留 168 小时，并每 3600 秒执行一次过期清理。可在 `docker/docker-compose.yml` 中调整：
+v1 单次任务完成或失败后立即删除上传副本。v2 通用会话的原始模型和预览默认保留 24 小时，以便继续粗配准或重新执行 ICP；首页历史区可延长 24 小时或立即释放。释放后只保留轻量结果档案，包括双向矩阵、模型摘要与 SHA-256、ICP 参数、RMS、版本和时间。服务每 3600 秒执行一次到期清理。可在 `docker/docker-compose.yml` 中调整：
 
 ```text
 REGISTRATION_RESULT_RETENTION_HOURS
 REGISTRATION_CLEANUP_INTERVAL_SECONDS
+REGISTRATION_SOURCE_RETENTION_HOURS
 ```
 
-清理范围仅限 `runtime/jobs/{job_id}`，不会处理只读的 `source` 原始数据。
+清理范围仅限服务管理的 `runtime/jobs/{job_id}` 和 `runtime/manual-sessions/{session_id}`，不会处理只读的 `source` 原始数据。历史档案保存在 `runtime/history/{workspace_id}`，源文件释放后矩阵仍可查看和复制。
 
 推荐使用通用 `v2` 会话接口；现有 `v1` PLY→定位参考点云接口继续兼容：
 
@@ -70,6 +71,10 @@ REGISTRATION_CLEANUP_INTERVAL_SECONDS
 POST /api/v2/registration-sessions
 GET  /api/v2/registration-sessions/{session_id}
 POST /api/v2/registration-sessions/{session_id}/register
+GET  /api/v2/registration-history?workspace_id={workspace_id}
+POST /api/v2/registration-sessions/{session_id}/retain
+POST /api/v2/registration-sessions/{session_id}/release
+POST /api/v2/registration-sessions/{session_id}/resume
 POST /api/v1/registrations
 GET  /api/v1/registrations/{job_id}
 GET  /api/v1/registrations/{job_id}/result

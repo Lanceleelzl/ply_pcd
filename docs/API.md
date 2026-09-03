@@ -6,7 +6,7 @@
 |---|---|
 | API 名称 | PLY／PCD Registration Service API |
 | API 版本 | `v2`（推荐）／`v1`（兼容） |
-| 服务版本 | `0.1.0` |
+| 服务版本 | `0.3.0` |
 | 协议 | HTTP／JSON／multipart/form-data |
 | 本地 Base URL | `http://localhost:8765` |
 | OpenAPI | `/openapi.json` |
@@ -370,6 +370,7 @@ REGISTRATION_MAX_CONCURRENT_JOBS
 REGISTRATION_WORKER_TIMEOUT_SECONDS
 REGISTRATION_RESULT_RETENTION_HOURS
 REGISTRATION_CLEANUP_INTERVAL_SECONDS
+REGISTRATION_SOURCE_RETENTION_HOURS
 ```
 
 ## 15．生产部署注意事项
@@ -489,6 +490,7 @@ Content-Type: multipart/form-data
 | `model_b` | binary | 是 | — | `.ply`、`.pcd`、`.las` 或 `.laz` |
 | `output_direction` | string | 否 | `a_to_b` | 页面重点展示 `a_to_b` 或 `b_to_a` |
 | `moving_model` | string | 否 | `auto` | `a`、`b` 或 `auto`；只影响 ICP 计算角色，不改变业务方向 |
+| `workspace_id` | string／UUID | 否 | 服务生成 | 隔离调用方历史；浏览器持久化生成的 UUID，API 调用方应保存并复用 |
 
 ```bash
 curl -X POST "http://localhost:8765/api/v2/registration-sessions" \
@@ -498,7 +500,7 @@ curl -X POST "http://localhost:8765/api/v2/registration-sessions" \
   -F "moving_model=b"
 ```
 
-成功返回 `202 Accepted`，响应包含 `session_id`、`status_url` 和 `editor_url`。查询：
+成功返回 `202 Accepted`，响应包含 `session_id`、`workspace_id`、`status_url` 和 `editor_url`。查询：
 
 ```http
 GET /api/v2/registration-sessions/{session_id}
@@ -607,3 +609,29 @@ registration_worker.exe register-models `
 ```
 
 启用 `--progress-jsonl` 后，标准输出先逐行输出 `type=iteration` 的紧凑 JSON，最后仍输出完整成功结果 JSON。输出目录包含 `registration.json`、`a_to_b_matrix.txt`、`b_to_a_matrix.txt` 和三个方向明确的局部矩阵文件。
+
+### 15.6 历史结果与源文件生命周期
+
+配准成功后，服务在 `runtime/history/{workspace_id}/{session_id}.json` 写入独立轻量档案。档案保存正反向矩阵、矩阵方向、模型文件名／格式／大小／点数／SHA-256、ICP 参数、RMS、服务版本和完成时间，不依赖随后会清理的 Job 目录。
+
+```http
+GET /api/v2/registration-history?workspace_id={workspace_id}
+GET /api/v2/registration-history/{session_id}?workspace_id={workspace_id}
+```
+
+列表按完成时间倒序。`source_available=true` 且 `restartable=true` 表示两个源模型仍存在；`source_expires_at_unix` 是计划释放时间。源文件默认保留 24 小时。
+
+```http
+POST /api/v2/registration-sessions/{session_id}/retain
+POST /api/v2/registration-sessions/{session_id}/release
+POST /api/v2/registration-sessions/{session_id}/resume
+Content-Type: application/json
+
+{"workspace_id":"3bca89b2-5a40-4cca-bf67-477ab26dd848"}
+```
+
+- `retain`：从当前时间起再保留 24 小时。
+- `release`：立即删除源模型、预览缓存、会话日志和对应已完成 Job，只保留历史档案；存在 `queued`／`running` 任务时返回 `409`。
+- `resume`：验证源模型存在，并在预览丢失时重新生成预览；源文件已释放时返回 `409`。
+
+`workspace_id` 用于本地历史隔离，不等同于生产鉴权。公网或多租户部署仍必须增加身份认证，并将工作区与真实用户绑定。

@@ -19,6 +19,7 @@
     "build:native": "node scripts/local-runtime.mjs build-native",
     "build:web": "vite build --config web/vite.config.ts",
     "test": "node scripts/local-runtime.mjs test",
+    "test:service": "node scripts/local-runtime.mjs test-service",
     "docker:build": "docker compose -f docker/docker-compose.yml build registration-api",
     "docker:up": "docker compose -f docker/docker-compose.yml up -d registration-api",
     "docker:down": "docker compose -f docker/docker-compose.yml down",

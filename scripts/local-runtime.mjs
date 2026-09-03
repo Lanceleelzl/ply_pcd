@@ -26,6 +26,9 @@ async function readLocalConfig() {
   if (!Number.isInteger(config.web_port) || config.web_port < 1 || config.web_port > 65535) {
     throw new Error("config/local.json: web_port must be an integer between 1 and 65535");
   }
+  if (!Number.isInteger(config.source_retention_hours) || config.source_retention_hours < 1) {
+    throw new Error("config/local.json: source_retention_hours must be a positive integer");
+  }
   return config;
 }
 
@@ -218,7 +221,7 @@ async function setup() {
 
 async function serve(development) {
   await setup();
-  const { port, web_port: webPort } = await readLocalConfig();
+  const { port, web_port: webPort, source_retention_hours: sourceRetentionHours } = await readLocalConfig();
   const environment = {
     ...process.env,
     REGISTRATION_RUNTIME_ROOT: runtimeDirectory,
@@ -227,6 +230,7 @@ async function serve(development) {
     REGISTRATION_WORKER_TIMEOUT_SECONDS: process.env.REGISTRATION_WORKER_TIMEOUT_SECONDS || "1800",
     REGISTRATION_RESULT_RETENTION_HOURS: process.env.REGISTRATION_RESULT_RETENTION_HOURS || "168",
     REGISTRATION_CLEANUP_INTERVAL_SECONDS: process.env.REGISTRATION_CLEANUP_INTERVAL_SECONDS || "3600",
+    REGISTRATION_SOURCE_RETENTION_HOURS: process.env.REGISTRATION_SOURCE_RETENTION_HOURS || String(sourceRetentionHours),
   };
   console.log(`[local] Starting API at http://localhost:${port}`);
   const api = spawn(venvPython, ["-m", "uvicorn", "app:app", "--app-dir", join(root, "service"), "--host", "127.0.0.1", "--port", String(port), "--log-config", join(root, "service", "logging.json")], {
@@ -264,10 +268,16 @@ async function test() {
   }
 }
 
+function testService() {
+  if (!existsSync(venvPython)) throw new Error("Local Python environment is missing. Run pnpm install first.");
+  run(venvPython, ["-m", "unittest", "discover", "-s", "tests/service", "-p", "test_*.py"]);
+}
+
 const command = process.argv[2];
 if (command === "setup") await setup();
 else if (command === "dev") await serve(true);
 else if (command === "start") await serve(false);
 else if (command === "build-native") { await buildNative(); await ensureWorker(); }
 else if (command === "test") await test();
+else if (command === "test-service") testService();
 else throw new Error(`Unknown local runtime command: ${command}`);

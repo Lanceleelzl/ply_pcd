@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -23,9 +24,11 @@ WORKER_TIMEOUT_SECONDS = int(os.getenv("REGISTRATION_WORKER_TIMEOUT_SECONDS", "1
 MAX_CONCURRENT_JOBS = int(os.getenv("REGISTRATION_MAX_CONCURRENT_JOBS", "1"))
 RESULT_RETENTION_HOURS = int(os.getenv("REGISTRATION_RESULT_RETENTION_HOURS", "168"))
 CLEANUP_INTERVAL_SECONDS = int(os.getenv("REGISTRATION_CLEANUP_INTERVAL_SECONDS", "3600"))
+SOURCE_RETENTION_HOURS = int(os.getenv("REGISTRATION_SOURCE_RETENTION_HOURS", "24"))
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+SERVICE_VERSION = "0.3.0"
 
-app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version="0.2.0")
+app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
 STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
@@ -54,6 +57,10 @@ class ModelRegistrationRequest(BaseModel):
     show_registration_progress: bool = False
 
 
+class WorkspaceRequest(BaseModel):
+    workspace_id: str
+
+
 def _job_directory(job_id: str) -> Path:
     try:
         parsed = uuid.UUID(job_id)
@@ -68,6 +75,17 @@ def _manual_session_directory(session_id: str) -> Path:
     except ValueError as error:
         raise HTTPException(status_code=404, detail="Manual registration session not found") from error
     return RUNTIME_ROOT / "manual-sessions" / str(parsed)
+
+
+def _workspace_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="workspace_id must be a UUID") from error
+
+
+def _history_directory(workspace_id: str) -> Path:
+    return RUNTIME_ROOT / "history" / _workspace_id(workspace_id)
 
 
 def _status_path(job_directory: Path) -> Path:
@@ -86,6 +104,118 @@ def _read_status(job_directory: Path) -> dict[str, Any]:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Job not found")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> bool:
+    return all(
+        (session_directory / "input" / status.get(field, "")).is_file()
+        for field in ("model_a_filename", "model_b_filename")
+    )
+
+
+def _history_path(workspace_id: str, session_id: str) -> Path:
+    return _history_directory(workspace_id) / f"{uuid.UUID(session_id)}.json"
+
+
+def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
+    workspace_id = session_status.get("workspace_id")
+    if session_status.get("api_version") != "v2" or not workspace_id:
+        return None
+    completed = [entry for entry in session_status.get("registrations", []) if entry.get("status") == "succeeded"]
+    if not completed:
+        return None
+    latest = max(completed, key=lambda entry: float(entry.get("finished_at_unix", 0)))
+    job_id = latest.get("job_id")
+    if not job_id:
+        return None
+    result_path = _job_directory(job_id) / "result" / "registration.json"
+    if not result_path.is_file():
+        existing = _history_path(workspace_id, session_status["session_id"])
+        return json.loads(existing.read_text(encoding="utf-8")) if existing.is_file() else None
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    metadata = session_status.get("metadata", {}).get("models", {})
+    inputs = session_status.get("inputs", {})
+    record = {
+        "session_id": session_status["session_id"],
+        "workspace_id": workspace_id,
+        "status": "succeeded",
+        "created_at_unix": session_status.get("created_at_unix"),
+        "completed_at_unix": latest.get("finished_at_unix"),
+        "source_expires_at_unix": session_status.get("source_expires_at_unix"),
+        "service_version": SERVICE_VERSION,
+        "output_direction": latest.get("output_direction", session_status.get("output_direction")),
+        "moving_model": latest.get("moving_model", session_status.get("moving_model")),
+        "models": {
+            "a": {
+                "filename": inputs.get("model_a_original_filename", session_status.get("model_a_filename")),
+                "format": inputs.get("model_a_format"), "bytes": inputs.get("model_a_bytes"),
+                "sha256": inputs.get("model_a_sha256"), "point_count": metadata.get("a", {}).get("source_point_count"),
+            },
+            "b": {
+                "filename": inputs.get("model_b_original_filename", session_status.get("model_b_filename")),
+                "format": inputs.get("model_b_format"), "bytes": inputs.get("model_b_bytes"),
+                "sha256": inputs.get("model_b_sha256"), "point_count": metadata.get("b", {}).get("source_point_count"),
+            },
+        },
+        "parameters": latest.get("parameters", result.get("parameters", {})),
+        "recommended_matrix": result.get("recommended_matrix"),
+        "a_to_b": result.get("a_to_b"), "b_to_a": result.get("b_to_a"),
+        "metrics": result.get("metrics", {}),
+    }
+    directory = _history_directory(workspace_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = _history_path(workspace_id, session_status["session_id"])
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return record
+
+
+def _release_v2_source_data(session_directory: Path, session_status: dict[str, Any]) -> None:
+    active_job_id = session_status.get("active_job_id")
+    if active_job_id:
+        try:
+            if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
+                raise HTTPException(status_code=409, detail="Active registration must finish or be cancelled first")
+        except HTTPException as error:
+            if error.status_code == 409:
+                raise
+    _write_v2_history(session_directory, session_status)
+    shutil.rmtree(session_directory / "input", ignore_errors=True)
+    shutil.rmtree(session_directory / "preview", ignore_errors=True)
+    for filename in ("worker.stdout.log", "worker.stderr.log"):
+        (session_directory / filename).unlink(missing_ok=True)
+    for entry in session_status.get("registrations", []):
+        job_id = entry.get("job_id")
+        if not job_id:
+            continue
+        job_directory = _job_directory(job_id)
+        try:
+            job_status = _read_status(job_directory)
+        except HTTPException:
+            continue
+        if job_status.get("status") in {"succeeded", "failed", "cancelled"}:
+            shutil.rmtree(job_directory)
+    session_status["source_released_at_unix"] = time.time()
+    session_status["source_available"] = False
+    _write_status(session_directory, session_status)
+
+
+def _history_view(record: dict[str, Any]) -> dict[str, Any]:
+    session_directory = _manual_session_directory(record["session_id"])
+    try:
+        status = _read_status(session_directory)
+        source_available = _v2_source_available(session_directory, status)
+        source_expires = status.get("source_expires_at_unix")
+    except (HTTPException, OSError, json.JSONDecodeError):
+        source_available = False
+        source_expires = record.get("source_expires_at_unix")
+    return {
+        **record,
+        "source_available": source_available,
+        "restartable": source_available,
+        "source_expires_at_unix": source_expires,
+    }
 
 
 def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
@@ -109,6 +239,11 @@ def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
     else:
         session_status["active_job_id"] = job_status["job_id"]
     _write_status(session_directory, session_status)
+    if job_status.get("status") == "succeeded" and session_status.get("api_version") == "v2":
+        try:
+            _write_v2_history(session_directory, session_status)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
 
 
 async def _save_upload(upload: UploadFile, destination: Path) -> int:
@@ -119,6 +254,18 @@ async def _save_upload(upload: UploadFile, destination: Path) -> int:
             total += len(chunk)
     await upload.close()
     return total
+
+
+async def _save_upload_with_sha256(upload: UploadFile, destination: Path) -> tuple[int, str]:
+    total = 0
+    digest = hashlib.sha256()
+    with destination.open("wb") as output:
+        while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+            output.write(chunk)
+            digest.update(chunk)
+            total += len(chunk)
+    await upload.close()
+    return total, digest.hexdigest()
 
 
 def _reference_extension(upload: UploadFile) -> str:
@@ -338,6 +485,18 @@ def _cleanup_completed_jobs() -> None:
                     continue
             except HTTPException:
                 pass
+        source_expires = status.get("source_expires_at_unix")
+        if (
+            status.get("api_version") == "v2"
+            and source_expires is not None
+            and _v2_source_available(session_directory, status)
+            and float(source_expires) <= time.time()
+        ):
+            try:
+                _release_v2_source_data(session_directory, status)
+            except (HTTPException, OSError, ValueError, json.JSONDecodeError):
+                continue
+            continue
         if float(status.get("updated_at_unix", 0)) < expires_before:
             shutil.rmtree(session_directory)
 
@@ -461,6 +620,7 @@ async def create_model_registration_session(
     model_b: Annotated[UploadFile, File(description="Model B: PLY, PCD, LAS, or LAZ")],
     output_direction: Annotated[str, Form()] = "a_to_b",
     moving_model: Annotated[str, Form()] = "auto",
+    workspace_id: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     extension_a = _model_extension(model_a)
     extension_b = _model_extension(model_b)
@@ -468,6 +628,7 @@ async def create_model_registration_session(
         raise HTTPException(status_code=400, detail="output_direction must be a_to_b or b_to_a")
     if moving_model not in {"auto", "a", "b"}:
         raise HTTPException(status_code=400, detail="moving_model must be auto, a, or b")
+    workspace_id = _workspace_id(workspace_id) if workspace_id else str(uuid.uuid4())
     session_id = str(uuid.uuid4())
     session_directory = _manual_session_directory(session_id)
     input_directory = session_directory / "input"
@@ -477,8 +638,10 @@ async def create_model_registration_session(
     path_a = input_directory / f"model-a{extension_a}"
     path_b = input_directory / f"model-b{extension_b}"
     try:
-        bytes_a = await _save_upload(model_a, path_a)
-        bytes_b = await _save_upload(model_b, path_b)
+        (bytes_a, sha256_a), (bytes_b, sha256_b) = await asyncio.gather(
+            _save_upload_with_sha256(model_a, path_a),
+            _save_upload_with_sha256(model_b, path_b),
+        )
         if bytes_a == 0 or bytes_b == 0:
             raise HTTPException(status_code=400, detail="Uploaded files must not be empty")
     except Exception:
@@ -487,8 +650,10 @@ async def create_model_registration_session(
     status: dict[str, Any] = {
         "session_id": session_id,
         "api_version": "v2",
+        "workspace_id": workspace_id,
         "status": "queued",
         "created_at_unix": time.time(),
+        "source_expires_at_unix": time.time() + SOURCE_RETENTION_HOURS * 3600,
         "model_a_filename": path_a.name,
         "model_b_filename": path_b.name,
         "output_direction": output_direction,
@@ -496,6 +661,9 @@ async def create_model_registration_session(
         "inputs": {
             "model_a_bytes": bytes_a, "model_b_bytes": bytes_b,
             "model_a_format": extension_a[1:], "model_b_format": extension_b[1:],
+            "model_a_original_filename": Path(model_a.filename or path_a.name).name,
+            "model_b_original_filename": Path(model_b.filename or path_b.name).name,
+            "model_a_sha256": sha256_a, "model_b_sha256": sha256_b,
         },
         "editor_url": f"/?session={session_id}&api=v2",
     }
@@ -510,7 +678,7 @@ async def create_model_registration_session(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {
-        "session_id": session_id, "status": "queued",
+        "session_id": session_id, "workspace_id": workspace_id, "status": "queued",
         "status_url": f"/api/v2/registration-sessions/{session_id}",
         "editor_url": status["editor_url"],
     }
@@ -518,10 +686,92 @@ async def create_model_registration_session(
 
 @app.get("/api/v2/registration-sessions/{session_id}")
 async def get_model_registration_session(session_id: str) -> dict[str, Any]:
-    status = _read_status(_manual_session_directory(session_id))
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
     if status.get("api_version") != "v2":
         raise HTTPException(status_code=404, detail="V2 registration session not found")
+    status["source_available"] = _v2_source_available(session_directory, status)
+    status["restartable"] = status["source_available"]
     return status
+
+
+@app.get("/api/v2/registration-history")
+async def get_registration_history(workspace_id: str) -> dict[str, Any]:
+    directory = _history_directory(workspace_id)
+    records: list[dict[str, Any]] = []
+    if directory.is_dir():
+        for path in directory.glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                records.append(_history_view(record))
+            except (OSError, ValueError, json.JSONDecodeError, HTTPException):
+                continue
+    records.sort(key=lambda item: float(item.get("completed_at_unix") or 0), reverse=True)
+    return {"workspace_id": _workspace_id(workspace_id), "items": records}
+
+
+@app.get("/api/v2/registration-history/{session_id}")
+async def get_registration_history_item(session_id: str, workspace_id: str) -> dict[str, Any]:
+    path = _history_path(workspace_id, session_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Registration history not found")
+    return _history_view(json.loads(path.read_text(encoding="utf-8")))
+
+
+@app.post("/api/v2/registration-sessions/{session_id}/retain")
+async def retain_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
+    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
+        raise HTTPException(status_code=404, detail="V2 registration session not found")
+    if not _v2_source_available(session_directory, status):
+        raise HTTPException(status_code=409, detail="Source model files have been cleaned")
+    status["source_expires_at_unix"] = time.time() + SOURCE_RETENTION_HOURS * 3600
+    _write_status(session_directory, status)
+    record = _write_v2_history(session_directory, status)
+    return {"session_id": session_id, "source_expires_at_unix": status["source_expires_at_unix"], "history": record}
+
+
+@app.post("/api/v2/registration-sessions/{session_id}/release")
+async def release_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
+    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
+        raise HTTPException(status_code=404, detail="V2 registration session not found")
+    _release_v2_source_data(session_directory, status)
+    return {"session_id": session_id, "source_available": False, "restartable": False}
+
+
+@app.post("/api/v2/registration-sessions/{session_id}/resume", status_code=202)
+async def resume_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
+    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
+        raise HTTPException(status_code=404, detail="V2 registration session not found")
+    if not _v2_source_available(session_directory, status):
+        raise HTTPException(status_code=409, detail="Source model files have been cleaned")
+    preview_directory = session_directory / "preview"
+    preview_ready = all((preview_directory / name).is_file() for name in ("model-a-points.bin", "model-b-points.bin"))
+    if preview_ready and status.get("status") == "ready":
+        return {"session_id": session_id, "status": "ready", "editor_url": status["editor_url"]}
+    if status.get("status") in {"queued", "preparing"}:
+        return {"session_id": session_id, "status": status["status"], "editor_url": status["editor_url"]}
+    preview_directory.mkdir(parents=True, exist_ok=True)
+    status["status"] = "queued"
+    status.pop("error", None)
+    status.pop("error_code", None)
+    _write_status(session_directory, status)
+    command = [
+        WORKER_PATH, "prepare-model-preview",
+        "--model-a", str(session_directory / "input" / status["model_a_filename"]),
+        "--model-b", str(session_directory / "input" / status["model_b_filename"]),
+        "--output-dir", str(preview_directory),
+        "--model-a-limit", "300000", "--model-b-limit", "300000",
+    ]
+    task = asyncio.create_task(_run_model_preview(session_id, command))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return {"session_id": session_id, "status": "queued", "editor_url": status["editor_url"]}
 
 
 @app.get("/api/v2/registration-sessions/{session_id}/preview/{model}")
@@ -566,6 +816,8 @@ async def register_model_session(session_id: str, request: ModelRegistrationRequ
         session_status = _read_status(session_directory)
         if session_status.get("api_version") != "v2":
             raise HTTPException(status_code=404, detail="V2 registration session not found")
+        if not _v2_source_available(session_directory, session_status):
+            raise HTTPException(status_code=409, detail="Source model files have been cleaned")
         if session_status.get("status") != "ready":
             raise HTTPException(status_code=409, detail=f"Session status is {session_status.get('status')}")
         active_job_id = session_status.get("active_job_id")

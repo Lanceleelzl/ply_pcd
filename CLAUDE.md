@@ -69,6 +69,10 @@ p_target = T_source_to_target * p_source
 - 完整 Gaussian 必须复用中心点的同一份世界坐标剖切状态。实现采用 PlayCanvas `GSplatComponent.setWorkBufferModifier`，在 Work Buffer 写入阶段按 Gaussian 世界中心执行坐标轴或有向长方体判断，范围外 Gaussian 尺度置零；A／B 作用范围通过组件级参数独立控制。剖切只改变浏览器预览，不得修改原始 Gaussian、ICP 输入或矩阵。
 - Gaussian 剖切参数拖动更新必须限频，松开时强制提交最终状态；静止时不得持续重建 Work Buffer。Gaussian 实体必须继承对应模型的粗配准及 ICP 过程矩阵，并服从模型 A／B 显示开关。
 - Gaussian 切换按钮必须使用动作导向文案：可用时显示「显示原高斯」，激活后显示「切回中心点」，无 Gaussian 属性时显示「无高斯数据」；不得只写「中心点」而让用户猜测按钮用途。
+- v2 通用任务必须按浏览器或 API 调用方提供的 `workspace_id` 隔离历史；禁止把“上一个任务”解释为全局任务并跨工作区清理。
+- 配准成功后必须生成独立于 Job 目录的轻量历史档案，至少保存正反向矩阵、矩阵方向、模型摘要、SHA-256、ICP 参数、RMS、算法版本和时间。历史档案不得依赖会被清理的结果 URL。
+- 原始模型与预览默认保留 24 小时；用户可延长保留或立即释放。释放只允许删除服务管理的 `runtime/manual-sessions/{UUID}/input`、`preview` 及对应已完成 `runtime/jobs/{UUID}`，运行中的任务禁止释放。清理后历史矩阵仍必须可读、复制，但不得提供继续配准。
+- 首页必须按时间倒序展示当前工作区历史。只有两个源模型仍存在时才允许继续配准；预览缺失时由服务重新生成。历史操作应显式显示源文件状态和到期时间。
 
 ## 上游基线
 
