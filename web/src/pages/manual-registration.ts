@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
 import { createPointCloudEntity, loadPreview, type PreviewCloud } from '../point-cloud';
 import '../view-gizmo.css';
+import { createCubeLabels } from '../cube-labels';
 import '../workspace.css';
 
 type Matrix4 = number[][];
@@ -248,6 +249,7 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
   };
   setDirectionFromAngles(cameraYaw, cameraPitch);
   const viewCube = root.querySelector<HTMLElement>('.view-cube')!;
+  const updateCubeLabels = createCubeLabels(viewCube);
   const cubeCorners = Array.from(root.querySelectorAll<HTMLElement>('.cube-corner'));
   const updateCamera = () => {
     cameraYaw = Math.atan2(cameraDirection.x, cameraDirection.y) * 180 / Math.PI;
@@ -255,9 +257,11 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     camera.setPosition(cameraTarget.clone().add(cameraDirection.clone().mulScalar(cameraDistance)));
     camera.lookAt(cameraTarget, cameraUp);
     const cameraRight = new pc.Vec3().cross(cameraUp, cameraDirection).normalize();
-    const cubeTransform = `matrix3d(${cameraRight.x},${-cameraUp.x},${cameraDirection.x},0,${cameraRight.y},${-cameraUp.y},${cameraDirection.y},0,${cameraRight.z},${-cameraUp.z},${cameraDirection.z},0,0,0,0,1)`;
-    const inverseCubeTransform = `matrix3d(${cameraRight.x},${cameraRight.y},${cameraRight.z},0,${-cameraUp.x},${-cameraUp.y},${-cameraUp.z},0,${cameraDirection.x},${cameraDirection.y},${cameraDirection.z},0,0,0,0,1)`;
+    const cubeUp = new pc.Vec3().cross(cameraDirection, cameraRight).normalize();
+    const cubeTransform = `matrix3d(${cameraRight.x},${-cubeUp.x},${cameraDirection.x},0,${-cameraRight.y},${cubeUp.y},${-cameraDirection.y},0,${cameraRight.z},${-cubeUp.z},${cameraDirection.z},0,0,0,0,1)`;
+    const inverseCubeTransform = `matrix3d(${cameraRight.x},${-cameraRight.y},${cameraRight.z},0,${-cubeUp.x},${cubeUp.y},${-cubeUp.z},0,${cameraDirection.x},${-cameraDirection.y},${cameraDirection.z},0,0,0,0,1)`;
     viewCube.style.transform = cubeTransform;
+    updateCubeLabels();
     cubeCorners.forEach(corner => {
       const [x, y, z] = corner.dataset.direction!.split(',').map(Number);
       corner.style.transform = `translate3d(${x * 30}px, ${y * -30}px, ${z * 30}px) ${inverseCubeTransform}`;

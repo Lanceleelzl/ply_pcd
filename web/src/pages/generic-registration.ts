@@ -1,9 +1,12 @@
 import * as pc from 'playcanvas';
+import { CoordinateQuery } from '../coordinate-query';
+import type { XYZ } from '../coordinate-math';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { GaussianClipController } from '../gaussian-clipping';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
+import { createCubeLabels } from '../cube-labels';
 
 type Matrix4 = number[][];
 type ModelId = 'a' | 'b';
@@ -118,7 +121,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           <section id="result" class="result" hidden><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-result" class="full-width">复制最终业务矩阵</button><details><summary>查看反向矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向矩阵</button></details></section>
         </section>
       </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置粗配准</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：${session.gaussian_a_url ? '显示原高斯' : '无高斯数据'}</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：${session.gaussian_b_url ? '显示原高斯' : '无高斯数据'}</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
+      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
           <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
           <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
@@ -142,6 +145,11 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const keyboard = new pc.Keyboard(window);
   const application = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), keyboard });
   application.setCanvasResolution(pc.RESOLUTION_AUTO); application.start();
+  const viewportElement = canvas.parentElement!;
+  viewportElement.style.minHeight = '0';
+  viewportElement.style.overflow = 'hidden';
+  const viewportResize = new ResizeObserver(() => application.resizeCanvas(viewportElement.clientWidth, viewportElement.clientHeight));
+  viewportResize.observe(viewportElement);
   application.scene.gsplat.alphaClip = 0.1;
   const camera = new pc.Entity('Camera');
   camera.addComponent('camera', { clearColor: new pc.Color(0.035, 0.055, 0.085), farClip: 100000, toneMapping: pc.TONEMAP_ACES });
@@ -202,13 +210,16 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   };
   setDirectionFromAngles(135, 24);
   const viewCube = root.querySelector<HTMLElement>('.view-cube')!;
+  const updateCubeLabels = createCubeLabels(viewCube);
   const cubeCorners = Array.from(root.querySelectorAll<HTMLElement>('.cube-corner'));
   const updateCamera = () => {
     camera.setPosition(cameraTarget.clone().add(cameraDirection.clone().mulScalar(cameraDistance)));
     camera.lookAt(cameraTarget, cameraUp);
     const cameraRight = new pc.Vec3().cross(cameraUp, cameraDirection).normalize();
-    viewCube.style.transform = `matrix3d(${cameraRight.x},${-cameraUp.x},${cameraDirection.x},0,${cameraRight.y},${-cameraUp.y},${cameraDirection.y},0,${cameraRight.z},${-cameraUp.z},${cameraDirection.z},0,0,0,0,1)`;
-    const inverseCubeTransform = `matrix3d(${cameraRight.x},${cameraRight.y},${cameraRight.z},0,${-cameraUp.x},${-cameraUp.y},${-cameraUp.z},0,${cameraDirection.x},${cameraDirection.y},${cameraDirection.z},0,0,0,0,1)`;
+    const cubeUp = new pc.Vec3().cross(cameraDirection, cameraRight).normalize();
+    viewCube.style.transform = `matrix3d(${cameraRight.x},${-cubeUp.x},${cameraDirection.x},0,${-cameraRight.y},${cubeUp.y},${-cameraDirection.y},0,${cameraRight.z},${-cubeUp.z},${cameraDirection.z},0,0,0,0,1)`;
+    updateCubeLabels();
+    const inverseCubeTransform = `matrix3d(${cameraRight.x},${-cameraRight.y},${cameraRight.z},0,${-cubeUp.x},${cubeUp.y},${-cubeUp.z},0,${cameraDirection.x},${-cameraDirection.y},${cameraDirection.z},0,0,0,0,1)`;
     cubeCorners.forEach(corner => {
       const [x, y, z] = corner.dataset.direction!.split(',').map(Number);
       corner.style.transform = `translate3d(${x * 30}px, ${y * -30}px, ${z * 30}px) ${inverseCubeTransform}`;
@@ -253,6 +264,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   let clippingModeValue: 'off' | 'axis' | 'box' = 'off';
   let clippingInteractionActive = false;
   let running = false;
+  let queryActive = false;
+  let coordinateQuery: CoordinateQuery | null = null;
   let gizmoTransforming = false;
   let translateGizmoHovered = false; let rotateGizmoHovered = false;
   let translateGizmoTransforming = false; let rotateGizmoTransforming = false;
@@ -311,10 +324,11 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const fixedEntity = () => entities[effectiveMoving() === 'a' ? 'b' : 'a'];
   const attach = () => {
     translate.detach(); rotate.detach(); clipTranslate.detach(); clipRotate.detach();
+    coordinateQuery?.setClippingActive(clippingInteractionActive);
     if (clippingInteractionActive && clippingModeValue === 'box' && clipHelperVisible.checked) {
       clipTranslate.attach(clipBox);
       clipRotate.attach(clipBox);
-    } else if (!clippingInteractionActive && !running && modelVisible[effectiveMoving()]) {
+    } else if (!queryActive && !clippingInteractionActive && !running && modelVisible[effectiveMoving()]) {
       translate.attach(movingEntity());
       rotate.attach(movingEntity());
     }
@@ -328,7 +342,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     modelVisible[model] = visible;
     entities[model].enabled = visible;
     visibilityButtons[model].classList.toggle('active', visible);
-    visibilityButtons[model].textContent = `${model.toUpperCase()}：${visible ? '显示' : '已隐藏'}`;
+    visibilityButtons[model].textContent = `${model.toUpperCase()}：${visible ? '显示' : '隐藏'}`;
     visibilityButtons[model].setAttribute('aria-pressed', String(visible));
     attach();
   };
@@ -375,7 +389,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     display.active = false;
     entities[model].render!.enabled = true;
     const button = gaussianButtons[model];
-    button.textContent = `${model.toUpperCase()}：显示原高斯`;
+    button.textContent = `${model.toUpperCase()}：高斯`;
     button.classList.remove('active');
     button.setAttribute('aria-pressed', 'false');
     button.title = `加载模型 ${model.toUpperCase()} 原始 Gaussian（${formatBytes(gaussianBytes[model])}）`;
@@ -394,7 +408,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         attach();
         return;
       }
-      button.textContent = `${model.toUpperCase()}：Gaussian 加载中…`;
+      button.textContent = `${model.toUpperCase()}：高斯`;
+      button.title = '正在加载原始 Gaussian…';
       const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
         url,
         filename: `model-${model}-original-gaussian.ply`,
@@ -414,7 +429,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       syncClipState(true);
       display.active = true;
       entities[model].render!.enabled = false;
-      button.textContent = `${model.toUpperCase()}：切回中心点`;
+      button.textContent = `${model.toUpperCase()}：点云`;
       button.classList.add('active');
       button.setAttribute('aria-pressed', 'true');
       button.title = `释放模型 ${model.toUpperCase()} Gaussian 并显示中心点`;
@@ -467,7 +482,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     root.querySelector<HTMLElement>('#badge')!.textContent = `移动 ${moving.toUpperCase()}（黄色）　固定 ${fixed.toUpperCase()}（灰色）`;
     attach();
   };
-  movingSelect.addEventListener('change', () => refreshRoles(true));
+  movingSelect.addEventListener('change', () => { coordinateQuery?.invalidate(); refreshRoles(true); });
   outputDirection.addEventListener('change', () => { root.querySelector<HTMLElement>('#result')!.hidden = true; });
   refreshRoles();
 
@@ -579,7 +594,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   }
   clippingHandles = new ClippingHandles(
     application, camera, canvas, clipBox, originalBounds.min, originalBounds.max,
-    () => clippingModeValue, getAxisClipState, setAxisBoundary,
+    () => queryActive && !clippingInteractionActive ? 'off' : clippingModeValue, getAxisClipState, setAxisBoundary,
     () => clipHelperVisible.checked,
     active => { gizmoTransforming = active; if (active) navigation = null; },
   );
@@ -705,6 +720,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   }, { capture: true });
   canvas.addEventListener('pointerleave', () => clippingHandles?.pointerLeave());
   canvas.addEventListener('pointerdown', event => {
+    if (coordinateQuery?.pointerDown(event)) { event.preventDefault(); event.stopImmediatePropagation(); navigation = null; return; }
+    if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) { navigation = null; return; }
     if (clippingHandles?.pointerDown(event)) { event.preventDefault(); event.stopImmediatePropagation(); navigation = null; return; }
     const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
     const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
@@ -719,7 +736,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     canvas.style.cursor = '';
   });
   window.addEventListener('pointermove', event => {
-    if (!navigation || gizmoTransforming) return; const dx = event.clientX - lastX; const dy = event.clientY - lastY; lastX = event.clientX; lastY = event.clientY;
+    if (!navigation || gizmoTransforming || coordinateQuery?.dragging) return; const dx = event.clientX - lastX; const dy = event.clientY - lastY; lastX = event.clientX; lastY = event.clientY;
     if (navigation === 'orbit') orbitCamera(dx * 180 / Math.max(1, canvas.clientWidth), dy * 180 / Math.max(1, canvas.clientHeight));
     else {
       const worldPerPixel = camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC
@@ -761,6 +778,18 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const cancelButton = root.querySelector<HTMLButtonElement>('#cancel-registration')!;
   const progressCheckbox = root.querySelector<HTMLInputElement>('#show-registration-progress')!;
   const iterationProgress = root.querySelector<HTMLElement>('#iteration-progress')!;
+  const progressToolbar = root.querySelector<HTMLElement>('.viewport-toolbar')!;
+  const positionProgress = () => {
+    const top = progressToolbar.offsetTop + progressToolbar.offsetHeight + 8;
+    iterationProgress.style.top = `${top}px`;
+    const panelTop = top + (iterationProgress.hidden ? 0 : iterationProgress.offsetHeight + 8);
+    clippingPanel.style.top = `${panelTop}px`;
+    clippingPanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
+  };
+  const progressResize = new ResizeObserver(positionProgress);
+  progressResize.observe(progressToolbar);
+  progressResize.observe(iterationProgress);
+  positionProgress();
   const registrationControls = [outputDirection, movingSelect, resetButton,
     ...Object.values(inputs),
     root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
@@ -794,6 +823,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   progressCheckbox.addEventListener('change', () => {
     if (progressCheckbox.checked) {
       iterationProgress.hidden = false;
+      if (latestProgressIteration === 0) iterationProgress.textContent = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
+      positionProgress();
       if (running) startProgressDisplay();
     } else {
       stopProgressDisplay();
@@ -802,15 +833,40 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   });
   const setRunning = (value: boolean) => {
     running = value;
-    registerButton.disabled = value;
+    registerButton.disabled = value || queryActive;
     registerButton.classList.toggle('running', value);
     registerButton.textContent = value ? 'ICP 配准中' : '执行 ICP 精配准';
     cancelButton.hidden = !value;
     cancelButton.disabled = false;
     cancelButton.textContent = '终止任务';
-    registrationControls.forEach(control => { control.disabled = value; });
+    registrationControls.forEach(control => { control.disabled = value || queryActive; });
+    progressCheckbox.disabled = queryActive;
     attach();
   };
+  coordinateQuery = new CoordinateQuery({
+    root, app: application, camera, canvas, entities, clouds, sessionId,
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, diagonal: bounds.diagonal,
+    lock: active => {
+      queryActive = active; navigation = null;
+      registrationControls.forEach(control => { control.disabled = active || running; });
+      registerButton.disabled = active || running;
+      registerButton.title = active ? '请先返回配准编辑，再执行 ICP' : '';
+      progressCheckbox.disabled = active;
+      clippingPanel.hidden = true; clippingInteractionActive = false;
+      clippingToggle.disabled = false;
+      attach();
+    },
+    visiblePoint: (model, point) => {
+      if (clippingMode.value === 'off' || (clippingScope.value !== 'both' && clippingScope.value !== model)) return true;
+      if (clippingMode.value === 'box') {
+        const local = worldToClipBox.transformPoint(point);
+        return Math.max(Math.abs(local.x), Math.abs(local.y), Math.abs(local.z)) <= 0.5;
+      }
+      return point.x >= clipMinState.x && point.x <= clipMaxState.x
+        && point.y >= clipMinState.y && point.y <= clipMaxState.y
+        && point.z >= clipMinState.z && point.z <= clipMaxState.z;
+    },
+  });
   cancelButton.addEventListener('click', async () => {
     cancelRequested = true;
     cancelButton.disabled = true;
@@ -827,6 +883,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     }
   });
   registerButton.addEventListener('click', async () => {
+    if (running || queryActive) return;
+    coordinateQuery?.invalidate();
     const log = root.querySelector<HTMLElement>('#job-status')!;
     activeJobId = ''; activeProgressUrl = ''; cancelRequested = false; lastProgressMatrix = null; latestProgressIteration = 0;
     iterationProgress.hidden = !progressCheckbox.checked;
@@ -861,6 +919,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
           progressSource?.close(); progressSource = null;
           applyMatrix(movingEntity(), result.moving_local_to_fixed_local);
+          coordinateQuery?.setResult(result, activeJobId);
           const matrix = result.recommended_matrix.value; finalText = matrixText(matrix);
           root.querySelector<HTMLElement>('#result')!.hidden = false;
           root.querySelector<HTMLElement>('#result-title')!.textContent = `最终业务矩阵：${result.recommended_matrix.name}`;

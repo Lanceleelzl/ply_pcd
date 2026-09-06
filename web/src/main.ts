@@ -1,4 +1,5 @@
 import './style.css';
+import './workspace-theme.css';
 import { renderHome } from './pages/home';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;

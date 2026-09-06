@@ -1,0 +1,156 @@
+/* Shared visual rules, scoped to the registration workspace. */
+.integrated-editor {
+  --ui-body: 13px;
+  --ui-small: 12px;
+  --ui-heading: 16px;
+  --ui-control: 36px;
+  --ui-gap: 8px;
+  --ui-section: 12px;
+  --ui-padding: 16px;
+  --ui-border: #42516a;
+  --ui-muted: #a9b7ca;
+  --ui-text: #e4ecf6;
+  font: var(--ui-body)/1.5 Inter, "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--ui-text);
+}
+.integrated-editor * { scrollbar-width: thin; scrollbar-color: #52617a #172131; }
+
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) {
+  padding: var(--ui-padding);
+  font-size: var(--ui-body);
+  line-height: 1.5;
+}
+.integrated-editor :is(.workflow-step, .clipping-panel, .coordinate-panel) {
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: #111c2bf5;
+}
+.integrated-editor .workflow-step { padding: var(--ui-padding); margin-bottom: var(--ui-section); }
+.integrated-editor .workflow-title { gap: 12px; margin-bottom: 16px; align-items: center; }
+.integrated-editor .workflow-title h1 { font-size: 18px; line-height: 1.4; margin: 0 0 4px; }
+.integrated-editor :is(.workflow-step h2, .clipping-title strong, .coordinate-title strong) {
+  font-size: var(--ui-heading); font-weight: 600; line-height: 1.5;
+}
+.integrated-editor .workflow-step h2 { margin: 0 0 12px; gap: 8px; }
+.integrated-editor .workflow-step h2 span { flex: 0 0 24px; width: 24px; height: 24px; font-size: 12px; }
+.integrated-editor :is(.workflow-step h3, .viewport-toolbar strong, .coordinate-panel legend) {
+  font-size: var(--ui-body); font-weight: 600; line-height: 1.5;
+}
+.integrated-editor .workflow-step h3 { margin: 12px 0 8px; }
+.integrated-editor :is(.workflow-step p, .clipping-panel p, .coordinate-panel p) { font-size: var(--ui-body); line-height: 1.6; margin: 8px 0 12px; }
+.integrated-editor :is(.step-hint, .range-risk, .gaussian-status, .workflow-title small, .clipping-panel p, .coordinate-panel small, .coordinate-message, .viewport-help, .progress-option) {
+  font-size: var(--ui-small); line-height: 1.6;
+}
+.integrated-editor :is(.step-hint, .workflow-title small, .clipping-panel p, .coordinate-panel small) { color: var(--ui-muted); }
+
+/* Exclude the navigation cube: its faces and corners have geometric sizes. */
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button,
+.integrated-editor .projection-switch button {
+  min-height: var(--ui-control);
+  padding: 7px 12px;
+  font: 500 var(--ui-body)/20px Inter, "Microsoft YaHei", system-ui, sans-serif;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: #25344a;
+  color: var(--ui-text);
+  white-space: normal;
+  cursor: pointer;
+}
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button:not(:disabled):hover {
+  border-color: #84a0be; background: #30435c;
+}
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button.active,
+.integrated-editor .projection-switch button.active {
+  border-color: #4dbb92; background: #24775f; color: #fff;
+}
+.integrated-editor .registration-actions .cancel-action { background: #48252b; border-color: #a94f58; color: #ffd9dd; }
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button:disabled {
+  opacity: .5; color: #91a0b5; background: #1a2433; border-color: #3b4658; cursor: not-allowed;
+}
+.integrated-editor :is(button, input, select, summary):focus-visible { outline: 2px solid #78b8f2; outline-offset: 2px; }
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) :is(input[type="number"], select) {
+  min-width: 0; width: 100%; min-height: var(--ui-control); margin-top: 0;
+  padding: 7px 8px; border: 1px solid var(--ui-border); border-radius: 6px;
+  background: #0f1724; color: var(--ui-text); font-size: var(--ui-body); line-height: 20px;
+}
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) input[type="number"] {
+  font-family: Consolas, "SFMono-Regular", monospace; font-variant-numeric: tabular-nums;
+}
+.integrated-editor :is(input, select):disabled { opacity: .5; cursor: not-allowed; }
+.integrated-editor input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: #4dbb92; flex-shrink: 0; vertical-align: middle; }
+.integrated-editor :is(.parameter-label, .icp-grid label, .field-grid label) {
+  display: grid; gap: 6px; color: var(--ui-muted); font-size: var(--ui-body);
+}
+.integrated-editor :is(.role-grid, .icp-grid, .field-grid) { gap: 8px; }
+.integrated-editor .role-grid { gap: 12px; margin: 0 0 12px; }
+.integrated-editor .icp-grid { margin: 12px 0; }
+.integrated-editor .progress-option { gap: 8px; margin: 12px 0; }
+.integrated-editor .registration-actions { gap: 8px; }
+.integrated-editor :is(.matrix, .status, .viewport-progress, #result-metrics, .coordinate-message) {
+  font: var(--ui-small)/1.6 Consolas, "SFMono-Regular", monospace;
+  font-variant-numeric: tabular-nums;
+}
+.integrated-editor .matrix { padding: 12px; margin: 12px 0; border: 1px solid #29394e; border-radius: 6px; }
+.integrated-editor :is(.status, #result-metrics) { margin: 12px 0; color: var(--ui-muted); }
+.integrated-editor summary { font-size: var(--ui-body); line-height: 1.6; margin-top: 12px; cursor: pointer; color: var(--ui-muted); }
+.integrated-editor .result button { margin-top: 8px; }
+
+.integrated-editor .viewport-toolbar { gap: 8px; padding: 8px; align-items: center; }
+.integrated-editor .model-visibility { flex-wrap: wrap; gap: 8px; margin-left: 0; min-width: 0; }
+.integrated-editor .viewport-toolbar button { flex-shrink: 0; }
+.integrated-editor :is(.clipping-panel, .coordinate-panel) { width: min(360px, calc(100% - 24px)); }
+.integrated-editor :is(.clipping-title, .coordinate-title) { gap: 12px; margin-bottom: 12px; align-items: center; }
+.integrated-editor .clipping-title button { width: 36px; padding: 0; font-size: 18px; }
+.integrated-editor .clipping-panel > label { font-size: var(--ui-body); gap: 8px; margin: 12px 0; grid-template-columns: 78px minmax(0, 1fr); }
+.integrated-editor .axis-clipping-grid { grid-template-columns: 18px 48px minmax(0, 1fr) 48px minmax(0, 1fr); gap: 8px; margin: 12px 0; font-size: var(--ui-small); }
+.integrated-editor .axis-clipping-grid label { display: flex; gap: 4px; align-items: center; }
+.integrated-editor .clip-tool-row { gap: 8px; margin: 12px 0; }
+.integrated-editor .clip-helper-option { gap: 8px; }
+.integrated-editor .coordinate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.integrated-editor .coordinate-actions + .coordinate-actions { margin-top: 12px; }
+.integrated-editor .coordinate-panel fieldset { margin: 16px 0; padding: 12px; border-color: var(--ui-border); }
+.integrated-editor .coordinate-panel fieldset label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; margin: 8px 0; font-size: var(--ui-body); }
+.integrated-editor .coordinate-panel fieldset button { width: 100%; margin-top: 4px; }
+.integrated-editor .coordinate-panel > button { margin-bottom: 12px; }
+.integrated-editor .coordinate-panel small { display: block; margin-top: 12px; }
+.integrated-editor .viewport-help { padding: 8px 12px; }
+.integrated-editor .projection-switch { gap: 8px; }
+.integrated-editor .projection-switch button { min-height: 32px; padding: 5px 8px; }
+
+/* Keep all groups on one row; smaller viewports can scroll horizontally. */
+.integrated-editor .viewport-toolbar { column-gap: 8px; flex-wrap: nowrap; overflow-x: auto; }
+.integrated-editor .viewport-tool-group { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; flex-wrap: nowrap; }
+.integrated-editor .viewport-tool-group button { white-space: nowrap; padding-inline: 8px; }
+.integrated-editor .viewport-tool-group + .viewport-tool-group { border-left: 1px solid var(--ui-border); padding-left: 12px; }
+.integrated-editor .tool-group-label { font-size: 12px; color: var(--ui-muted); white-space: nowrap; }
+.integrated-editor .gaussian-toggle.available:not(.active) { border-color: #7183b5; background: #26314d; }
+
+/* Side-by-side original coordinates keep the full query within desktop height. */
+.integrated-editor .coordinate-panel { width: min(460px, calc(100% - 24px)); top: 156px; max-height: calc(100% - 168px); padding: 12px; }
+.integrated-editor .coordinate-title { margin-bottom: 8px; }
+.integrated-editor .coordinate-panel > button { margin-bottom: 0; }
+.integrated-editor .coordinate-panel > p { margin: 8px 0; }
+.integrated-editor .coordinate-actions + .coordinate-actions { margin-top: 8px; }
+.integrated-editor .coordinate-point-tools { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 8px; }
+.integrated-editor .coordinate-point-tools button { padding-inline: 6px; }
+.integrated-editor .viewport-tool-group button.active:hover { background: #2b8b6f; border-color: #66d6ad; }
+.integrated-editor .coordinate-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 8px 0; }
+.integrated-editor .coordinate-fields fieldset { min-width: 0; margin: 0; padding: 8px; }
+.integrated-editor .coordinate-fields legend { font-size: 12px; padding: 0 4px; }
+.integrated-editor .coordinate-fields fieldset:first-child legend { color: #ff9992; }
+.integrated-editor .coordinate-fields fieldset:last-child legend { color: #88bdff; }
+.integrated-editor .coordinate-fields fieldset label { margin: 0 0 8px; gap: 4px; grid-template-columns: 14px minmax(0, 1fr); }
+.integrated-editor .coordinate-fields fieldset button { margin-top: 0; }
+.integrated-editor .coordinate-panel small { margin-top: 8px; }
+.integrated-editor .coordinate-message:empty { display: none; }
+
+.integrated-editor .view-gizmo { width: 124px; padding: 8px; border-radius: 10px; background: #111c2bf0; box-shadow: 0 4px 16px #0003; }
+.integrated-editor .view-cube-scene { height: 96px; perspective: 320px; }
+.integrated-editor .view-cube .cube-face { padding: 0; font: 600 16px/1 system-ui, sans-serif; backface-visibility: hidden; border-radius: 2px; border: 1px solid #8ca0b8; box-shadow: inset 0 0 0 3px #111c2b30; }
+.integrated-editor .view-cube :is(.face-x, .face-nx) { color: #ffb2ac; background: linear-gradient(135deg, #63434c, #3d303b); }
+.integrated-editor .view-cube :is(.face-y, .face-ny) { color: #a3e3bf; background: linear-gradient(135deg, #35554f, #253e3a); }
+.integrated-editor .view-cube :is(.face-z, .face-nz) { color: #b0d2ff; background: linear-gradient(135deg, #3e5877, #283c56); }
+.integrated-editor .view-cube .cube-face:hover { background: #446887; border-color: #d6e9ff; color: #fff; }
+.integrated-editor .view-cube .cube-corner { width: 10px; height: 10px; left: 25px; top: 25px; padding: 0; border: 1px solid #b1c4da; box-shadow: 0 1px 3px #0008; }
+.integrated-editor .projection-switch { gap: 4px; }
+.integrated-editor .projection-switch button { min-height: 30px; padding: 4px 6px; font-size: 12px; }
