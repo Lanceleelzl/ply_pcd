@@ -509,7 +509,10 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   refreshRoles();
 
   const readBusinessTransform = (model: ModelId): TransformParameters => {
-    const values = (kind: keyof TransformParameters) => Array.from(root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`)).map(input => Number(input.value)) as XYZ;
+    const values = (kind: keyof TransformParameters) => Array.from(root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`)).map(input => {
+      if (input.validity.badInput) throw new Error('参数必须是有效数字');
+      return input.value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(input.value);
+    }) as XYZ;
     return { translation: values('translation'), rotation_degrees: values('rotation_degrees'), scale: values('scale') };
   };
   const renderBusinessMatrix = (model: ModelId) => {

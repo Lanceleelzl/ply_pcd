@@ -400,8 +400,9 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
                 if not result_path.is_file():
                     status.update(status="failed", error_code="missing_result", error="Worker produced no result")
                 else:
-                    if status.get("manual_session_id"):
-                        session_status = _read_status(_manual_session_directory(status["manual_session_id"]))
+                    session_status = (_read_status(_manual_session_directory(status["manual_session_id"]))
+                                      if status.get("manual_session_id") else {})
+                    if session_status.get("api_version") == "v2":
                         transforms = _business_transforms(session_status)
                         pa, pb = _transform_matrix(transforms["a"]), _transform_matrix(transforms["b"])
                         result = json.loads(result_path.read_text(encoding="utf-8"))

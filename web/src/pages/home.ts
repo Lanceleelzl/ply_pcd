@@ -124,7 +124,10 @@ export function renderHome(root: HTMLElement): void {
   const status = root.querySelector<HTMLElement>('#status')!;
   const historyList = root.querySelector<HTMLElement>('#history-list')!;
   const readTransform = (model: 'a' | 'b'): TransformParameters => {
-    const values = (kind: keyof TransformParameters) => Array.from(form.querySelectorAll<HTMLInputElement>(`[data-transform-model="${model}"][data-transform-kind="${kind}"]`)).map(input => Number(input.value));
+    const values = (kind: keyof TransformParameters) => Array.from(form.querySelectorAll<HTMLInputElement>(`[data-transform-model="${model}"][data-transform-kind="${kind}"]`)).map(input => {
+      if (input.validity.badInput) throw new Error('参数必须是有效数字');
+      return input.value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(input.value);
+    });
     return { translation: values('translation') as [number,number,number], rotation_degrees: values('rotation_degrees') as [number,number,number], scale: values('scale') as [number,number,number] };
   };
   form.addEventListener('input', event => {
