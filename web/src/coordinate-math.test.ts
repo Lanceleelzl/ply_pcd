@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { offsetXYZ, transformXYZ, type XYZ } from './coordinate-math.ts';
+import { identityMatrix, invertAffine, multiplyMatrices, offsetXYZ, transformParametersMatrix, transformXYZ, type XYZ } from './coordinate-math.ts';
 
 const aToB = [[0, -1, 0, 500000], [1, 0, 0, 4000000], [0, 0, 1, -12], [0, 0, 0, 1]];
 const bToA = [[0, 1, 0, -4000000], [-1, 0, 0, 500000], [0, 0, 1, 12], [0, 0, 0, 1]];
@@ -11,3 +11,10 @@ assert.deepEqual(offsetXYZ(offsetXYZ(a, origin), origin, -1), a);
 const yToZ = [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]];
 assert.deepEqual(transformXYZ(yToZ, [0, 10, 0]), [0, 0, 10]);
 console.log('Coordinate math: rotation, inverse, large origin and axis direction passed');
+const preset = transformParametersMatrix({ translation: [2, 3, 4], rotation_degrees: [-90, 0, 0], scale: [1, 2, 3] });
+const business = transformXYZ(preset, [1, 2, 3]);
+assert.ok(business.every((value, index) => Math.abs(value - [3, 12, 0][index]) < 1e-10));
+const roundTrip = transformXYZ(invertAffine(preset), business);
+assert.ok(roundTrip.every((value, index) => Math.abs(value - [1, 2, 3][index]) < 1e-10));
+assert.ok(multiplyMatrices(identityMatrix(), preset).flat().every((value, index) => Math.abs(value - preset.flat()[index]) < 1e-12));
+console.log('Business transform: T * Rz * Ry * Rx * S and inverse passed');

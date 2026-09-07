@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../coordinate-query';
-import type { XYZ } from '../coordinate-math';
+import { identityMatrix, invertAffine, multiplyMatrices, transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { GaussianClipController } from '../gaussian-clipping';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
@@ -21,6 +21,7 @@ interface SessionStatus {
   gaussian_a_url?: string;
   gaussian_b_url?: string;
   inputs?: { model_a_bytes?: number; model_b_bytes?: number };
+  business_transforms?: Record<ModelId, TransformParameters>;
   metadata?: {
     recommended_moving_model: ModelId;
     models: Record<ModelId, {
@@ -47,7 +48,7 @@ interface IterationEvent {
   moving_local_to_fixed_local: Matrix4;
 }
 
-const identity = (): Matrix4 => [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+const identity = identityMatrix;
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
 const formatBytes = (bytes?: number) => bytes
@@ -65,7 +66,14 @@ function applyMatrix(entity: pc.Entity, matrix: Matrix4): void {
   transform.set(Array.from({ length: 16 }, (_, index) => matrix[index % 4][Math.floor(index / 4)]));
   entity.setLocalPosition(transform.getTranslation());
   entity.setLocalEulerAngles(transform.getEulerAngles());
+  entity.setLocalScale(transform.getScale());
 }
+
+const translationMatrix = (value: XYZ): Matrix4 => [[1,0,0,value[0]],[0,1,0,value[1]],[0,0,1,value[2]],[0,0,0,1]];
+const transformEditor = (model: ModelId, value: TransformParameters): string => {
+  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label>${axis}<input type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"></label>`).join('')}</div>`;
+  return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
+};
 
 function boundsOf(a: PreviewCloud, b: PreviewCloud): { center: pc.Vec3; diagonal: number } {
   const min = new pc.Vec3(Math.min(a.min.x, b.min.x), Math.min(a.min.y, b.min.y), Math.min(a.min.z, b.min.z));
@@ -96,11 +104,13 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   ]);
   const infoA = session.metadata!.models.a;
   const infoB = session.metadata!.models.b;
+  const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
+  const businessTransforms: Record<ModelId, TransformParameters> = session.business_transforms ?? { a: defaultTransform(), b: defaultTransform() };
   root.innerHTML = `
     <main class="editor integrated-editor"><div class="workspace integrated-workspace">
       <aside class="panel workflow-panel">
         <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
-        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><p id="gaussian-status" class="gaussian-status" hidden></p></section>
+        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><details class="business-transform-editor"><summary>业务坐标预变换</summary><p class="business-transform-note">文件坐标 → 业务坐标。修改后需要重新配准。</p>${transformEditor('a',businessTransforms.a)}${transformEditor('b',businessTransforms.b)}<div class="business-transform-actions"><button id="save-business-transforms">应用预变换</button><button id="reset-business-transforms">恢复默认</button></div><p id="business-transform-status" class="business-transform-note"></p></details><p id="gaussian-status" class="gaussian-status" hidden></p></section>
         <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
           <div class="role-grid">
             <label class="parameter-label">最终业务矩阵<select id="output-direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
@@ -194,6 +204,18 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     a: { entity: null, asset: null, clipController: null, active: false, loading: false },
     b: { entity: null, asset: null, clipController: null, active: false, loading: false },
   };
+  let businessMatrices: Record<ModelId, Matrix4> = { a: transformParametersMatrix(businessTransforms.a), b: transformParametersMatrix(businessTransforms.b) };
+  let baseDisplayMatrices: Record<ModelId, Matrix4> = { a: identity(), b: identity() };
+  const rebuildBaseDisplays = () => {
+    businessMatrices.a = transformParametersMatrix(businessTransforms.a); businessMatrices.b = transformParametersMatrix(businessTransforms.b);
+    const origins = { a: infoA.origin as XYZ, b: infoB.origin as XYZ };
+    const anchor = transformXYZ(businessMatrices.a, origins.a);
+    const displayShift = translationMatrix(anchor.map(value => -value) as XYZ);
+    baseDisplayMatrices.a = multiplyMatrices(displayShift, multiplyMatrices(businessMatrices.a, translationMatrix(origins.a)));
+    baseDisplayMatrices.b = multiplyMatrices(displayShift, multiplyMatrices(businessMatrices.b, translationMatrix(origins.b)));
+    applyMatrix(entityA, baseDisplayMatrices.a); applyMatrix(entityB, baseDisplayMatrices.b);
+  };
+  rebuildBaseDisplays();
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const cameraTarget = bounds.center.clone();
@@ -465,7 +487,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
-    if (reset) { entityA.setLocalPosition(0, 0, 0); entityA.setLocalEulerAngles(0, 0, 0); entityB.setLocalPosition(0, 0, 0); entityB.setLocalEulerAngles(0, 0, 0); }
+    if (reset) { applyMatrix(entityA, baseDisplayMatrices.a); applyMatrix(entityB, baseDisplayMatrices.b); }
     const recolor = (entity: pc.Entity, color: pc.Color) => entity.render!.meshInstances.forEach(instance => {
       (instance.material as PointCloudMaterial).setPointColor(color);
     });
@@ -485,6 +507,38 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   movingSelect.addEventListener('change', () => { coordinateQuery?.invalidate(); refreshRoles(true); });
   outputDirection.addEventListener('change', () => { root.querySelector<HTMLElement>('#result')!.hidden = true; });
   refreshRoles();
+
+  const readBusinessTransform = (model: ModelId): TransformParameters => {
+    const values = (kind: keyof TransformParameters) => Array.from(root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`)).map(input => Number(input.value)) as XYZ;
+    return { translation: values('translation'), rotation_degrees: values('rotation_degrees'), scale: values('scale') };
+  };
+  const renderBusinessMatrix = (model: ModelId) => {
+    const value = readBusinessTransform(model);
+    root.querySelector<HTMLElement>(`[data-business-matrix="${model}"]`)!.textContent = matrixText(transformParametersMatrix(value));
+  };
+  root.querySelectorAll<HTMLInputElement>('[data-business-model]').forEach(input => input.addEventListener('input', () => {
+    try { renderBusinessMatrix(input.dataset.businessModel as ModelId); } catch { /* apply reports invalid values */ }
+  }));
+  const setBusinessInputs = (model: ModelId, value: TransformParameters) => {
+    (['translation','rotation_degrees','scale'] as const).forEach(kind => root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`).forEach((input,index) => { input.value = String(value[kind][index]); }));
+    renderBusinessMatrix(model);
+  };
+  root.querySelector('#reset-business-transforms')!.addEventListener('click', () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); });
+  root.querySelector('#save-business-transforms')!.addEventListener('click', async () => {
+    const message = root.querySelector<HTMLElement>('#business-transform-status')!;
+    try {
+      const next = { a: readBusinessTransform('a'), b: readBusinessTransform('b') };
+      for (const value of Object.values(next)) {
+        if ([...value.translation,...value.rotation_degrees,...value.scale].some(number => !Number.isFinite(number))) throw new Error('参数必须是有效数字');
+        if (value.scale.some(number => number <= 0)) throw new Error('缩放必须大于 0');
+      }
+      const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }) });
+      const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
+      businessTransforms.a = next.a; businessTransforms.b = next.b; rebuildBaseDisplays(); refreshRoles(true);
+      coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
+      message.textContent = '已应用。粗配准及旧 ICP 结果已失效，请重新配准。'; fitCamera();
+    } catch (error) { message.textContent = `应用失败：${String(error)}`; }
+  });
 
   const clipMinState = new pc.Vec3(); const clipMaxState = new pc.Vec3(); const worldToClipBox = new pc.Mat4();
   const clipCornerLocal: pc.Vec3[] = []; const clipCornerWorld: pc.Vec3[] = [];
@@ -522,7 +576,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
     const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
     ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
-    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(entityMatrix(movingEntity()));
+    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(multiplyMatrices(invertAffine(entityMatrix(fixedEntity())), entityMatrix(movingEntity())));
     syncClipState();
     const currentClipMode = clippingMode.value;
     if (currentClipMode === 'box' && clipHelperVisible.checked && clippingHandles?.isBoxPresentationVisible()) {
@@ -543,7 +597,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const axisClipping = root.querySelector<HTMLElement>('#axis-clipping')!;
   const boxClipping = root.querySelector<HTMLElement>('#box-clipping')!;
   const clipHelperVisible = root.querySelector<HTMLInputElement>('#clip-helper-visible')!;
-  resetButton.addEventListener('click', () => { if (!running) applyMatrix(movingEntity(), identity()); });
+  resetButton.addEventListener('click', () => { if (!running) applyMatrix(movingEntity(), baseDisplayMatrices[effectiveMoving()]); });
   root.querySelector('#fit')!.addEventListener('click', fitCamera);
   clippingToggle.addEventListener('click', () => {
     clippingPanel.hidden = !clippingPanel.hidden;
@@ -792,6 +846,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   positionProgress();
   const registrationControls = [outputDirection, movingSelect, resetButton,
     ...Object.values(inputs),
+    ...Array.from(root.querySelectorAll<HTMLInputElement>('[data-business-model]')),
+    root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!,
     root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
     root.querySelector<HTMLInputElement>('#overlap')!, root.querySelector<HTMLInputElement>('#random-seed')!];
   let activeJobId = '';
@@ -815,7 +871,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       if (progress.iteration <= latestProgressIteration) return;
       latestProgressIteration = progress.iteration;
       lastProgressMatrix = progress.moving_local_to_fixed_local;
-      applyMatrix(movingEntity(), lastProgressMatrix);
+      applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), lastProgressMatrix));
       iterationProgress.textContent = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
     });
     progressSource.addEventListener('terminal', stopProgressDisplay);
@@ -845,7 +901,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   };
   coordinateQuery = new CoordinateQuery({
     root, app: application, camera, canvas, entities, clouds, sessionId,
-    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, diagonal: bounds.diagonal,
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices, baseDisplayMatrices, diagonal: bounds.diagonal,
     lock: active => {
       queryActive = active; navigation = null;
       registrationControls.forEach(control => { control.disabled = active || running; });
@@ -893,7 +949,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     try {
       const response = await fetch(`/api/v2/registration-sessions/${sessionId}/register`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          initial_moving_local_to_fixed_local: entityMatrix(movingEntity()), output_direction: outputDirection.value,
+          initial_moving_local_to_fixed_local: multiplyMatrices(invertAffine(entityMatrix(fixedEntity())), entityMatrix(movingEntity())), output_direction: outputDirection.value,
           moving_model: movingSelect.value, min_rms_decrease: Number((root.querySelector('#min-rms') as HTMLInputElement).value),
           sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value), overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
           random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
@@ -908,7 +964,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       while (true) {
         const status = await fetch(created.status_url).then(value => value.json()); log.textContent = `任务状态：${status.status}`;
         if (status.status === 'cancelled') {
-          if (lastProgressMatrix) applyMatrix(movingEntity(), lastProgressMatrix);
+          if (lastProgressMatrix) applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), lastProgressMatrix));
           log.textContent = lastProgressMatrix
             ? '任务已终止。视口停留在未收敛的中间姿态，该姿态不是有效业务矩阵，可继续粗调后重新执行。'
             : '任务已终止，可调整参数或粗配准后重新执行。';
@@ -918,7 +974,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         if (status.status === 'succeeded') {
           const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
           progressSource?.close(); progressSource = null;
-          applyMatrix(movingEntity(), result.moving_local_to_fixed_local);
+          applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), result.moving_local_to_fixed_local));
           coordinateQuery?.setResult(result, activeJobId);
           const matrix = result.recommended_matrix.value; finalText = matrixText(matrix);
           root.querySelector<HTMLElement>('#result')!.hidden = false;

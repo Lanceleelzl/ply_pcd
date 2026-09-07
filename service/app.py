@@ -57,6 +57,17 @@ class ModelRegistrationRequest(BaseModel):
     show_registration_progress: bool = False
 
 
+class TransformParameters(BaseModel):
+    translation: list[float] = [0.0, 0.0, 0.0]
+    rotation_degrees: list[float] = [0.0, 0.0, 0.0]
+    scale: list[float] = [1.0, 1.0, 1.0]
+
+
+class BusinessTransformsRequest(BaseModel):
+    model_a: TransformParameters
+    model_b: TransformParameters
+
+
 class WorkspaceRequest(BaseModel):
     workspace_id: str
 
@@ -97,6 +108,45 @@ def _write_status(job_directory: Path, status: dict[str, Any]) -> None:
     temporary = job_directory / "status.json.tmp"
     temporary.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(_status_path(job_directory))
+
+
+def _validate_transform(value: TransformParameters) -> None:
+    for name, values in (("translation", value.translation), ("rotation_degrees", value.rotation_degrees), ("scale", value.scale)):
+        if len(values) != 3 or not all(math.isfinite(number) for number in values):
+            raise HTTPException(status_code=400, detail=f"{name} must contain three finite numbers")
+    if any(number <= 0 for number in value.scale):
+        raise HTTPException(status_code=400, detail="scale values must be greater than zero")
+
+
+def _transform_matrix(value: dict[str, Any]) -> list[list[float]]:
+    tx, ty, tz = value["translation"]
+    rx, ry, rz = (math.radians(number) for number in value["rotation_degrees"])
+    sx, sy, sz = value["scale"]
+    cx, qx, cy, qy, cz, qz = math.cos(rx), math.sin(rx), math.cos(ry), math.sin(ry), math.cos(rz), math.sin(rz)
+    return [[cz*cy*sx, (cz*qy*qx-qz*cx)*sy, (cz*qy*cx+qz*qx)*sz, tx],
+            [qz*cy*sx, (qz*qy*qx+cz*cx)*sy, (qz*qy*cx-cz*qx)*sz, ty],
+            [-qy*sx, cy*qx*sy, cy*cx*sz, tz], [0.0, 0.0, 0.0, 1.0]]
+
+
+def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    return [[sum(a[row][k] * b[k][column] for k in range(4)) for column in range(4)] for row in range(4)]
+
+
+def _inverse_affine(matrix: list[list[float]]) -> list[list[float]]:
+    a,b,c,_ = matrix[0]; d,e,f,_ = matrix[1]; g,h,i,_ = matrix[2]
+    determinant = a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g)
+    if abs(determinant) < 1e-15:
+        raise ValueError("Business transform is not invertible")
+    linear = [[(e*i-f*h)/determinant, (c*h-b*i)/determinant, (b*f-c*e)/determinant],
+              [(f*g-d*i)/determinant, (a*i-c*g)/determinant, (c*d-a*f)/determinant],
+              [(d*h-e*g)/determinant, (b*g-a*h)/determinant, (a*e-b*d)/determinant]]
+    translation = [matrix[row][3] for row in range(3)]
+    return [[*row, -sum(row[k]*translation[k] for k in range(3))] for row in linear] + [[0.0,0.0,0.0,1.0]]
+
+
+def _business_transforms(status: dict[str, Any]) -> dict[str, Any]:
+    default = {"translation": [0.0]*3, "rotation_degrees": [0.0]*3, "scale": [1.0]*3}
+    return status.get("business_transforms", {"a": default, "b": default})
 
 
 def _read_status(job_directory: Path) -> dict[str, Any]:
@@ -160,6 +210,8 @@ def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -
         "parameters": latest.get("parameters", result.get("parameters", {})),
         "recommended_matrix": result.get("recommended_matrix"),
         "a_to_b": result.get("a_to_b"), "b_to_a": result.get("b_to_a"),
+        "file_a_to_b": result.get("file_a_to_b"), "file_b_to_a": result.get("file_b_to_a"),
+        "business_transforms": result.get("business_transforms", session_status.get("business_transforms")),
         "metrics": result.get("metrics", {}),
     }
     directory = _history_directory(workspace_id)
@@ -348,6 +400,21 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
                 if not result_path.is_file():
                     status.update(status="failed", error_code="missing_result", error="Worker produced no result")
                 else:
+                    if status.get("manual_session_id"):
+                        session_status = _read_status(_manual_session_directory(status["manual_session_id"]))
+                        transforms = _business_transforms(session_status)
+                        pa, pb = _transform_matrix(transforms["a"]), _transform_matrix(transforms["b"])
+                        result = json.loads(result_path.read_text(encoding="utf-8"))
+                        file_a_to_b, file_b_to_a = result["a_to_b"], result["b_to_a"]
+                        result["file_a_to_b"] = file_a_to_b
+                        result["file_b_to_a"] = file_b_to_a
+                        result["business_transforms"] = {"a": {"parameters": transforms["a"], "matrix": pa}, "b": {"parameters": transforms["b"], "matrix": pb}}
+                        result["a_to_b"] = _matmul(pb, _matmul(file_a_to_b, _inverse_affine(pa)))
+                        result["b_to_a"] = _inverse_affine(result["a_to_b"])
+                        direction = result.get("output_direction", session_status.get("output_direction", "a_to_b"))
+                        source, target = ("a", "b") if direction == "a_to_b" else ("b", "a")
+                        result["recommended_matrix"] = {"name": f"T_business_{direction}", "formula": f"p_business_{target} = T_business_{direction} * p_business_{source}", "value": result[direction]}
+                        result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                     status.update(status="succeeded", result_url=f"/api/v1/registrations/{job_id}/result")
         except Exception as error:  # Keep API alive if worker startup itself fails.
             current_status = _read_status(job_directory)
@@ -621,6 +688,8 @@ async def create_model_registration_session(
     output_direction: Annotated[str, Form()] = "a_to_b",
     moving_model: Annotated[str, Form()] = "auto",
     workspace_id: Annotated[str, Form()] = "",
+    model_a_transform: Annotated[str, Form()] = "",
+    model_b_transform: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     extension_a = _model_extension(model_a)
     extension_b = _model_extension(model_b)
@@ -629,6 +698,13 @@ async def create_model_registration_session(
     if moving_model not in {"auto", "a", "b"}:
         raise HTTPException(status_code=400, detail="moving_model must be auto, a, or b")
     workspace_id = _workspace_id(workspace_id) if workspace_id else str(uuid.uuid4())
+    default_transform = TransformParameters()
+    try:
+        transform_a = TransformParameters.model_validate_json(model_a_transform) if model_a_transform else default_transform
+        transform_b = TransformParameters.model_validate_json(model_b_transform) if model_b_transform else default_transform
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Invalid business transform: {error}") from error
+    _validate_transform(transform_a); _validate_transform(transform_b)
     session_id = str(uuid.uuid4())
     session_directory = _manual_session_directory(session_id)
     input_directory = session_directory / "input"
@@ -658,6 +734,7 @@ async def create_model_registration_session(
         "model_b_filename": path_b.name,
         "output_direction": output_direction,
         "moving_model": moving_model,
+        "business_transforms": {"a": transform_a.model_dump(), "b": transform_b.model_dump()},
         "inputs": {
             "model_a_bytes": bytes_a, "model_b_bytes": bytes_b,
             "model_a_format": extension_a[1:], "model_b_format": extension_b[1:],
@@ -682,6 +759,26 @@ async def create_model_registration_session(
         "status_url": f"/api/v2/registration-sessions/{session_id}",
         "editor_url": status["editor_url"],
     }
+
+
+@app.put("/api/v2/registration-sessions/{session_id}/business-transforms")
+async def update_business_transforms(session_id: str, request: BusinessTransformsRequest) -> dict[str, Any]:
+    _validate_transform(request.model_a); _validate_transform(request.model_b)
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
+    if status.get("api_version") != "v2":
+        raise HTTPException(status_code=404, detail="V2 registration session not found")
+    active_job_id = status.get("active_job_id")
+    if active_job_id:
+        try:
+            if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
+                raise HTTPException(status_code=409, detail="Cannot change transforms during registration")
+        except HTTPException as error:
+            if error.status_code == 409: raise
+    status["business_transforms"] = {"a": request.model_a.model_dump(), "b": request.model_b.model_dump()}
+    status["active_job_id"] = None
+    _write_status(session_directory, status)
+    return {"business_transforms": status["business_transforms"]}
 
 
 @app.get("/api/v2/registration-sessions/{session_id}")

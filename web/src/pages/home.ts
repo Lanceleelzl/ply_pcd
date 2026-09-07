@@ -1,3 +1,5 @@
+import { transformParametersMatrix, type TransformParameters } from '../coordinate-math';
+
 interface HistoryItem {
   session_id: string;
   completed_at_unix?: number;
@@ -38,6 +40,12 @@ function formatBytes(value?: number): string {
 
 function matrixText(matrix?: number[][]): string {
   return matrix?.map(row => row.map(value => Number(value).toFixed(12)).join(' ')).join('\n') ?? '';
+}
+
+const defaultTransform = (): TransformParameters => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
+function transformEditor(model: 'a' | 'b'): string {
+  const row = (kind: keyof TransformParameters, defaults: number[]) => `<div class="transform-row"><span>${kind === 'translation' ? '平移／m' : kind === 'rotation_degrees' ? '旋转／°' : '缩放'}</span>${['X', 'Y', 'Z'].map((axis, i) => `<label>${axis}<input type="number" step="any" data-transform-model="${model}" data-transform-kind="${kind}" data-index="${i}" value="${defaults[i]}"></label>`).join('')}</div>`;
+  return `<details class="upload-transform"><summary>模型 ${model.toUpperCase()} 业务坐标预变换（默认不转换）</summary>${row('translation', [0,0,0])}${row('rotation_degrees', [0,0,0])}${row('scale', [1,1,1])}<div class="upload-transform-matrix"><span>文件坐标 → 业务坐标矩阵</span><pre data-transform-matrix="${model}">${matrixText(transformParametersMatrix(defaultTransform()))}</pre></div></details>`;
 }
 
 async function openWorkspace(root: HTMLElement, sessionId: string): Promise<void> {
@@ -96,7 +104,9 @@ export function renderHome(root: HTMLElement): void {
           <h2>新建配准任务</h2>
           <form id="upload-form">
             <label>模型 A<input name="model_a" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+            ${transformEditor('a')}
             <label>模型 B<input name="model_b" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+            ${transformEditor('b')}
             <label>最终业务矩阵方向<select name="output_direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
             <label>ICP 移动模型<select name="moving_model"><option value="auto">自动推荐</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>
             <div class="actions"><button class="primary" type="submit">上传并进入配准工作台</button></div>
@@ -113,6 +123,15 @@ export function renderHome(root: HTMLElement): void {
   const form = root.querySelector<HTMLFormElement>('#upload-form')!;
   const status = root.querySelector<HTMLElement>('#status')!;
   const historyList = root.querySelector<HTMLElement>('#history-list')!;
+  const readTransform = (model: 'a' | 'b'): TransformParameters => {
+    const values = (kind: keyof TransformParameters) => Array.from(form.querySelectorAll<HTMLInputElement>(`[data-transform-model="${model}"][data-transform-kind="${kind}"]`)).map(input => Number(input.value));
+    return { translation: values('translation') as [number,number,number], rotation_degrees: values('rotation_degrees') as [number,number,number], scale: values('scale') as [number,number,number] };
+  };
+  form.addEventListener('input', event => {
+    const model = (event.target as HTMLElement).dataset.transformModel as 'a' | 'b' | undefined;
+    if (!model) return;
+    try { form.querySelector(`[data-transform-matrix="${model}"]`)!.textContent = matrixText(transformParametersMatrix(readTransform(model))); } catch { /* submit validation reports invalid values */ }
+  });
   const loadHistory = async (): Promise<void> => {
     try {
       const response = await fetch(`/api/v2/registration-history?workspace_id=${encodeURIComponent(workspaceId)}`);
@@ -166,7 +185,13 @@ export function renderHome(root: HTMLElement): void {
           else reject(new Error(body.detail ?? `HTTP ${request.status}`));
         });
         request.addEventListener('error', () => reject(new Error('网络连接失败')));
-        const data = new FormData(form); data.append('workspace_id', workspaceId); request.send(data);
+        const transforms = { a: readTransform('a'), b: readTransform('b') };
+        for (const transform of Object.values(transforms)) {
+          if ([...transform.translation, ...transform.rotation_degrees, ...transform.scale].some(value => !Number.isFinite(value))) throw new Error('预变换参数必须是有效数字');
+          if (transform.scale.some(value => value <= 0)) throw new Error('缩放必须大于 0');
+        }
+        const data = new FormData(form); data.append('workspace_id', workspaceId);
+        data.append('model_a_transform', JSON.stringify(transforms.a)); data.append('model_b_transform', JSON.stringify(transforms.b)); request.send(data);
       });
       status.textContent = '上传完成，正在生成点云预览……';
       await openWorkspace(root, result.session_id);
