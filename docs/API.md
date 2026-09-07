@@ -583,6 +583,10 @@ Content-Type: application/json
 
 业务矩阵组合公式为 `a_to_b = P_b × file_a_to_b × inverse(P_a)`。航点属于 A 业务场景时，可以直接使用 `a_to_b`，不得再次手工补旋转。
 
+`initial_moving_local_to_fixed_local` 必须是原始文件局部坐标下的刚体矩阵。预变换的缩放不得进入此初值；`moving_local_to_fixed_local` 也不包含业务预变换。网页配准视图统一在固定模型业务坐标系显示；显示矩阵通过分层组合，不将非等比缩放与旋转的乘积重新分解为单层 TRS。
+
+通过 `/api/v1/registrations/{job_id}/files/{filename}` 下载 v2 结果时，`a_to_b_matrix.txt` 和 `b_to_a_matrix.txt` 与 JSON 中的业务矩阵一致；`file_a_to_b_matrix.txt` 和 `file_b_to_a_matrix.txt` 保存原始文件坐标矩阵。历史档案保留业务矩阵、文件矩阵和当轮预变换，原始文件释放后仍可读取。
+
 ### 15.3 订阅 ICP 逐轮进度
 
 ```http

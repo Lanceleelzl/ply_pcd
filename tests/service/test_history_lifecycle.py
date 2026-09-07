@@ -86,6 +86,20 @@ class HistoryLifecycleTest(unittest.TestCase):
         self.assertTrue(service._history_path(self.workspace_id, self.session_id).is_file())
         self.assertFalse(service._history_path(another_workspace, self.session_id).is_file())
 
+    def test_business_matrices_survive_source_release(self) -> None:
+        path = service._job_directory(self.job_id) / "result" / "registration.json"
+        result = json.loads(path.read_text(encoding="utf-8"))
+        parameters = {"translation": [2, 3, 4], "rotation_degrees": [-90, 0, 0], "scale": [1, 2, 3]}
+        result.update(file_a_to_b=IDENTITY, file_b_to_a=IDENTITY,
+                      business_transforms={"a": {"parameters": parameters, "matrix": service._transform_matrix(parameters)}})
+        path.write_text(json.dumps(result), encoding="utf-8")
+        service._write_v2_history(self.session_directory, self.status)
+        service._release_v2_source_data(self.session_directory, self.status)
+        archived = json.loads(service._history_path(self.workspace_id, self.session_id).read_text(encoding="utf-8"))
+        self.assertEqual(archived["business_transforms"], result["business_transforms"])
+        self.assertEqual(archived["file_a_to_b"], IDENTITY)
+        self.assertEqual(archived["a_to_b"], result["a_to_b"])
+
     def test_release_rejects_active_registration(self) -> None:
         self.status["active_job_id"] = self.job_id
         service._write_status(service._job_directory(self.job_id), {

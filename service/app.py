@@ -415,6 +415,11 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
                         direction = result.get("output_direction", session_status.get("output_direction", "a_to_b"))
                         source, target = ("a", "b") if direction == "a_to_b" else ("b", "a")
                         result["recommended_matrix"] = {"name": f"T_business_{direction}", "formula": f"p_business_{target} = T_business_{direction} * p_business_{source}", "value": result[direction]}
+                        for name in ("file_a_to_b", "file_b_to_a", "a_to_b", "b_to_a"):
+                            (result_path.parent / f"{name}_matrix.txt").write_text(
+                                "\n".join(" ".join(f"{value:.17g}" for value in row) for row in result[name]) + "\n",
+                                encoding="utf-8",
+                            )
                         result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                     status.update(status="succeeded", result_url=f"/api/v1/registrations/{job_id}/result")
         except Exception as error:  # Keep API alive if worker startup itself fails.
@@ -1245,6 +1250,8 @@ async def download_result_file(job_id: str, filename: str) -> FileResponse:
         "icp_refinement_reference_local_to_ply_matrix.txt",
         "a_to_b_matrix.txt",
         "b_to_a_matrix.txt",
+        "file_a_to_b_matrix.txt",
+        "file_b_to_a_matrix.txt",
         "moving_local_to_fixed_local_matrix.txt",
         "initial_moving_local_to_fixed_local_matrix.txt",
         "icp_refinement_moving_local_to_fixed_local_matrix.txt",

@@ -1,6 +1,7 @@
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../coordinate-query';
-import { identityMatrix, invertAffine, multiplyMatrices, transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
+import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
+import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { GaussianClipController } from '../gaussian-clipping';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
@@ -22,6 +23,7 @@ interface SessionStatus {
   gaussian_b_url?: string;
   inputs?: { model_a_bytes?: number; model_b_bytes?: number };
   business_transforms?: Record<ModelId, TransformParameters>;
+  registrations?: { job_id: string; status: string; result_url?: string; output_direction: 'a_to_b' | 'b_to_a'; parameters: Record<string, number> }[];
   metadata?: {
     recommended_moving_model: ModelId;
     models: Record<ModelId, {
@@ -36,6 +38,7 @@ interface RegistrationResult {
   moving_local_to_fixed_local: Matrix4;
   a_to_b: Matrix4;
   b_to_a: Matrix4;
+  business_transforms?: Record<ModelId, { matrix: Matrix4 }>;
   metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
 }
 
@@ -48,28 +51,12 @@ interface IterationEvent {
   moving_local_to_fixed_local: Matrix4;
 }
 
-const identity = identityMatrix;
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
 const formatBytes = (bytes?: number) => bytes
   ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
   : '大小未知';
 
-function entityMatrix(entity: pc.Entity): Matrix4 {
-  const data = entity.getWorldTransform().data;
-  return Array.from({ length: 4 }, (_, row) =>
-    Array.from({ length: 4 }, (_, column) => Number(data[column * 4 + row])));
-}
-
-function applyMatrix(entity: pc.Entity, matrix: Matrix4): void {
-  const transform = new pc.Mat4();
-  transform.set(Array.from({ length: 16 }, (_, index) => matrix[index % 4][Math.floor(index / 4)]));
-  entity.setLocalPosition(transform.getTranslation());
-  entity.setLocalEulerAngles(transform.getEulerAngles());
-  entity.setLocalScale(transform.getScale());
-}
-
-const translationMatrix = (value: XYZ): Matrix4 => [[1,0,0,value[0]],[0,1,0,value[1]],[0,0,1,value[2]],[0,0,0,1]];
 const transformEditor = (model: ModelId, value: TransformParameters): string => {
   const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label>${axis}<input type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"></label>`).join('')}</div>`;
   return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
@@ -204,18 +191,9 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     a: { entity: null, asset: null, clipController: null, active: false, loading: false },
     b: { entity: null, asset: null, clipController: null, active: false, loading: false },
   };
-  let businessMatrices: Record<ModelId, Matrix4> = { a: transformParametersMatrix(businessTransforms.a), b: transformParametersMatrix(businessTransforms.b) };
-  let baseDisplayMatrices: Record<ModelId, Matrix4> = { a: identity(), b: identity() };
-  const rebuildBaseDisplays = () => {
-    businessMatrices.a = transformParametersMatrix(businessTransforms.a); businessMatrices.b = transformParametersMatrix(businessTransforms.b);
-    const origins = { a: infoA.origin as XYZ, b: infoB.origin as XYZ };
-    const anchor = transformXYZ(businessMatrices.a, origins.a);
-    const displayShift = translationMatrix(anchor.map(value => -value) as XYZ);
-    baseDisplayMatrices.a = multiplyMatrices(displayShift, multiplyMatrices(businessMatrices.a, translationMatrix(origins.a)));
-    baseDisplayMatrices.b = multiplyMatrices(displayShift, multiplyMatrices(businessMatrices.b, translationMatrix(origins.b)));
-    applyMatrix(entityA, baseDisplayMatrices.a); applyMatrix(entityB, baseDisplayMatrices.b);
-  };
-  rebuildBaseDisplays();
+  const display = new RegistrationDisplay(application.root, entities,
+    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms);
+  display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const cameraTarget = bounds.center.clone();
@@ -257,9 +235,19 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     updateCamera();
   };
   const fitCamera = () => {
-    cameraTarget.copy(bounds.center);
-    cameraDistance = Math.max(bounds.diagonal * 1.2, 0.1);
-    cameraOrthoHeight = Math.max(bounds.diagonal * 0.6, 0.05);
+    const min = new pc.Vec3(Infinity, Infinity, Infinity);
+    const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
+    (['a', 'b'] as ModelId[]).forEach(model => {
+      const cloud = clouds[model]; const matrix = display.localToDisplay(model);
+      for (const x of [cloud.min.x, cloud.max.x]) for (const y of [cloud.min.y, cloud.max.y]) for (const z of [cloud.min.z, cloud.max.z]) {
+        const point = new pc.Vec3(...transformXYZ(matrix, [x, y, z]));
+        min.min(point); max.max(point);
+      }
+    });
+    cameraTarget.copy(min).add(max).mulScalar(0.5);
+    const diagonal = max.clone().sub(min).length();
+    cameraDistance = Math.max(diagonal * 1.2, 0.1);
+    cameraOrthoHeight = Math.max(diagonal * 0.6, 0.05);
     camera.camera!.orthoHeight = cameraOrthoHeight;
     setDirectionFromAngles(135, 24);
     cameraUp.copy(zUp);
@@ -288,6 +276,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   let running = false;
   let queryActive = false;
   let coordinateQuery: CoordinateQuery | null = null;
+  let resultSignature = '';
   let gizmoTransforming = false;
   let translateGizmoHovered = false; let rotateGizmoHovered = false;
   let translateGizmoTransforming = false; let rotateGizmoTransforming = false;
@@ -343,7 +332,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   });
   refreshMovingGizmoInput(); refreshClipGizmoInput();
   const movingEntity = () => entities[effectiveMoving()];
-  const fixedEntity = () => entities[effectiveMoving() === 'a' ? 'b' : 'a'];
+  [translate, rotate].forEach(gizmo => gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => display.applyHandle()));
   const attach = () => {
     translate.detach(); rotate.detach(); clipTranslate.detach(); clipRotate.detach();
     coordinateQuery?.setClippingActive(clippingInteractionActive);
@@ -351,8 +340,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       clipTranslate.attach(clipBox);
       clipRotate.attach(clipBox);
     } else if (!queryActive && !clippingInteractionActive && !running && modelVisible[effectiveMoving()]) {
-      translate.attach(movingEntity());
-      rotate.attach(movingEntity());
+      translate.attach(display.handle);
+      rotate.attach(display.handle);
     }
   };
 
@@ -445,6 +434,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       });
       const gaussianEntity = new pc.Entity(`Model ${model.toUpperCase()} Original Gaussian`);
       gaussianEntity.addComponent('gsplat', { asset });
+      const origin = model === 'a' ? infoA.origin : infoB.origin;
+      gaussianEntity.setLocalPosition(-origin[0], -origin[1], -origin[2]);
       entities[model].addChild(gaussianEntity);
       display.entity = gaussianEntity;
       display.clipController = new GaussianClipController(gaussianEntity.gsplat!);
@@ -479,21 +470,23 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       const input = document.createElement('input'); input.type = 'number'; input.step = step; input.value = '0';
       inputs[`${prefix}${axis}`] = input; label.appendChild(input); parent.appendChild(label);
       input.addEventListener('input', () => {
-        movingEntity().setLocalPosition(Number(inputs.px.value), Number(inputs.py.value), Number(inputs.pz.value));
-        movingEntity().setLocalEulerAngles(Number(inputs.rx.value), Number(inputs.ry.value), Number(inputs.rz.value));
+        const fields = Object.values(inputs);
+        if (fields.some(field => field.value === '' || field.validity.badInput || !Number.isFinite(Number(field.value)))) return;
+        display.setPose([Number(inputs.px.value), Number(inputs.py.value), Number(inputs.pz.value)],
+          [Number(inputs.rx.value), Number(inputs.ry.value), Number(inputs.rz.value)]);
       });
     }
   }
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
-    if (reset) { applyMatrix(entityA, baseDisplayMatrices.a); applyMatrix(entityB, baseDisplayMatrices.b); }
+    if (reset) display.reset(moving);
     const recolor = (entity: pc.Entity, color: pc.Color) => entity.render!.meshInstances.forEach(instance => {
       (instance.material as PointCloudMaterial).setPointColor(color);
     });
     recolor(entities[moving], new pc.Color(1.0, 0.72, 0.08));
     recolor(entities[fixed], new pc.Color(0.68, 0.72, 0.78));
-    root.querySelector<HTMLElement>('#role-hint')!.textContent = `ICP：移动 ${moving.toUpperCase()}，固定 ${fixed.toUpperCase()}。自动模式仅为建议，可手工覆盖。`;
+    root.querySelector<HTMLElement>('#role-hint')!.textContent = `ICP：移动 ${moving.toUpperCase()}，固定 ${fixed.toUpperCase()}。配准视图使用 ${fixed.toUpperCase()} 业务坐标系；粗配准数值为文件局部坐标。`;
     const rangeRisk = root.querySelector<HTMLElement>('#range-risk')!;
     const rangeRatio = modelDiagonals[fixed] > 0 ? modelDiagonals[moving] / modelDiagonals[fixed] : Number.POSITIVE_INFINITY;
     const movingLarger = rangeRatio >= 1.25;
@@ -537,7 +530,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       }
       const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }) });
       const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
-      businessTransforms.a = next.a; businessTransforms.b = next.b; rebuildBaseDisplays(); refreshRoles(true);
+      businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
       coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
       message.textContent = '已应用。粗配准及旧 ICP 结果已失效，请重新配准。'; fitCamera();
     } catch (error) { message.textContent = `应用失败：${String(error)}`; }
@@ -576,10 +569,14 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     });
   };
   application.on('update', () => {
+    if (resultSignature && resultSignature !== display.signature()) {
+      root.querySelector<HTMLElement>('#result')!.hidden = true;
+      resultSignature = '';
+    }
     const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
     const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
     ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
-    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(multiplyMatrices(invertAffine(entityMatrix(fixedEntity())), entityMatrix(movingEntity())));
+    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(display.getMovingLocalToFixedLocal());
     syncClipState();
     const currentClipMode = clippingMode.value;
     if (currentClipMode === 'box' && clipHelperVisible.checked && clippingHandles?.isBoxPresentationVisible()) {
@@ -600,7 +597,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const axisClipping = root.querySelector<HTMLElement>('#axis-clipping')!;
   const boxClipping = root.querySelector<HTMLElement>('#box-clipping')!;
   const clipHelperVisible = root.querySelector<HTMLInputElement>('#clip-helper-visible')!;
-  resetButton.addEventListener('click', () => { if (!running) applyMatrix(movingEntity(), baseDisplayMatrices[effectiveMoving()]); });
+  resetButton.addEventListener('click', () => { if (!running) display.reset(effectiveMoving()); });
   root.querySelector('#fit')!.addEventListener('click', fitCamera);
   clippingToggle.addEventListener('click', () => {
     clippingPanel.hidden = !clippingPanel.hidden;
@@ -874,7 +871,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       if (progress.iteration <= latestProgressIteration) return;
       latestProgressIteration = progress.iteration;
       lastProgressMatrix = progress.moving_local_to_fixed_local;
-      applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), lastProgressMatrix));
+      display.setMovingLocalToFixedLocal(lastProgressMatrix);
       iterationProgress.textContent = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
     });
     progressSource.addEventListener('terminal', stopProgressDisplay);
@@ -904,7 +901,10 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   };
   coordinateQuery = new CoordinateQuery({
     root, app: application, camera, canvas, entities, clouds, sessionId,
-    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices, baseDisplayMatrices, diagonal: bounds.diagonal,
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: bounds.diagonal,
+    localToDisplay: model => display.localToDisplay(model),
+    signature: () => display.signature(),
+    setOriginal: original => { display.setOriginal(original); fitCamera(); },
     lock: active => {
       queryActive = active; navigation = null;
       registrationControls.forEach(control => { control.disabled = active || running; });
@@ -926,6 +926,19 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         && point.z >= clipMinState.z && point.z <= clipMaxState.z;
     },
   });
+  const showResult = (result: RegistrationResult, jobId: string) => {
+    display.setMovingLocalToFixedLocal(result.moving_local_to_fixed_local);
+    coordinateQuery?.setResult(result, jobId);
+    resultSignature = display.signature();
+    finalText = matrixText(outputDirection.value === 'a_to_b' ? result.a_to_b : result.b_to_a);
+    inverseText = matrixText(outputDirection.value === 'a_to_b' ? result.b_to_a : result.a_to_b);
+    root.querySelector<HTMLElement>('#result')!.hidden = false;
+    root.querySelector<HTMLElement>('#result-title')!.textContent = `最终业务矩阵：${result.recommended_matrix.name}`;
+    root.querySelector<HTMLElement>('#result-formula')!.textContent = result.recommended_matrix.formula;
+    root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalText;
+    root.querySelector<HTMLElement>('#inverse-matrix')!.textContent = inverseText;
+    root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${result.metrics.final_rms.toFixed(6)} m　点数：${result.metrics.final_point_count}　耗时：${result.metrics.elapsed_seconds.toFixed(2)} s`;
+  };
   cancelButton.addEventListener('click', async () => {
     cancelRequested = true;
     cancelButton.disabled = true;
@@ -952,7 +965,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     try {
       const response = await fetch(`/api/v2/registration-sessions/${sessionId}/register`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          initial_moving_local_to_fixed_local: multiplyMatrices(invertAffine(entityMatrix(fixedEntity())), entityMatrix(movingEntity())), output_direction: outputDirection.value,
+          initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(), output_direction: outputDirection.value,
           moving_model: movingSelect.value, min_rms_decrease: Number((root.querySelector('#min-rms') as HTMLInputElement).value),
           sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value), overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
           random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
@@ -967,7 +980,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       while (true) {
         const status = await fetch(created.status_url).then(value => value.json()); log.textContent = `任务状态：${status.status}`;
         if (status.status === 'cancelled') {
-          if (lastProgressMatrix) applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), lastProgressMatrix));
+          if (lastProgressMatrix) display.setMovingLocalToFixedLocal(lastProgressMatrix);
           log.textContent = lastProgressMatrix
             ? '任务已终止。视口停留在未收敛的中间姿态，该姿态不是有效业务矩阵，可继续粗调后重新执行。'
             : '任务已终止，可调整参数或粗配准后重新执行。';
@@ -977,16 +990,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         if (status.status === 'succeeded') {
           const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
           progressSource?.close(); progressSource = null;
-          applyMatrix(movingEntity(), multiplyMatrices(entityMatrix(fixedEntity()), result.moving_local_to_fixed_local));
-          coordinateQuery?.setResult(result, activeJobId);
-          const matrix = result.recommended_matrix.value; finalText = matrixText(matrix);
-          root.querySelector<HTMLElement>('#result')!.hidden = false;
-          root.querySelector<HTMLElement>('#result-title')!.textContent = `最终业务矩阵：${result.recommended_matrix.name}`;
-          root.querySelector<HTMLElement>('#result-formula')!.textContent = result.recommended_matrix.formula;
-          root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalText;
-          inverseText = matrixText(outputDirection.value === 'a_to_b' ? result.b_to_a : result.a_to_b);
-          root.querySelector<HTMLElement>('#inverse-matrix')!.textContent = inverseText;
-          root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${result.metrics.final_rms.toFixed(6)} m　点数：${result.metrics.final_point_count}　耗时：${result.metrics.elapsed_seconds.toFixed(2)} s`;
+          showResult(result, activeJobId);
+          log.textContent = '配准完成。';
           break;
         }
         await sleep(1000);
@@ -994,4 +999,27 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     } catch (error) { log.textContent = `失败：${String(error)}`; }
     finally { stopProgressDisplay(); activeJobId = ''; activeProgressUrl = ''; cancelRequested = false; setRunning(false); }
   });
+  const latest = session.registrations?.at(-1);
+  if (latest?.status === 'succeeded' && latest.result_url) {
+    const signature = display.signature();
+    try {
+      const response = await fetch(latest.result_url);
+      if (!response.ok) return;
+      const result = await response.json() as RegistrationResult;
+      const matching = (['a', 'b'] as ModelId[]).every(model => {
+        const matrix = result.business_transforms?.[model].matrix ?? transformParametersMatrix(defaultTransform());
+        return matrix.flat().every((value, index) => Math.abs(value-display.businessMatrices[model].flat()[index]) < 1e-12);
+      });
+      if (matching && signature === display.signature() && !running) {
+        movingSelect.value = result.moving_model;
+        outputDirection.value = latest.output_direction;
+        refreshRoles(true);
+        const fields: Record<string, string> = { min_rms_decrease: 'min-rms', sampling_limit: 'sampling-limit', overlap: 'overlap', random_seed: 'random-seed' };
+        Object.entries(fields).forEach(([name, id]) => { if (latest.parameters[name] !== undefined) root.querySelector<HTMLInputElement>(`#${id}`)!.value = String(latest.parameters[name]); });
+        showResult(result, latest.job_id);
+        root.querySelector<HTMLElement>('#job-status')!.textContent = '已恢复最近一次配准结果。';
+        fitCamera();
+      }
+    } catch { root.querySelector<HTMLElement>('#job-status')!.textContent = '历史结果暂时无法加载，可重新配准。'; }
+  }
 }

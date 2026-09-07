@@ -11,7 +11,9 @@ interface Options {
   entities: Record<Model, pc.Entity>; clouds: Record<Model, PreviewCloud>;
   origins: Record<Model, XYZ>; diagonal: number; sessionId: string;
   businessMatrices: Record<Model, Matrix>;
-  baseDisplayMatrices: Record<Model, Matrix>;
+  localToDisplay: (model: Model) => Matrix;
+  signature: () => string;
+  setOriginal: (original: boolean) => void;
   lock: (active: boolean) => void;
   visiblePoint: (model: Model, world: pc.Vec3) => boolean;
 }
@@ -28,7 +30,6 @@ export class CoordinateQuery {
   private jobId = '';
   private source: Model = 'a';
   private points: Record<Model, XYZ> | null = null;
-  private saved: Record<Model, { position: pc.Vec3; rotation: pc.Quat; scale: pc.Vec3 }> | null = null;
   private signature = '';
   private panel: HTMLElement;
   private toggle: HTMLButtonElement;
@@ -91,9 +92,8 @@ export class CoordinateQuery {
     this.gizmo.on(pc.Gizmo.EVENT_POINTERMOVE, (_x: number, _y: number, mesh: unknown) => { this.hovered = Boolean(mesh); });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => { this.dragging = true; });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => {
-      const inverse = options.entities[this.source].getWorldTransform().clone().invert();
-      const local = inverse.transformPoint(this.anchor.getPosition());
-      const filePoint = offsetXYZ([local.x, local.y, local.z], options.origins[this.source]);
+      const local = transformXYZ(invertAffine(options.localToDisplay(this.source)), this.anchor.getPosition().toArray() as XYZ);
+      const filePoint = offsetXYZ(local, options.origins[this.source]);
       this.setPoint(transformXYZ(options.businessMatrices[this.source], filePoint), false);
     });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => { this.dragging = false; this.refresh(); });
@@ -138,16 +138,12 @@ export class CoordinateQuery {
   }
 
   private currentSignature(): string {
-    return models.map(model => {
-      const entity = this.options.entities[model];
-      return [...entity.getLocalPosition().toArray(), ...entity.getLocalRotation().toArray(), ...entity.getLocalScale().toArray()]
-        .map(value => value.toFixed(8)).join(',');
-    }).join('|');
+    return this.options.signature();
   }
 
   setResult(result: Result, jobId: string): void {
     this.result = result; this.jobId = jobId; this.signature = this.currentSignature(); this.toggle.disabled = false;
-    this.toggle.title = '使用本轮 ICP 矩阵查询 A／B 原始坐标对';
+    this.toggle.title = '使用本轮 ICP 矩阵查询 A／B 业务坐标对';
     if (this.points) this.setPoint(this.points[this.source]);
   }
 
@@ -158,7 +154,6 @@ export class CoordinateQuery {
 
   private open(): void {
     if (!this.result || this.signature !== this.currentSignature()) { this.invalidate(); return; }
-    this.saved = Object.fromEntries(models.map(model => [model, { position: this.options.entities[model].getLocalPosition().clone(), rotation: this.options.entities[model].getLocalRotation().clone(), scale: this.options.entities[model].getLocalScale().clone() }])) as typeof this.saved;
     this.active = true; this.panel.hidden = false; this.toggle.classList.add('active'); this.options.lock(true);
     this.refresh();
   }
@@ -170,15 +165,7 @@ export class CoordinateQuery {
   }
 
   private applyPresentation(): void {
-    if (!this.saved || !this.result) return;
-    models.forEach(model => {
-      const entity = this.options.entities[model];
-      if (this.original) {
-        const matrix = this.options.baseDisplayMatrices[model];
-        const transform = new pc.Mat4().set(Array.from({length:16},(_,index)=>matrix[index%4][Math.floor(index/4)]));
-        entity.setLocalPosition(transform.getTranslation()); entity.setLocalEulerAngles(transform.getEulerAngles()); entity.setLocalScale(transform.getScale());
-      } else { entity.setLocalPosition(this.saved![model].position); entity.setLocalRotation(this.saved![model].rotation); entity.setLocalScale(this.saved![model].scale); }
-    });
+    if (this.result) this.options.setOriginal(this.original);
   }
 
   private setPoint(point: XYZ, attach = true): void {
@@ -190,7 +177,11 @@ export class CoordinateQuery {
 
   private displayPoint(model: Model, point: XYZ): pc.Vec3 {
     const filePoint = transformXYZ(invertAffine(this.options.businessMatrices[model]), point);
-    return this.options.entities[model].getWorldTransform().transformPoint(new pc.Vec3(...offsetXYZ(filePoint, this.options.origins[model], -1)));
+    return this.displayFilePoint(model, filePoint);
+  }
+
+  private displayFilePoint(model: Model, filePoint: XYZ): pc.Vec3 {
+    return new pc.Vec3(...transformXYZ(this.options.localToDisplay(model), offsetXYZ(filePoint, this.options.origins[model], -1)));
   }
 
   private refresh(attach = true): void {
@@ -279,12 +270,12 @@ export class CoordinateQuery {
       }
       this.axisLabels[model].forEach(label => { label.hidden = true; });
       if (this.axesVisible[model]) {
-        const zero: XYZ = [0, 0, 0]; const start = this.displayPoint(model, zero);
+        const zero: XYZ = [0, 0, 0]; const start = this.displayFilePoint(model, zero);
         this.placeLabel(this.axisLabels[model][0], start, model === 'a' ? -20 : 3);
         const colors = [pc.Color.RED, pc.Color.GREEN, pc.Color.BLUE];
         for (let axis = 0; axis < 3; axis++) {
           const end: XYZ = [0, 0, 0]; end[axis] = Math.max(0.1, this.options.diagonal * 0.12);
-          const world = this.displayPoint(model, end);
+          const world = this.displayFilePoint(model, end);
           this.options.app.drawLine(start, world, colors[axis], false);
           this.placeLabel(this.axisLabels[model][axis + 1], world, model === 'a' ? -20 : 3);
         }

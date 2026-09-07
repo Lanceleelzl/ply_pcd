@@ -9,6 +9,10 @@
 
 ## 已完成
 
+- 2026-09-07：完成业务坐标预变换链路。刚体粗配准状态与业务显示分离，配准视图统一使用固定模型业务坐标系；父层业务 TRS 与子层刚体矩阵保留非等比缩放产生的剪切。粗配准手柄、数值输入、ICP 初值、过程及最终显示均使用独立刚体状态。
+- 坐标查询以双精度矩阵进行业务坐标与显示位置换算，原始／配准位置切换不改变结果；原始 Gaussian 补偿文件局部原点并继承分层变换，文件零点轴保持原有语义。修改预变换或粗配准后旧结果失效，刷新恢复与当前预变换一致的最近成功结果。
+- v2 业务矩阵下载与 JSON 一致，新增独立文件坐标矩阵下载；历史档案保留业务预变换与文件矩阵，源数据释放后仍可读取。新增分层显示回归测试及可重复运行的真实 Worker API 验证脚本。
+
 - 2026-09-07：保存业务坐标预变换中断代码快照至 `codex/business-coordinates-snapshot`（`f39abe2`），在 `codex/business-coordinates` 续接。修复业务结果组合误用于 v1 会话的问题，失败回归用例修复后通过；上传及工作台空白九参数按 `0／0／1` 处理，并拒绝浏览器判定为非法的数字输入。
 
 - 顶部工具栏固定单排、组间竖线分隔，窄视口横向滚动；显隐文案统一「显示／隐藏」，入口及面板统一「坐标查询」。
@@ -131,9 +135,6 @@
 
 ## 进行中
 
-- 业务坐标预变换已具备表单、持久化、矩阵组合和查询初版，但尚未完成端到端验收。非等比缩放会进入刚体 ICP 初值并返回 400，显示矩阵 TRS 分解也不能保留剪切；分离配准状态与业务显示状态的方案见 `docs/IMPLEMENTATION_PLAN.md`，待确认。真实数据 ICP、浏览器交互和历史恢复仍待回归。
-- 2026-09-07 最近验证：服务端 8 项测试通过，覆盖 v1 结果兼容、TRS 顺序、非等比缩放与大坐标的业务矩阵组合及正逆往返、非法参数；TypeScript 检查、坐标数学测试、Vite 生产构建和差异空白检查通过。空白表单修复已通过类型与构建检查，浏览器回归尚未执行。
-
 - 补充统一配准工作台的自动化浏览器回归。
 - 补充自动化 API 回归测试脚本。
 - 评估生产环境鉴权、外部对象存储和持久化任务队列。
@@ -199,6 +200,17 @@
 - 尚未确认最终公开仓库地址和真实测试数据是否随项目公开。
 
 ## 最近验证
+
+```text
+日期：2026-09-07
+方式：服务端单元测试＋真实 Worker HTTP API＋PlayCanvas 分层显示测试＋Playwright 真实浏览器＋TypeScript／Vite
+结果：服务端 9 项测试通过；坐标数学及分层显示测试覆盖双移动角色、非等比缩放、剪切、大坐标、原始位置与手柄往返。合成点云默认／移动 A／移动 B 共 3 轮 HTTP 配准通过；真实 3777901 点 PLY／149317 点 PCD 默认和非等比缩放共 2 轮通过，文件矩阵不变，RMS 均为 0.222230612453，业务矩阵、反向矩阵、四种矩阵下载和历史档案一致。
+浏览器：空白参数上传按 0／0／1 保存；坐标输入往返、原始／配准显示、剖切互斥、预变换修改失效、刚体 ICP 提交及刷新恢复通过；真实 Gaussian 加载、剖切、显隐及释放通过；实际鼠标平移／旋转保持刚体，场景取点及点拖动不改变 ICP 状态；文件零点轴与 P(0) 对应点重合。最终浏览器验证未出现应用异常。
+失败隔离：提交无效 PLY／PCD 后 Worker 返回 worker_failed，任务明确失败，API 健康检查仍为 200。
+构建：TypeScript、Vite 生产构建及 git diff --check 通过；保留现有 PlayCanvas worker_threads 外置和大包提示。未更改 C++／Docker，未重建原生 Worker 或 Docker 镜像。
+复现：pnpm run test:service；pnpm exec node --experimental-strip-types web/src/coordinate-math.test.ts；pnpm exec node --experimental-strip-types --experimental-transform-types web/src/registration-display.test.ts；启动独立测试服务后运行 .venv/Scripts/python.exe tests/service/business_transform_e2e.py http://127.0.0.1:8766，可加 --real 使用 source 中真实 PLY／PCD。
+证据：runtime/business-verification/{synthetic,real}-summary.json；output/playwright/business-*.js 与截图。测试服务使用 runtime/business-verification-20260907 隔离数据。
+```
 
 - 按最新要求将立方体文字恢复为面内标签：撤去屏幕朝向补偿及向外抬升，仅在文字倒置时面内旋转 180°，保留透视与镜像修正。浏览器斜视截图及标签面内变换断言通过，类型检查和 Web 构建通过；此项替代此前的屏幕朝向标签方案。
 
