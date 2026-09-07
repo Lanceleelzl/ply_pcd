@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "platform": "win32-x64",
-  "worker_sha256": "1fa5ea0c1023e10e59994b6470277cb4391a82815452d67250a795bb35656a48",
-  "source_sha256": "0b035d5069aacdb23768fde384877cf9b55ff6d007d6122bc2dafad64a697f0e",
+  "worker_sha256": "86b61a1b4ec9543fadf772c5f0740bf9c3b9a9ccf5f00e3782c3c2a7224a843c",
+  "source_sha256": "13c273eb83ebe758b0384777dc5e5f3ef980900a7e90a4e808b67d64f765b8c7",
   "build": "Visual Studio 2022 Release, static MSVC runtime"
 }

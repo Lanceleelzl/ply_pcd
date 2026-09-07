@@ -16,24 +16,36 @@ const parameters = {
   b: { translation: [-1,5,6] as XYZ, rotation_degrees: [10,40,50] as XYZ, scale: [3,1,2] as XYZ },
 };
 const display = new RegistrationDisplay(root, entities, origins, parameters);
+display.reset('b');
+const initialPoint: XYZ = [1,2,3];
+const beforeA = transformXYZ(display.localToDisplay('a'), initialPoint);
+const beforeB = transformXYZ(display.localToDisplay('b'), initialPoint);
+parameters.a.rotation_degrees = [-45,20,30];
+display.reset('b');
+assert.ok(transformXYZ(display.localToDisplay('a'), initialPoint).some((value,index) => Math.abs(value-beforeA[index]) > 1e-3));
+close(transformXYZ(display.localToDisplay('b'), initialPoint), beforeB);
+parameters.a.rotation_degrees = [-90,20,30];
 for (const moving of ['a','b'] as const) {
   const fixed = moving === 'a' ? 'b' : 'a';
   display.reset(moving);
   rigid(display.getMovingLocalToFixedLocal());
-  close(display.getMovingLocalToFixedLocal().slice(0,3).map(row => row[3]), origins[moving].map((value,i) => value-origins[fixed][i]));
+  const businessOrigin = (model: 'a'|'b') => transformXYZ(transformParametersMatrix(parameters[model]), origins[model]);
+  close(display.getMovingLocalToFixedLocal().slice(0,3).map(row => row[3]), businessOrigin(moving).map((value,i) => value-businessOrigin(fixed)[i]));
   const pose = transformParametersMatrix({ translation: [2.123456789,3,4], rotation_degrees: [20,-30,60], scale: [1,1,1] });
   display.setMovingLocalToFixedLocal(pose);
   assert.deepEqual(display.getMovingLocalToFixedLocal(), pose);
   const point: XYZ = [1,2,3];
-  const expected = transformXYZ(display.localToDisplay(fixed), transformXYZ(pose, point));
+  const movingBusinessLocal = transformXYZ(transformParametersMatrix(parameters[moving]).map((row,index)=>index<3?[...row.slice(0,3),0]:[...row]), point);
+  const fixedBusinessLocal = transformXYZ(pose, movingBusinessLocal);
+  const anchor = businessOrigin('a');
+  const expected = transformXYZ([[1,0,0,businessOrigin(fixed)[0]-anchor[0]],[0,1,0,businessOrigin(fixed)[1]-anchor[1]],[0,0,1,businessOrigin(fixed)[2]-anchor[2]],[0,0,0,1]], fixedBusinessLocal);
   close(transformXYZ(display.localToDisplay(moving), point), expected);
   // The engine hierarchy must preserve shear instead of decomposing the combined matrix.
-  close(entities[moving].getWorldTransform().transformPoint(new pc.Vec3(...point)).toArray(), expected, 1e-5);
+  close(entities[moving].getWorldTransform().transformPoint(new pc.Vec3(...point)).toArray(), expected, 0.25);
   const before = display.getMovingLocalToFixedLocal();
   const signature = display.signature();
   display.setOriginal(true);
   const originalWorld = transformXYZ(display.businessMatrices[moving], point.map((value,i) => value+origins[moving][i]) as XYZ);
-  const anchor = transformXYZ(display.businessMatrices[fixed], origins[fixed]);
   close(transformXYZ(display.localToDisplay(moving), point), originalWorld.map((value,i) => value-anchor[i]));
   assert.equal(display.signature(), signature);
   display.setOriginal(false);

@@ -9,9 +9,9 @@
 
 ## 已完成
 
-- 2026-09-07：完成业务坐标预变换链路。刚体粗配准状态与业务显示分离，配准视图统一使用固定模型业务坐标系；父层业务 TRS 与子层刚体矩阵保留非等比缩放产生的剪切。粗配准手柄、数值输入、ICP 初值、过程及最终显示均使用独立刚体状态。
-- 坐标查询以双精度矩阵进行业务坐标与显示位置换算，原始／配准位置切换不改变结果；原始 Gaussian 补偿文件局部原点并继承分层变换，文件零点轴保持原有语义。修改预变换或粗配准后旧结果失效，刷新恢复与当前预变换一致的最近成功结果。
-- v2 业务矩阵下载与 JSON 一致，新增独立文件坐标矩阵下载；历史档案保留业务预变换与文件矩阵，源数据释放后仍可读取。新增分层显示回归测试及可重复运行的真实 Worker API 验证脚本。
+- 2026-09-08：修正业务坐标预变换为所见即所得链路。初始预览分别显示 `P_a × p_file_a`、`P_b × p_file_b`，共同显示锚点和相机保持稳定；修改 A 的预设只改变 A，修改 B 的预设只改变 B。刚体父层保存业务局部粗配准，模型子层保存各自预变换的线性部分。
+- 新工作台以 `coordinate_space=business` 提交任务。Worker 先将 A／B 点云及双精度原点分别转换到业务坐标，再执行刚体 ICP；最终 `a_to_b`／`b_to_a` 直接来自业务 ICP，文件矩阵按 `inverse(P_b) × M_business_a_to_b × P_a` 反算。旧 API 保留文件坐标配准兼容路径。
+- 坐标查询以双精度业务矩阵换算，取点和显示通过各自预变换逆变换还原文件局部点；原始／配准位置切换不改变坐标对。历史恢复仅接受 `coordinate_space=business` 且预设完全一致的结果。矩阵下载、历史档案及 Worker 预编译清单已同步。
 
 - 2026-09-07：保存业务坐标预变换中断代码快照至 `codex/business-coordinates-snapshot`（`f39abe2`），在 `codex/business-coordinates` 续接。修复业务结果组合误用于 v1 会话的问题，失败回归用例修复后通过；上传及工作台空白九参数按 `0／0／1` 处理，并拒绝浏览器判定为非法的数字输入。
 
@@ -202,14 +202,13 @@
 ## 最近验证
 
 ```text
-日期：2026-09-07
-方式：服务端单元测试＋真实 Worker HTTP API＋PlayCanvas 分层显示测试＋Playwright 真实浏览器＋TypeScript／Vite
-结果：服务端 9 项测试通过；坐标数学及分层显示测试覆盖双移动角色、非等比缩放、剪切、大坐标、原始位置与手柄往返。合成点云默认／移动 A／移动 B 共 3 轮 HTTP 配准通过；真实 3777901 点 PLY／149317 点 PCD 默认和非等比缩放共 2 轮通过，文件矩阵不变，RMS 均为 0.222230612453，业务矩阵、反向矩阵、四种矩阵下载和历史档案一致。
-浏览器：空白参数上传按 0／0／1 保存；坐标输入往返、原始／配准显示、剖切互斥、预变换修改失效、刚体 ICP 提交及刷新恢复通过；真实 Gaussian 加载、剖切、显隐及释放通过；实际鼠标平移／旋转保持刚体，场景取点及点拖动不改变 ICP 状态；文件零点轴与 P(0) 对应点重合。最终浏览器验证未出现应用异常。
-失败隔离：提交无效 PLY／PCD 后 Worker 返回 worker_failed，任务明确失败，API 健康检查仍为 200。
-构建：TypeScript、Vite 生产构建及 git diff --check 通过；保留现有 PlayCanvas worker_threads 外置和大包提示。未更改 C++／Docker，未重建原生 Worker 或 Docker 镜像。
-复现：pnpm run test:service；pnpm exec node --experimental-strip-types web/src/coordinate-math.test.ts；pnpm exec node --experimental-strip-types --experimental-transform-types web/src/registration-display.test.ts；启动独立测试服务后运行 .venv/Scripts/python.exe tests/service/business_transform_e2e.py http://127.0.0.1:8766，可加 --real 使用 source 中真实 PLY／PCD。
-证据：runtime/business-verification/{synthetic,real}-summary.json；output/playwright/business-*.js 与截图。测试服务使用 runtime/business-verification-20260907 隔离数据。
+日期：2026-09-08
+方式：Windows CTest＋服务单元测试＋业务坐标 Worker HTTP 端到端＋PlayCanvas 分层显示测试＋Playwright 真实浏览器＋Vite
+结果：Windows CTest 1／1、服务端 9／9、坐标数学及显示回归通过。已知对应关系合成点云在 A 非等比缩放及复合旋转下，移动 A／B 两轮业务 ICP RMS 分别为 7.41627e-7 m、5.04159e-7 m；业务矩阵接近单位矩阵，反算文件矩阵接近 `P_a`，正反向、四种下载和历史档案一致。
+真实数据：3777901 点 PLY／149317 点 PCD 在 `A Rx=-90°`、B 单位预设下完成业务 ICP，RMS 为 0.457745013019 m。浏览器输入 A 业务坐标 `(3,4,5)` 得到 B 业务坐标 `(3.031071691123,8.727348067593,-1.561734026339)`；原始／配准显示切换不改变坐标值，控制台无错误。
+所见即所得：同一真实会话和相机下，A 的 `Rx=0°` 与 `Rx=-90°` 初始截图明显不同；显示回归进一步断言修改 A 不改变 B。证据为 `output/playwright/business-initial-a-rx0.png`、`output/playwright/business-initial-a-rx-90.png` 及 `runtime/business-verification/{synthetic,real}-summary.json`。
+构建：原生 Worker 已重建并更新 Windows x64 清单；Vite 生产构建和 `git diff --check` 通过，保留现有 PlayCanvas worker_threads 外置及大包提示。Docker 未改动、未重建。
+复现：`pnpm run test`；`pnpm run test:service`；`pnpm exec node --experimental-strip-types web/src/coordinate-math.test.ts`；`pnpm exec node --experimental-strip-types --experimental-transform-types web/src/registration-display.test.ts`；启动独立服务后运行 `.venv/Scripts/python.exe tests/service/business_transform_e2e.py http://127.0.0.1:8766`，可加 `--real`。
 ```
 
 - 按最新要求将立方体文字恢复为面内标签：撤去屏幕朝向补偿及向外抬升，仅在文字倒置时面内旋转 180°，保留透视与镜像修正。浏览器斜视截图及标签面内变换断言通过，类型检查和 Web 构建通过；此项替代此前的屏幕朝向标签方案。

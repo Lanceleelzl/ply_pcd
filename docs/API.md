@@ -555,11 +555,12 @@ Content-Type: application/json
   "min_rms_decrease": 0.00001,
   "sampling_limit": 50000,
   "overlap": 1.0,
-  "random_seed": 42
+  "random_seed": 42,
+  "coordinate_space": "business"
 }
 ```
 
-`initial_moving_local_to_fixed_local` 必须与本次 `moving_model` 对应。例如 `moving_model=b` 时，它表示 B 局部坐标到 A 局部坐标的初始矩阵。对于 LAS／LAZ，大坐标世界原点由服务在双精度中组合，调用方不得把世界原点预先乘入该局部粗配准矩阵。
+新工作台固定提交 `coordinate_space=business`。此时 `initial_moving_local_to_fixed_local` 必须与本次 `moving_model` 对应，例如 `moving_model=b` 时，它表示 B 业务局部坐标到 A 业务局部坐标的刚体初始矩阵。省略该字段时使用兼容路径 `coordinate_space=file`，初值表示文件局部坐标。对于 LAS／LAZ，大坐标世界原点由服务在双精度中组合，调用方不得把世界原点预先乘入该局部粗配准矩阵。
 
 服务始终生成轻量逐轮事件，不需要调用方根据界面勾选状态决定是否输出。兼容旧版服务端时可以固定传入 `show_registration_progress=true`；新版服务端仍会接受该字段，但不再由它控制 Worker。是否显示只由浏览器订阅行为决定，不改变采样、收敛条件或最终矩阵。
 
@@ -570,7 +571,8 @@ Content-Type: application/json
 | `recommended_matrix` | 由 `output_direction` 选择的重点业务矩阵及明确公式 |
 | `a_to_b` | 模型 A 业务坐标到模型 B 业务坐标 |
 | `b_to_a` | 模型 B 业务坐标到模型 A 业务坐标，严格为前者的逆 |
-| `file_a_to_b`／`file_b_to_a` | 原始文件坐标之间的 ICP 世界矩阵，用于诊断 |
+| `file_a_to_b`／`file_b_to_a` | 原始文件世界坐标之间的换算矩阵，用于诊断和兼容 |
+| `coordinate_space` | 本轮 Worker 的 ICP 坐标空间；新工作台为 `business` |
 | `business_transforms` | A／B 九参数及自动生成的文件→业务矩阵 |
 | `moving_model`／`fixed_model` | 本轮实际 ICP 角色 |
 | `initial_moving_local_to_fixed_local` | 人工粗配准局部矩阵 |
@@ -581,9 +583,9 @@ Content-Type: application/json
 
 客户端不得根据 `moving_model` 猜测矩阵方向，应始终按字段名读取 `a_to_b` 或 `b_to_a`。`recommended_matrix.value` 只是其中一个方向的快捷入口。
 
-业务矩阵组合公式为 `a_to_b = P_b × file_a_to_b × inverse(P_a)`。航点属于 A 业务场景时，可以直接使用 `a_to_b`，不得再次手工补旋转。
+业务路径中，Worker 先分别应用 `P_a`、`P_b`，直接在业务局部坐标中执行刚体 ICP，所得世界矩阵即 `a_to_b`。文件矩阵由 `file_a_to_b = inverse(P_b) × a_to_b × P_a` 反算。航点属于 A 业务场景时，可以直接使用 `a_to_b`，不得再次手工补旋转。
 
-`initial_moving_local_to_fixed_local` 必须是原始文件局部坐标下的刚体矩阵。预变换的缩放不得进入此初值；`moving_local_to_fixed_local` 也不包含业务预变换。网页配准视图统一在固定模型业务坐标系显示；显示矩阵通过分层组合，不将非等比缩放与旋转的乘积重新分解为单层 TRS。
+`coordinate_space=business` 时，`initial_moving_local_to_fixed_local` 和 `moving_local_to_fixed_local` 都是业务局部坐标间的刚体矩阵。每个模型的预变换线性部分分别作用于自己的点云；网页采用刚体父层和模型业务线性变换子层，保证初始预览、粗配准、ICP 输入及过程显示使用同一条坐标链路。
 
 通过 `/api/v1/registrations/{job_id}/files/{filename}` 下载 v2 结果时，`a_to_b_matrix.txt` 和 `b_to_a_matrix.txt` 与 JSON 中的业务矩阵一致；`file_a_to_b_matrix.txt` 和 `file_b_to_a_matrix.txt` 保存原始文件坐标矩阵。历史档案保留业务矩阵、文件矩阵和当轮预变换，原始文件释放后仍可读取。
 

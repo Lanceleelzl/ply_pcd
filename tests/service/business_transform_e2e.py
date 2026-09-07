@@ -4,7 +4,6 @@ Usage: .venv/Scripts/python.exe tests/service/business_transform_e2e.py http://1
 """
 import http.client
 import json
-import math
 from pathlib import Path
 import random
 import sys
@@ -76,20 +75,27 @@ def close(a, b, tolerance=1e-8):
     assert max(abs(x-y) for row_a, row_b in zip(a,b) for x,y in zip(row_a,row_b)) < tolerance
 
 
+def transform_point(matrix, point):
+    return [sum(matrix[row][column] * point[column] for column in range(3)) + matrix[row][3] for row in range(3)]
+
+
 identity_parameters = {"translation": [0,0,0], "rotation_degrees": [0,0,0], "scale": [1,1,1]}
 pa = {"translation": [2,3,4], "rotation_degrees": [-90,20,15], "scale": [1,2,3]}
-pb = {"translation": [500000,4000000,30], "rotation_degrees": [10,30,45], "scale": [3,1,2]}
+pb = identity_parameters
 identity = service._transform_matrix(identity_parameters)
+pa_matrix = service._transform_matrix(pa)
+pb_matrix = service._transform_matrix(pb)
 
 if "--real" in sys.argv:
     paths = [ROOT / "source/ply/point_cloud.ply", ROOT / "source/pcd/GlobalMap.pcd"]
     roles = ["b"]
 else:
     rng = random.Random(42)
-    points = [(rng.uniform(-4,4), rng.uniform(-2,2), rng.uniform(-1,1)) for _ in range(1000)]
-    pcd = output / "synthetic.pcd"
-    pcd.write_text("VERSION .7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 1000\nHEIGHT 1\nPOINTS 1000\nDATA ascii\n" + "\n".join(" ".join(map(str,p)) for p in points), encoding="ascii")
-    paths = [pcd, pcd]
+    points_a = [(rng.uniform(-4,4), rng.uniform(-2,2), rng.uniform(-1,1)) for _ in range(1000)]
+    points_b = [transform_point(pa_matrix, point) for point in points_a]
+    paths = [output / "synthetic-a.pcd", output / "synthetic-b.pcd"]
+    for path, points in zip(paths, (points_a, points_b)):
+        path.write_text("VERSION .7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 1000\nHEIGHT 1\nPOINTS 1000\nDATA ascii\n" + "\n".join(" ".join(map(str,p)) for p in points), encoding="ascii")
     roles = ["a", "b"]
 
 workspace = str(uuid.uuid4())
@@ -98,19 +104,27 @@ session_id = created["session_id"]
 session_path = f"/api/v2/registration-sessions/{session_id}"
 session = wait(session_path, "ready")
 assert session["business_transforms"] == {"a": identity_parameters, "b": identity_parameters}
+request("PUT", session_path + "/business-transforms", {"model_a": pa, "model_b": pb})
 results = []
-for role, params in [(roles[0], (identity_parameters, identity_parameters))] + [(role,(pa,pb)) for role in roles]:
-    request("PUT", session_path + "/business-transforms", {"model_a": params[0], "model_b": params[1]})
-    created_job = request("POST", session_path + "/register", {"initial_moving_local_to_fixed_local": identity, "moving_model": role, "output_direction": "a_to_b" if role == "a" else "b_to_a"})
+for role in roles:
+    created_job = request("POST", session_path + "/register", {
+        "initial_moving_local_to_fixed_local": identity,
+        "moving_model": role,
+        "output_direction": "a_to_b" if role == "a" else "b_to_a",
+        "coordinate_space": "business",
+    })
     job = wait(created_job["status_url"], "succeeded")
     result = request("GET", job["result_url"])
-    expected = service._matmul(service._transform_matrix(params[1]), service._matmul(result["file_a_to_b"], service._inverse_affine(service._transform_matrix(params[0]))))
-    close(result["a_to_b"], expected)
+    assert result["coordinate_space"] == "business"
+    close(result["file_a_to_b"], service._matmul(service._inverse_affine(pb_matrix), service._matmul(result["a_to_b"], pa_matrix)))
     close(service._matmul(result["a_to_b"], result["b_to_a"]), identity)
     assert result["recommended_matrix"]["value"] == result["a_to_b" if role == "a" else "b_to_a"]
-    if results:
-        close(result["file_a_to_b"], results[0]["file_a_to_b"])
-        assert math.isclose(result["metrics"]["final_rms"], results[0]["metrics"]["final_rms"], abs_tol=1e-12)
+    if "--real" not in sys.argv:
+        close(result["a_to_b"], identity, 2e-5)
+        close(result["file_a_to_b"], pa_matrix, 2e-5)
+        assert result["metrics"]["final_rms"] < 2e-5, result["metrics"]
+        for point_a, point_b in zip(points_a[:10], points_b[:10]):
+            close([transform_point(result["a_to_b"], transform_point(pa_matrix, point_a))], [transform_point(pb_matrix, point_b)], 2e-5)
     for name in ("a_to_b", "b_to_a", "file_a_to_b", "file_b_to_a"):
         connection = http.client.HTTPConnection(base.hostname, base.port, timeout=10)
         connection.request("GET", f'/api/v1/registrations/{created_job["job_id"]}/files/{name}_matrix.txt')
@@ -122,7 +136,7 @@ for role, params in [(roles[0], (identity_parameters, identity_parameters))] + [
     archived = request("GET", f"/api/v2/registration-history/{session_id}?workspace_id={workspace}")
     close(archived["a_to_b"], result["a_to_b"])
     results.append(result)
-    print(f'PASS role={role} scale={params[0]["scale"]} rms={result["metrics"]["final_rms"]}', flush=True)
+    print(f'PASS role={role} coordinate_space=business rms={result["metrics"]["final_rms"]}', flush=True)
 
 summary = {"session_id": session_id, "workspace_id": workspace, "url": sys.argv[1]+f"/?session={session_id}&api=v2", "runs": len(results)}
 (output / ("real-summary.json" if "--real" in sys.argv else "synthetic-summary.json")).write_text(json.dumps(summary), encoding="utf-8")

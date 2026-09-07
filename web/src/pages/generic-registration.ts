@@ -39,6 +39,7 @@ interface RegistrationResult {
   a_to_b: Matrix4;
   b_to_a: Matrix4;
   business_transforms?: Record<ModelId, { matrix: Matrix4 }>;
+  coordinate_space?: 'file' | 'business';
   metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
 }
 
@@ -486,7 +487,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     });
     recolor(entities[moving], new pc.Color(1.0, 0.72, 0.08));
     recolor(entities[fixed], new pc.Color(0.68, 0.72, 0.78));
-    root.querySelector<HTMLElement>('#role-hint')!.textContent = `ICP：移动 ${moving.toUpperCase()}，固定 ${fixed.toUpperCase()}。配准视图使用 ${fixed.toUpperCase()} 业务坐标系；粗配准数值为文件局部坐标。`;
+    root.querySelector<HTMLElement>('#role-hint')!.textContent = `ICP：移动 ${moving.toUpperCase()}，固定 ${fixed.toUpperCase()}。预览与粗配准均使用业务坐标；数值为移动模型业务局部坐标 → 固定模型业务局部坐标。`;
     const rangeRisk = root.querySelector<HTMLElement>('#range-risk')!;
     const rangeRatio = modelDiagonals[fixed] > 0 ? modelDiagonals[moving] / modelDiagonals[fixed] : Number.POSITIVE_INFINITY;
     const movingLarger = rangeRatio >= 1.25;
@@ -532,7 +533,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
       businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
       coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
-      message.textContent = '已应用。粗配准及旧 ICP 结果已失效，请重新配准。'; fitCamera();
+      message.textContent = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
     } catch (error) { message.textContent = `应用失败：${String(error)}`; }
   });
 
@@ -573,8 +574,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       root.querySelector<HTMLElement>('#result')!.hidden = true;
       resultSignature = '';
     }
-    const position = movingEntity().getLocalPosition(); const rotation = movingEntity().getLocalEulerAngles();
-    const values = [position.x, position.y, position.z, rotation.x, rotation.y, rotation.z];
+    const pose = display.getPose();
+    const values = [...pose.position, ...pose.rotation];
     ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
     root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(display.getMovingLocalToFixedLocal());
     syncClipState();
@@ -970,6 +971,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value), overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
           random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
           show_registration_progress: true,
+          coordinate_space: 'business',
         }),
       });
       const created = await response.json(); if (!response.ok) throw new Error(created.detail ?? `HTTP ${response.status}`);
@@ -1006,7 +1008,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       const response = await fetch(latest.result_url);
       if (!response.ok) return;
       const result = await response.json() as RegistrationResult;
-      const matching = (['a', 'b'] as ModelId[]).every(model => {
+      const matching = result.coordinate_space === 'business' && (['a', 'b'] as ModelId[]).every(model => {
         const matrix = result.business_transforms?.[model].matrix ?? transformParametersMatrix(defaultTransform());
         return matrix.flat().every((value, index) => Math.abs(value-display.businessMatrices[model].flat()[index]) < 1e-12);
       });

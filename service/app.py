@@ -55,6 +55,7 @@ class ModelRegistrationRequest(BaseModel):
     overlap: float = 1.0
     random_seed: int = 42
     show_registration_progress: bool = False
+    coordinate_space: str = "file"
 
 
 class TransformParameters(BaseModel):
@@ -406,12 +407,16 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
                         transforms = _business_transforms(session_status)
                         pa, pb = _transform_matrix(transforms["a"]), _transform_matrix(transforms["b"])
                         result = json.loads(result_path.read_text(encoding="utf-8"))
-                        file_a_to_b, file_b_to_a = result["a_to_b"], result["b_to_a"]
-                        result["file_a_to_b"] = file_a_to_b
-                        result["file_b_to_a"] = file_b_to_a
                         result["business_transforms"] = {"a": {"parameters": transforms["a"], "matrix": pa}, "b": {"parameters": transforms["b"], "matrix": pb}}
-                        result["a_to_b"] = _matmul(pb, _matmul(file_a_to_b, _inverse_affine(pa)))
-                        result["b_to_a"] = _inverse_affine(result["a_to_b"])
+                        if status.get("coordinate_space") == "business":
+                            result["coordinate_space"] = "business"
+                            result["file_a_to_b"] = _matmul(_inverse_affine(pb), _matmul(result["a_to_b"], pa))
+                            result["file_b_to_a"] = _inverse_affine(result["file_a_to_b"])
+                        else:
+                            result["coordinate_space"] = "file"
+                            result["file_a_to_b"], result["file_b_to_a"] = result["a_to_b"], result["b_to_a"]
+                            result["a_to_b"] = _matmul(pb, _matmul(result["file_a_to_b"], _inverse_affine(pa)))
+                            result["b_to_a"] = _inverse_affine(result["a_to_b"])
                         direction = result.get("output_direction", session_status.get("output_direction", "a_to_b"))
                         source, target = ("a", "b") if direction == "a_to_b" else ("b", "a")
                         result["recommended_matrix"] = {"name": f"T_business_{direction}", "formula": f"p_business_{target} = T_business_{direction} * p_business_{source}", "value": result[direction]}
@@ -914,6 +919,8 @@ async def register_model_session(session_id: str, request: ModelRegistrationRequ
         raise HTTPException(status_code=400, detail="output_direction must be a_to_b or b_to_a")
     if request.moving_model not in {"auto", "a", "b"}:
         raise HTTPException(status_code=400, detail="moving_model must be auto, a, or b")
+    if request.coordinate_space not in {"file", "business"}:
+        raise HTTPException(status_code=400, detail="coordinate_space must be file or business")
     async with _manual_submission_lock:
         session_directory = _manual_session_directory(session_id)
         session_status = _read_status(session_directory)
@@ -946,12 +953,14 @@ async def register_model_session(session_id: str, request: ModelRegistrationRequ
         status = {
             "job_id": job_id, "status": "queued", "created_at_unix": time.time(),
             "manual_session_id": session_id, "inputs": session_status["inputs"],
+            "coordinate_space": request.coordinate_space,
         }
         _write_status(job_directory, status)
         session_status.setdefault("registrations", []).append({
             "job_id": job_id, "status": "queued", "created_at_unix": status["created_at_unix"],
             "initial_moving_local_to_fixed_local": request.initial_moving_local_to_fixed_local,
             "output_direction": request.output_direction, "moving_model": request.moving_model,
+            "coordinate_space": request.coordinate_space,
             "parameters": {
                 "min_rms_decrease": request.min_rms_decrease,
                 "sampling_limit": request.sampling_limit,
@@ -976,6 +985,13 @@ async def register_model_session(session_id: str, request: ModelRegistrationRequ
         "--sampling-limit", str(request.sampling_limit), "--overlap", str(request.overlap),
         "--random-seed", str(request.random_seed),
     ]
+    if request.coordinate_space == "business":
+        transforms = _business_transforms(session_status)
+        for model in ("a", "b"):
+            path = input_directory / f"model_{model}_to_business.txt"
+            path.write_text("\n".join(" ".join(f"{value:.17g}" for value in row)
+                                      for row in _transform_matrix(transforms[model])) + "\n", encoding="utf-8")
+            command.extend([f"--model-{model}-to-business", str(path)])
     command.append("--progress-jsonl")
     task = asyncio.create_task(_run_worker(job_id, command))
     _background_tasks.add(task)

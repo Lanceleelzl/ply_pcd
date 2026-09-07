@@ -1,5 +1,5 @@
 import * as pc from 'playcanvas';
-import { identityMatrix, invertAffine, multiplyMatrices, offsetXYZ, transformParametersMatrix, transformXYZ, type Matrix, type TransformParameters, type XYZ } from './coordinate-math.ts';
+import { identityMatrix, multiplyMatrices, offsetXYZ, transformParametersMatrix, transformXYZ, type Matrix, type TransformParameters, type XYZ } from './coordinate-math.ts';
 
 type Model = 'a' | 'b';
 const models: Model[] = ['a', 'b'];
@@ -27,6 +27,7 @@ export class RegistrationDisplay {
   private moving: Model = 'a';
   private original = false;
   private movingLocalToFixedLocal = identityMatrix();
+  private anchor: XYZ | null = null;
 
   constructor(root: pc.Entity, private entities: Record<Model, pc.Entity>,
     private origins: Record<Model, XYZ>, private parameters: Record<Model, TransformParameters>) {
@@ -44,7 +45,8 @@ export class RegistrationDisplay {
     this.moving = moving;
     this.original = false;
     models.forEach(model => { this.businessMatrices[model] = transformParametersMatrix(this.parameters[model]); });
-    this.setMovingLocalToFixedLocal(translation(offsetXYZ(this.origins[moving], this.origins[this.fixed], -1)));
+    this.anchor ??= this.businessOrigin('a');
+    this.setMovingLocalToFixedLocal(translation(offsetXYZ(this.businessOrigin(moving), this.businessOrigin(this.fixed), -1)));
   }
 
   getMovingLocalToFixedLocal(): Matrix { return this.movingLocalToFixedLocal.map(row => [...row]); }
@@ -58,45 +60,53 @@ export class RegistrationDisplay {
   setOriginal(original: boolean): void { this.original = original; this.refresh(); }
 
   private base(model: Model): Matrix {
-    if (!this.original) {
-      return this.businessMatrices[this.fixed].map((row, index) => index < 3 ? [...row.slice(0, 3), 0] : [...row]);
-    }
-    const anchor = transformXYZ(this.businessMatrices[this.fixed], this.origins[this.fixed]);
-    const position = offsetXYZ(transformXYZ(this.businessMatrices[model], this.origins[model]), anchor, -1);
-    return this.businessMatrices[model].map((row, index) => index < 3 ? [...row.slice(0, 3), position[index]] : [...row]);
+    return this.businessMatrices[model].map((row, index) => index < 3 ? [...row.slice(0, 3), 0] : [...row]);
+  }
+
+  private businessOrigin(model: Model): XYZ {
+    return transformXYZ(this.businessMatrices[model], this.origins[model]);
+  }
+
+  private parentMatrix(model: Model): Matrix {
+    const frame = translation(offsetXYZ(this.businessOrigin(this.original ? model : this.fixed), this.anchor!, -1));
+    if (this.original) return frame;
+    return multiplyMatrices(frame, model === this.moving ? this.movingLocalToFixedLocal : identityMatrix());
   }
 
   localToDisplay(model: Model): Matrix {
-    return multiplyMatrices(this.base(model), !this.original && model === this.moving ? this.movingLocalToFixedLocal : identityMatrix());
+    return multiplyMatrices(this.parentMatrix(model), this.base(model));
   }
 
   signature(): string { return JSON.stringify([this.moving, this.movingLocalToFixedLocal, this.businessMatrices]); }
 
   private refresh(): void {
     models.forEach(model => {
-      const parameter = this.parameters[this.original ? model : this.fixed];
-      const matrix = this.base(model);
-      this.parents[model].setLocalPosition(matrix[0][3], matrix[1][3], matrix[2][3]);
-      this.parents[model].setLocalEulerAngles(...parameter.rotation_degrees);
-      this.parents[model].setLocalScale(...parameter.scale);
-      setRigid(this.entities[model], !this.original && model === this.moving ? this.movingLocalToFixedLocal : identityMatrix());
+      const parameter = this.parameters[model];
+      setRigid(this.parents[model], this.parentMatrix(model));
+      this.entities[model].setLocalPosition(0, 0, 0);
+      this.entities[model].setLocalEulerAngles(...parameter.rotation_degrees);
+      this.entities[model].setLocalScale(...parameter.scale);
     });
   }
 
   private syncHandle(): void {
-    const rigid = this.entities[this.moving];
-    this.handle.setLocalPosition(...transformXYZ(this.base(this.moving), [this.movingLocalToFixedLocal[0][3], this.movingLocalToFixedLocal[1][3], this.movingLocalToFixedLocal[2][3]]));
-    this.handle.setLocalRotation(this.parents[this.moving].getLocalRotation().clone().mul(rigid.getLocalRotation()));
+    setRigid(this.handle, this.parentMatrix(this.moving));
   }
 
   applyHandle(): void {
-    const position = transformXYZ(invertAffine(this.base(this.moving)), this.handle.getLocalPosition().toArray() as XYZ);
-    const rotation = this.parents[this.moving].getLocalRotation().clone().invert().mul(this.handle.getLocalRotation());
+    const position = offsetXYZ(this.handle.getLocalPosition().toArray() as XYZ, offsetXYZ(this.businessOrigin(this.fixed), this.anchor!, -1), -1);
+    const rotation = this.handle.getLocalRotation();
     this.movingLocalToFixedLocal = rigidPose(new pc.Vec3(...position), rotation);
     this.refresh();
   }
 
   setPose(position: XYZ, rotation: XYZ): void {
     this.setMovingLocalToFixedLocal(transformParametersMatrix({ translation: position, rotation_degrees: rotation, scale: [1,1,1] }));
+  }
+
+  getPose(): { position: XYZ; rotation: XYZ } {
+    const pose = new pc.Entity();
+    setRigid(pose, this.movingLocalToFixedLocal);
+    return { position: pose.getLocalPosition().toArray() as XYZ, rotation: pose.getLocalEulerAngles().toArray() as XYZ };
   }
 }
