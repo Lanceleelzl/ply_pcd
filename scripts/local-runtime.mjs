@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { arch, platform } from "node:os";
+import { createServer } from "node:net";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
@@ -30,6 +31,24 @@ async function readLocalConfig() {
     throw new Error("config/local.json: source_retention_hours must be a positive integer");
   }
   return config;
+}
+
+async function assertPortAvailable(port, serviceName) {
+  await new Promise((resolveCheck, rejectCheck) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", (error) => {
+      const reason = error.code === "EACCES"
+        ? "the port is blocked or reserved by Windows"
+        : error.code === "EADDRINUSE"
+          ? "the port is already in use"
+          : error.message;
+      rejectCheck(new Error(`${serviceName} cannot bind to 127.0.0.1:${port}: ${reason}. Change the port in config/local.json.`));
+    });
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.close((error) => error ? rejectCheck(error) : resolveCheck());
+    });
+  });
 }
 
 function run(command, args, options = {}) {
@@ -222,6 +241,8 @@ async function setup() {
 async function serve(development) {
   await setup();
   const { port, web_port: webPort, source_retention_hours: sourceRetentionHours } = await readLocalConfig();
+  await assertPortAvailable(port, "API");
+  if (development) await assertPortAvailable(webPort, "Web development server");
   const environment = {
     ...process.env,
     REGISTRATION_RUNTIME_ROOT: runtimeDirectory,

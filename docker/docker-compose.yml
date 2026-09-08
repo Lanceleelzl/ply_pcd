@@ -13,7 +13,7 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "8765"
+      - "8865"
       - --log-config
       - /opt/registration-service/logging.json
     environment:
@@ -25,7 +25,7 @@ services:
       REGISTRATION_CLEANUP_INTERVAL_SECONDS: "3600"
       REGISTRATION_SOURCE_RETENTION_HOURS: "24"
     ports:
-      - "8765:8765"
+      - "8865:8865"
     volumes:
       - ../runtime:/data/runtime
     restart: unless-stopped

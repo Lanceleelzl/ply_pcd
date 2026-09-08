@@ -41,7 +41,7 @@ pnpm install
 pnpm run dev
 ```
 
-开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8765`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las` 或 `.laz`；上传后页面会由 C++ Worker 解码并生成轻量预览，浏览器无需直接解析 LAZ。
+开发模式浏览器打开 `http://localhost:5173`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5173/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las` 或 `.laz`；上传后页面会由 C++ Worker 解码并生成轻量预览，浏览器无需直接解析 LAZ。
 
 如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 
@@ -104,7 +104,7 @@ pnpm run docker:build
 pnpm run docker:up
 ```
 
-Docker 与本地服务默认都使用 `8765` 端口，切换前先停止另一种运行方式。
+Docker 与本地服务默认都使用 `8865` 端口，切换前先停止另一种运行方式。
 
 检查默认 PCD：
 
