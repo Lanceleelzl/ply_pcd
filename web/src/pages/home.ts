@@ -44,7 +44,7 @@ function matrixText(matrix?: number[][]): string {
 
 const defaultTransform = (): TransformParameters => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
 function transformEditor(model: 'a' | 'b'): string {
-  const row = (kind: keyof TransformParameters, defaults: number[]) => `<div class="transform-row"><span>${kind === 'translation' ? '平移／m' : kind === 'rotation_degrees' ? '旋转／°' : '缩放'}</span>${['X', 'Y', 'Z'].map((axis, i) => `<label>${axis}<input type="number" step="any" data-transform-model="${model}" data-transform-kind="${kind}" data-index="${i}" value="${defaults[i]}"></label>`).join('')}</div>`;
+  const row = (kind: keyof TransformParameters, defaults: number[]) => { const name = kind === 'translation' ? '平移／m' : kind === 'rotation_degrees' ? '旋转／°' : '缩放'; return `<div class="transform-row"><span>${name}</span>${['X', 'Y', 'Z'].map((axis, i) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} ${name} ${axis}" type="number" step="any" data-transform-model="${model}" data-transform-kind="${kind}" data-index="${i}" value="${defaults[i]}"><span>${axis}</span></label>`).join('')}</div>`; };
   return `<details class="upload-transform"><summary>模型 ${model.toUpperCase()} 业务坐标预变换（默认不转换）</summary>${row('translation', [0,0,0])}${row('rotation_degrees', [0,0,0])}${row('scale', [1,1,1])}<div class="upload-transform-matrix"><span>文件坐标 → 业务坐标矩阵</span><pre data-transform-matrix="${model}">${matrixText(transformParametersMatrix(defaultTransform()))}</pre></div></details>`;
 }
 

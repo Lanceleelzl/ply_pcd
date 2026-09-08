@@ -67,7 +67,7 @@ export class CoordinateQuery {
       <div class="coordinate-title"><strong>坐标查询</strong><button data-query="close">返回配准编辑</button></div>
       <button data-query="state">当前位置：配准位置｜切换原始位置</button>
       <div class="coordinate-actions coordinate-point-tools" role="group" aria-label="选择编辑点与取点"><button data-move-point="a">移动 A 点</button><button data-move-point="b">移动 B 点</button><button data-query="pick">场景取点</button><button data-query="clear">清除点</button></div>
-      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 业务坐标（${model === 'a' ? '红色' : '蓝色'}）</legend>${['X', 'Y', 'Z'].map((axis, index) => `<label>${axis}<input data-model="${model}" data-index="${index}" type="number" step="0.001" value="0"></label>`).join('')}<button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
+      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 业务坐标（${model === 'a' ? '红色' : '蓝色'}）</legend>${['X', 'Y', 'Z'].map((axis, index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} 业务坐标 ${axis}" data-model="${model}" data-index="${index}" type="number" step="0.001" value="0"><span>${axis}</span></label>`).join('')}<button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
       <button data-query="copy-pair">复制坐标对</button><p class="coordinate-message"></p>
       <small>坐标属于各模型业务坐标系；切换位置仅改变显示。取点使用轻量中心点预览，Gaussian 视觉表面可能与中心点不同。</small>
     </section>`);

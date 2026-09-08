@@ -111,8 +111,8 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
           <div class="workflow-title"><div><h1>PLY／定位点云配准工作台</h1><small>PLY 固定，${referenceLabel} 可调整</small></div><button id="new-task">新建</button></div>
           <section class="workflow-step completed"><h2><span>1</span> 数据与预览</h2><p>PLY ${plyCloud.count.toLocaleString()} 点<br>${referenceLabel} ${pcdCloud.count.toLocaleString()} 点</p></section>
           <section class="workflow-step"><h2><span>2</span> 人工粗配准（可选）</h2><p class="step-hint">在视口浮动工具栏选择平移或旋转，只调整黄色定位点云。</p>
-            <h3>平移／m</h3><div class="field-grid" id="position"></div>
-            <h3>旋转／°</h3><div class="field-grid" id="rotation"></div>
+            <div class="pose-row"><span>平移／m</span><div class="field-grid" id="position"></div></div>
+            <div class="pose-row"><span>旋转／°</span><div class="field-grid" id="rotation"></div></div>
             <details><summary>查看 T_manual_pcd_to_ply</summary><pre id="matrix" class="matrix"></pre></details>
           </section>
           <section class="workflow-step"><h2><span>3</span> ICP 精配准</h2>
@@ -302,10 +302,12 @@ export async function renderManualRegistration(root: HTMLElement, sessionId: str
     const container = root.querySelector<HTMLElement>(`#${containerId}`)!;
     for (const axis of ['x', 'y', 'z']) {
       const label = document.createElement('label');
-      label.textContent = axis.toUpperCase();
+      label.className = 'axis-input';
       const input = document.createElement('input');
       input.type = 'number'; input.step = prefix === 'p' ? '0.01' : '0.1'; input.value = '0';
-      inputs[`${prefix}${axis}`] = input; label.appendChild(input); container.appendChild(label);
+      input.setAttribute('aria-label', `${prefix === 'p' ? '平移' : '旋转'} ${axis.toUpperCase()}`);
+      const suffix = document.createElement('span'); suffix.textContent = axis.toUpperCase();
+      inputs[`${prefix}${axis}`] = input; label.append(input, suffix); container.appendChild(label);
     }
   };
   createInputs('position', 'p'); createInputs('rotation', 'r');

@@ -59,7 +59,7 @@ const formatBytes = (bytes?: number) => bytes
   : '大小未知';
 
 const transformEditor = (model: ModelId, value: TransformParameters): string => {
-  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label class="transform-axis-input"><input aria-label="模型 ${model.toUpperCase()} ${label} ${axis}" type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"><span>${axis}</span></label>`).join('')}</div>`;
+  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} ${label} ${axis}" type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"><span>${axis}</span></label>`).join('')}</div>`;
   return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
 };
 
@@ -105,8 +105,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
             <label class="parameter-label">ICP 移动模型<select id="moving-model"><option value="auto">自动推荐（${session.metadata!.recommended_moving_model.toUpperCase()}）</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>
           </div>
           <p id="role-hint" class="step-hint"></p><p id="range-risk" class="range-risk" hidden></p>
-          <h3>平移／m</h3><div class="field-grid" id="position"></div>
-          <h3>旋转／°</h3><div class="field-grid" id="rotation"></div>
+          <div class="pose-row"><span>平移／m</span><div class="field-grid" id="position"></div></div>
+          <div class="pose-row"><span>旋转／°</span><div class="field-grid" id="rotation"></div></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
         <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div class="icp-grid">
@@ -467,9 +467,11 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   for (const [container, prefix, step] of [['position', 'p', '0.01'], ['rotation', 'r', '0.1']] as const) {
     const parent = root.querySelector<HTMLElement>(`#${container}`)!;
     for (const axis of ['x', 'y', 'z']) {
-      const label = document.createElement('label'); label.textContent = axis.toUpperCase();
+      const label = document.createElement('label'); label.className = 'axis-input';
       const input = document.createElement('input'); input.type = 'number'; input.step = step; input.value = '0';
-      inputs[`${prefix}${axis}`] = input; label.appendChild(input); parent.appendChild(label);
+      input.setAttribute('aria-label', `${container === 'position' ? '平移' : '旋转'} ${axis.toUpperCase()}`);
+      const suffix = document.createElement('span'); suffix.textContent = axis.toUpperCase();
+      inputs[`${prefix}${axis}`] = input; label.append(input, suffix); parent.appendChild(label);
       input.addEventListener('input', () => {
         const fields = Object.values(inputs);
         if (fields.some(field => field.value === '' || field.validity.badInput || !Number.isFinite(Number(field.value)))) return;
