@@ -54,7 +54,7 @@ export class ClippingHandles {
     private readonly app: pc.Application,
     private readonly camera: pc.Entity,
     private readonly canvas: HTMLCanvasElement,
-    private readonly clipBox: pc.Entity,
+    private readonly getClipBox: () => pc.Entity,
     private readonly sceneMin: pc.Vec3,
     private readonly sceneMax: pc.Vec3,
     private readonly getMode: () => 'off' | 'axis' | 'box',
@@ -102,7 +102,8 @@ export class ClippingHandles {
     const show = mode !== 'off' && this.helperVisible();
     const center = this.sceneMin.clone().add(this.sceneMax).mulScalar(0.5);
     const state = this.getAxisState();
-    const boxTransform = this.clipBox.getWorldTransform();
+    const clipBox = this.getClipBox();
+    const boxTransform = clipBox.getWorldTransform();
     for (const handle of this.handles) {
       if (handle.kind === 'axis') {
         handle.worldPosition.copy(center);
@@ -123,10 +124,10 @@ export class ClippingHandles {
       const scale = hovered ? 1.12 : 1;
       const direction = axisVector(handle.axis).mulScalar(handle.side === 'min' ? -1 : 1);
       if (handle.kind === 'box') {
-        const boxScale = this.clipBox.getLocalScale();
+        const boxScale = clipBox.getLocalScale();
         const shortestSide = Math.min(Math.abs(boxScale.x), Math.abs(boxScale.y), Math.abs(boxScale.z));
         const arrowSize = Math.min(this.handleSize * 0.9, Math.max(this.handleSize * 0.22, shortestSide * 0.13)) * scale;
-        const worldDirection = this.clipBox.getRotation().transformVector(direction, new pc.Vec3()).normalize();
+        const worldDirection = clipBox.getRotation().transformVector(direction, new pc.Vec3()).normalize();
         handle.entity.setRotation(new pc.Quat().setFromDirections(pc.Vec3.UP, worldDirection));
         handle.entity.setLocalScale(arrowSize, arrowSize, arrowSize);
       } else {
@@ -158,8 +159,9 @@ export class ClippingHandles {
         const nextSize = Math.max(0.001, startSize + sign * delta);
         const appliedDelta = (nextSize - startSize) * sign;
         const nextScale = this.drag.startScale.clone(); nextScale[this.drag.handle.axis] = nextSize;
-        this.clipBox.setLocalScale(nextScale);
-        this.clipBox.setPosition(this.drag.startCenter.clone().add(this.drag.worldAxis.clone().mulScalar(appliedDelta * 0.5)));
+        const clipBox = this.getClipBox();
+        clipBox.setLocalScale(nextScale);
+        clipBox.setPosition(this.drag.startCenter.clone().add(this.drag.worldAxis.clone().mulScalar(appliedDelta * 0.5)));
       }
       return true;
     }
@@ -191,7 +193,7 @@ export class ClippingHandles {
     if (!handle) return false;
     const worldAxis = handle.kind === 'axis'
       ? axisVector(handle.axis)
-      : this.clipBox.getRotation().transformVector(axisVector(handle.axis), new pc.Vec3()).normalize();
+      : this.getClipBox().getRotation().transformVector(axisVector(handle.axis), new pc.Vec3()).normalize();
     const referenceLength = Math.max(this.sceneMax.clone().sub(this.sceneMin).length() * 0.25, 0.1);
     const startScreen = this.camera.camera!.worldToScreen(handle.worldPosition);
     const axisScreen = this.camera.camera!.worldToScreen(handle.worldPosition.clone().add(worldAxis.clone().mulScalar(referenceLength)));
@@ -201,8 +203,8 @@ export class ClippingHandles {
     this.drag = {
       handle, startX: point.x, startY: point.y, screenAxisX: screenX / pixels, screenAxisY: screenY / pixels,
       worldPerPixel: referenceLength / pixels,
-      startValue: this.getAxisState()[handle.side][handle.axis], startCenter: this.clipBox.getPosition().clone(),
-      startScale: this.clipBox.getLocalScale().clone(), worldAxis,
+      startValue: this.getAxisState()[handle.side][handle.axis], startCenter: this.getClipBox().getPosition().clone(),
+      startScale: this.getClipBox().getLocalScale().clone(), worldAxis,
     };
     this.dragging = true; this.onInteraction(true); this.canvas.setPointerCapture(event.pointerId);
     return true;

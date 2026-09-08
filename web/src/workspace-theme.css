@@ -106,6 +106,12 @@
 .integrated-editor .axis-clipping-grid label { display: flex; gap: 4px; align-items: center; }
 .integrated-editor .clip-tool-row { gap: 8px; margin: 12px 0; }
 .integrated-editor .clip-helper-option { gap: 8px; }
+.integrated-editor :is(.clipping-control-switch, .independent-editor-switch) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.integrated-editor :is(.clipping-control-switch, .independent-editor-switch) button { width: 100%; }
+.integrated-editor .independent-clip-model { margin: 8px 0; padding: 8px; border: 1px solid var(--ui-border); border-radius: 7px; }
+.integrated-editor .independent-clip-model.active-editor { border-color: #78b8f2; box-shadow: 0 0 0 1px #78b8f233; }
+.integrated-editor .independent-clip-model > label:first-of-type { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 8px; }
+.integrated-editor .independent-clip-model [data-independent-box] > button { width: 100%; }
 .integrated-editor .coordinate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .integrated-editor .coordinate-actions + .coordinate-actions { margin-top: 12px; }
 .integrated-editor .coordinate-panel fieldset { margin: 16px 0; padding: 12px; border-color: var(--ui-border); }
