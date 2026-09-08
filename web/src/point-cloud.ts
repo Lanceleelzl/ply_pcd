@@ -13,8 +13,8 @@ export interface PointCloudMaterial extends pc.ShaderMaterial {
     originSides: pc.Vec3, worldToOrigin: pc.Mat4): void;
 }
 
-export async function loadPreview(url: string): Promise<PreviewCloud> {
-  const response = await fetch(url);
+export async function loadPreview(url: string, signal?: AbortSignal): Promise<PreviewCloud> {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`加载预览失败：HTTP ${response.status}`);
   const buffer = await response.arrayBuffer();
   const bytes = new Uint8Array(buffer, 0, 8);

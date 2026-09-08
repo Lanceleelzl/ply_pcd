@@ -18,6 +18,7 @@
     "build": "pnpm run build:native && pnpm run build:web",
     "build:native": "node scripts/local-runtime.mjs build-native",
     "build:web": "vite build --config web/vite.config.ts",
+    "typecheck:web": "vue-tsc --noEmit -p web/tsconfig.json",
     "test": "node scripts/local-runtime.mjs test",
     "test:service": "node scripts/local-runtime.mjs test-service",
     "docker:build": "docker compose -f docker/docker-compose.yml build registration-api",
@@ -26,12 +27,17 @@
     "docker:logs": "docker compose -f docker/docker-compose.yml logs -f registration-api"
   },
   "dependencies": {
-    "playcanvas": "2.21.3"
+    "pinia": "3.0.4",
+    "playcanvas": "2.21.3",
+    "vue": "3.5.42",
+    "vue-router": "4.6.4"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/webxr": "^0.5.24",
-    "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "@vitejs/plugin-vue": "6.0.8",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1",
+    "vue-tsc": "3.3.11"
   }
 }

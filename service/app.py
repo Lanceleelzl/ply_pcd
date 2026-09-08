@@ -5,7 +5,6 @@ import asyncio
 import hashlib
 import json
 import math
-import os
 import shutil
 import time
 import uuid
@@ -15,18 +14,24 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
-
-RUNTIME_ROOT = Path(os.getenv("REGISTRATION_RUNTIME_ROOT", "/data/runtime")).resolve()
-WORKER_PATH = os.getenv("REGISTRATION_WORKER_PATH", "/usr/local/bin/registration_worker")
-WORKER_TIMEOUT_SECONDS = int(os.getenv("REGISTRATION_WORKER_TIMEOUT_SECONDS", "1800"))
-MAX_CONCURRENT_JOBS = int(os.getenv("REGISTRATION_MAX_CONCURRENT_JOBS", "1"))
-RESULT_RETENTION_HOURS = int(os.getenv("REGISTRATION_RESULT_RETENTION_HOURS", "168"))
-CLEANUP_INTERVAL_SECONDS = int(os.getenv("REGISTRATION_CLEANUP_INTERVAL_SECONDS", "3600"))
-SOURCE_RETENTION_HOURS = int(os.getenv("REGISTRATION_SOURCE_RETENTION_HOURS", "24"))
-UPLOAD_CHUNK_BYTES = 1024 * 1024
-SERVICE_VERSION = "0.3.0"
+from service.config import (
+    CLEANUP_INTERVAL_SECONDS,
+    MAX_CONCURRENT_JOBS,
+    RESULT_RETENTION_HOURS,
+    RUNTIME_ROOT,
+    SERVICE_VERSION,
+    SOURCE_RETENTION_HOURS,
+    UPLOAD_CHUNK_BYTES,
+    WORKER_PATH,
+    WORKER_TIMEOUT_SECONDS,
+)
+from service.schemas import (
+    BusinessTransformsRequest,
+    ManualRegistrationRequest,
+    ModelRegistrationRequest,
+    TransformParameters,
+    WorkspaceRequest,
+)
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
 STATIC_ROOT = Path(__file__).parent / "static"
@@ -35,42 +40,6 @@ _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 _manual_submission_lock = asyncio.Lock()
 _background_tasks: set[asyncio.Task[None]] = set()
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
-
-
-class ManualRegistrationRequest(BaseModel):
-    initial_pcd_to_ply: list[list[float]]
-    precision_mode: str = "recommended"
-    min_rms_decrease: float = 1.0e-5
-    sampling_limit: int = 50000
-    overlap: float = 1.0
-    random_seed: int = 42
-
-
-class ModelRegistrationRequest(BaseModel):
-    initial_moving_local_to_fixed_local: list[list[float]]
-    output_direction: str = "a_to_b"
-    moving_model: str = "auto"
-    min_rms_decrease: float = 1.0e-5
-    sampling_limit: int = 50000
-    overlap: float = 1.0
-    random_seed: int = 42
-    show_registration_progress: bool = False
-    coordinate_space: str = "file"
-
-
-class TransformParameters(BaseModel):
-    translation: list[float] = [0.0, 0.0, 0.0]
-    rotation_degrees: list[float] = [0.0, 0.0, 0.0]
-    scale: list[float] = [1.0, 1.0, 1.0]
-
-
-class BusinessTransformsRequest(BaseModel):
-    model_a: TransformParameters
-    model_b: TransformParameters
-
-
-class WorkspaceRequest(BaseModel):
-    workspace_id: str
 
 
 def _job_directory(job_id: str) -> Path:
@@ -1304,4 +1273,13 @@ async def index() -> Response:
 @app.get("/manual-registration/{session_id}")
 async def manual_registration_page(session_id: str) -> Response:
     _manual_session_directory(session_id)
+    return _web_index()
+
+
+@app.get("/registration/{session_id}")
+async def model_registration_page(session_id: str) -> Response:
+    session_directory = _manual_session_directory(session_id)
+    status = _read_status(session_directory)
+    if status.get("api_version") != "v2":
+        raise HTTPException(status_code=404, detail="V2 registration session not found")
     return _web_index()

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+RUNTIME_ROOT = Path(os.getenv("REGISTRATION_RUNTIME_ROOT", "/data/runtime")).resolve()
+WORKER_PATH = os.getenv("REGISTRATION_WORKER_PATH", "/usr/local/bin/registration_worker")
+WORKER_TIMEOUT_SECONDS = int(os.getenv("REGISTRATION_WORKER_TIMEOUT_SECONDS", "1800"))
+MAX_CONCURRENT_JOBS = int(os.getenv("REGISTRATION_MAX_CONCURRENT_JOBS", "1"))
+RESULT_RETENTION_HOURS = int(os.getenv("REGISTRATION_RESULT_RETENTION_HOURS", "168"))
+CLEANUP_INTERVAL_SECONDS = int(os.getenv("REGISTRATION_CLEANUP_INTERVAL_SECONDS", "3600"))
+SOURCE_RETENTION_HOURS = int(os.getenv("REGISTRATION_SOURCE_RETENTION_HOURS", "24"))
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+SERVICE_VERSION = "0.3.0"

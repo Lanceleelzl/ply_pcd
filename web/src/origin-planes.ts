@@ -20,7 +20,7 @@ export class OriginPlaneController {
 
   constructor(
     root: HTMLElement,
-    app: pc.Application,
+    private readonly app: pc.Application,
     entities: Record<Model, pc.Entity>,
     origins: Record<Model, XYZ>,
     diagonals: Record<Model, number>,
@@ -66,7 +66,7 @@ export class OriginPlaneController {
       this.panel.querySelectorAll<HTMLSelectElement>('select').forEach(select => { select.value = '0'; });
       this.refresh();
     });
-    app.on('update', () => this.refreshVisuals());
+    this.app.on('update', this.refreshVisuals, this);
     this.refresh();
   }
 
@@ -102,5 +102,11 @@ export class OriginPlaneController {
     const local = this.getWorldToOrigin(model).transformPoint(world);
     const inside = (value: number, coordinate: number) => value === 0 || (value > 0 ? coordinate >= 0 : coordinate <= 0);
     return inside(side.x, local.x) && inside(side.y, local.y) && inside(side.z, local.z);
+  }
+
+  destroy(): void {
+    this.app.off('update', this.refreshVisuals, this);
+    models.forEach(model => this.frames[model].destroy());
+    this.panel.remove();
   }
 }

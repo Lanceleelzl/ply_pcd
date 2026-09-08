@@ -8,52 +8,20 @@ import { OriginPlaneController } from '../origin-planes';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
-import { createCubeLabels } from '../cube-labels';
-
-type Matrix4 = number[][];
-type ModelId = 'a' | 'b';
-
-interface SessionStatus {
-  status: string;
-  error?: string;
-  output_direction: 'a_to_b' | 'b_to_a';
-  moving_model: 'auto' | ModelId;
-  model_a_preview_url?: string;
-  model_b_preview_url?: string;
-  gaussian_a_url?: string;
-  gaussian_b_url?: string;
-  inputs?: { model_a_bytes?: number; model_b_bytes?: number };
-  business_transforms?: Record<ModelId, TransformParameters>;
-  registrations?: { job_id: string; status: string; result_url?: string; output_direction: 'a_to_b' | 'b_to_a'; parameters: Record<string, number> }[];
-  metadata?: {
-    recommended_moving_model: ModelId;
-    models: Record<ModelId, {
-      format: string; source_point_count: number; preview_point_count: number; origin: number[];
-    }>;
-  };
-}
-
-interface RegistrationResult {
-  recommended_matrix: { name: string; formula: string; value: Matrix4 };
-  moving_model: ModelId;
-  moving_local_to_fixed_local: Matrix4;
-  a_to_b: Matrix4;
-  b_to_a: Matrix4;
-  file_a_to_b?: Matrix4;
-  file_b_to_a?: Matrix4;
-  business_transforms?: Record<ModelId, { matrix: Matrix4 }>;
-  coordinate_space?: 'file' | 'business';
-  metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
-}
-
-interface IterationEvent {
-  type: 'iteration';
-  iteration: number;
-  rms: number;
-  point_count: number;
-  elapsed_seconds: number;
-  moving_local_to_fixed_local: Matrix4;
-}
+import { ViewportCameraController } from '../engine/core/ViewportCameraController';
+import { InputController } from '../engine/core/InputController';
+import { RegistrationApplication } from '../engine/core/Application';
+import { ToolManager } from '../engine/core/ToolManager';
+import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
+import type {
+  Matrix4,
+  ModelId,
+  RegistrationIteration,
+  RegistrationRequest,
+  RegistrationResult,
+  RegistrationSession,
+} from '../api/contracts';
+import { mountWorkbenchLayout } from '../views/workbench/mount-workbench-layout';
 
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
@@ -76,10 +44,10 @@ function cloudDiagonal(cloud: PreviewCloud): number {
   return cloud.max.clone().sub(cloud.min).length();
 }
 
-async function waitForSession(sessionId: string, statusElement: HTMLElement): Promise<SessionStatus> {
+async function waitForSession(sessionId: string, statusElement: HTMLElement, signal: AbortSignal): Promise<RegistrationSession> {
   while (true) {
-    const response = await fetch(`/api/v2/registration-sessions/${sessionId}`);
-    const status = await response.json() as SessionStatus;
+    const response = await fetch(`/api/v2/registration-sessions/${sessionId}`, { signal });
+    const status = await response.json() as RegistrationSession;
     statusElement.textContent = `预览状态：${status.status}`;
     if (status.status === 'ready') return status;
     if (status.status === 'failed') throw new Error(status.error ?? '预览生成失败');
@@ -87,11 +55,19 @@ async function waitForSession(sessionId: string, statusElement: HTMLElement): Pr
   }
 }
 
-export async function renderGenericRegistration(root: HTMLElement, sessionId: string): Promise<void> {
+export async function renderGenericRegistration(
+  root: HTMLElement,
+  sessionId: string,
+  externalSignal?: AbortSignal,
+): Promise<() => void> {
+  const lifecycle = new AbortController();
+  const abortLifecycle = () => lifecycle.abort();
+  externalSignal?.addEventListener('abort', abortLifecycle, { once: true });
+  const { signal } = lifecycle;
   root.innerHTML = '<main class="loading"><h2>正在生成双模型预览</h2><pre id="loading-status">queued</pre></main>';
-  const session = await waitForSession(sessionId, root.querySelector('#loading-status')!);
+  const session = await waitForSession(sessionId, root.querySelector('#loading-status')!, signal);
   const [cloudA, cloudB] = await Promise.all([
-    loadPreview(session.model_a_preview_url!), loadPreview(session.model_b_preview_url!),
+    loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
   ]);
   const infoA = session.metadata!.models.a;
   const infoB = session.metadata!.models.b;
@@ -151,6 +127,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         <div class="view-gizmo" aria-label="快速视角"><div class="view-cube-scene"><div class="view-cube"><button class="cube-face face-x" data-direction="1,0,0" title="沿 +X 查看">X</button><button class="cube-face face-nx" data-direction="-1,0,0" title="沿 -X 查看">−X</button><button class="cube-face face-y" data-direction="0,1,0" title="沿 +Y 查看">Y</button><button class="cube-face face-ny" data-direction="0,-1,0" title="沿 -Y 查看">−Y</button><button class="cube-face face-z" data-direction="0,0,1" title="顶视图（沿 +Z 查看）">Z</button><button class="cube-face face-nz" data-direction="0,0,-1" title="底视图（沿 -Z 查看）">−Z</button>${[-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => `<button class="cube-corner" data-direction="${x},${y},${z}" style="--cx:${x};--cy:${y};--cz:${z}" title="等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z"></button>`))).join('')}</div></div><div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div></div>
         <div id="viewport-help" class="viewport-help">左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型</div></section>
     </div></main>`;
+  mountWorkbenchLayout(root);
 
   const outputDirection = root.querySelector<HTMLSelectElement>('#output-direction')!;
   const movingSelect = root.querySelector<HTMLSelectElement>('#moving-model')!;
@@ -160,18 +137,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     ? session.metadata!.recommended_moving_model : movingSelect.value as ModelId;
 
   const canvas = root.querySelector<HTMLCanvasElement>('#viewport')!;
-  const keyboard = new pc.Keyboard(window);
-  const application = new pc.Application(canvas, { mouse: new pc.Mouse(canvas), touch: new pc.TouchDevice(canvas), keyboard });
-  application.setCanvasResolution(pc.RESOLUTION_AUTO); application.start();
   const viewportElement = canvas.parentElement!;
   viewportElement.style.minHeight = '0';
   viewportElement.style.overflow = 'hidden';
-  const viewportResize = new ResizeObserver(() => application.resizeCanvas(viewportElement.clientWidth, viewportElement.clientHeight));
-  viewportResize.observe(viewportElement);
-  application.scene.gsplat.alphaClip = 0.1;
-  const camera = new pc.Entity('Camera');
-  camera.addComponent('camera', { clearColor: new pc.Color(0.035, 0.055, 0.085), farClip: 100000, toneMapping: pc.TONEMAP_ACES });
-  application.root.addChild(camera);
+  const engine = new RegistrationApplication({ canvas, viewport: viewportElement });
+  const application = engine.app;
+  const camera = engine.camera;
   const entityA = createPointCloudEntity(application, cloudA, new pc.Color(0.68, 0.72, 0.78), 'Model A');
   const entityB = createPointCloudEntity(application, cloudB, new pc.Color(0.68, 0.72, 0.78), 'Model B');
   application.root.addChild(entityA); application.root.addChild(entityB);
@@ -220,45 +191,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const originPlanes = new OriginPlaneController(root, application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible);
-  const cameraTarget = bounds.center.clone();
-  let cameraDistance = Math.max(bounds.diagonal * 1.2, 0.1);
-  let cameraOrthoHeight = Math.max(bounds.diagonal * 0.6, 0.05);
-  const zUp = new pc.Vec3(0, 0, 1);
-  const cameraDirection = new pc.Vec3();
-  const cameraUp = zUp.clone();
-  const setDirectionFromAngles = (yawDegrees: number, pitchDegrees: number) => {
-    const yaw = yawDegrees * Math.PI / 180;
-    const pitch = pitchDegrees * Math.PI / 180;
-    const horizontal = Math.cos(pitch);
-    cameraDirection.set(horizontal * Math.sin(yaw), horizontal * Math.cos(yaw), Math.sin(pitch)).normalize();
-  };
-  setDirectionFromAngles(135, 24);
-  const viewCube = root.querySelector<HTMLElement>('.view-cube')!;
-  const updateCubeLabels = createCubeLabels(viewCube);
-  const cubeCorners = Array.from(root.querySelectorAll<HTMLElement>('.cube-corner'));
-  const updateCamera = () => {
-    camera.setPosition(cameraTarget.clone().add(cameraDirection.clone().mulScalar(cameraDistance)));
-    camera.lookAt(cameraTarget, cameraUp);
-    const cameraRight = new pc.Vec3().cross(cameraUp, cameraDirection).normalize();
-    const cubeUp = new pc.Vec3().cross(cameraDirection, cameraRight).normalize();
-    viewCube.style.transform = `matrix3d(${cameraRight.x},${-cubeUp.x},${cameraDirection.x},0,${-cameraRight.y},${cubeUp.y},${-cameraDirection.y},0,${cameraRight.z},${-cubeUp.z},${cameraDirection.z},0,0,0,0,1)`;
-    updateCubeLabels();
-    const inverseCubeTransform = `matrix3d(${cameraRight.x},${-cameraRight.y},${cameraRight.z},0,${-cubeUp.x},${cubeUp.y},${-cubeUp.z},0,${cameraDirection.x},${-cameraDirection.y},${cameraDirection.z},0,0,0,0,1)`;
-    cubeCorners.forEach(corner => {
-      const [x, y, z] = corner.dataset.direction!.split(',').map(Number);
-      corner.style.transform = `translate3d(${x * 30}px, ${y * -30}px, ${z * 30}px) ${inverseCubeTransform}`;
-    });
-  };
-  const orbitCamera = (horizontalDegrees: number, verticalDegrees: number) => {
-    const yawRotation = new pc.Quat().setFromAxisAngle(cameraUp, -horizontalDegrees);
-    yawRotation.transformVector(cameraDirection, cameraDirection).normalize();
-    const right = new pc.Vec3().cross(cameraUp, cameraDirection).normalize();
-    const pitchRotation = new pc.Quat().setFromAxisAngle(right, -verticalDegrees);
-    pitchRotation.transformVector(cameraDirection, cameraDirection).normalize();
-    pitchRotation.transformVector(cameraUp, cameraUp).normalize();
-    updateCamera();
-  };
-  const fitCamera = () => {
+  const displayBounds = () => {
     const min = new pc.Vec3(Infinity, Infinity, Infinity);
     const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
     (['a', 'b'] as ModelId[]).forEach(model => {
@@ -268,16 +201,15 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         min.min(point); max.max(point);
       }
     });
-    cameraTarget.copy(min).add(max).mulScalar(0.5);
-    const diagonal = max.clone().sub(min).length();
-    cameraDistance = Math.max(diagonal * 1.2, 0.1);
-    cameraOrthoHeight = Math.max(diagonal * 0.6, 0.05);
-    camera.camera!.orthoHeight = cameraOrthoHeight;
-    setDirectionFromAngles(135, 24);
-    cameraUp.copy(zUp);
-    updateCamera();
+    return { min, max };
   };
-  fitCamera();
+  const cameraController = new ViewportCameraController({
+    camera,
+    canvas,
+    root,
+    baseDiagonal: bounds.diagonal,
+    getBounds: displayBounds,
+  });
 
   const movingTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Moving Model Translation');
   const movingRotateLayer = pc.RotateGizmo.createLayer(application, 'Moving Model Rotation');
@@ -308,7 +240,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   let gizmoTransforming = false;
   let translateGizmoHovered = false; let rotateGizmoHovered = false;
   let translateGizmoTransforming = false; let rotateGizmoTransforming = false;
-  const onTransformStart = () => { gizmoTransforming = true; navigation = null; };
+  const onTransformStart = () => { gizmoTransforming = true; };
   const onTransformEnd = () => { gizmoTransforming = false; };
   const refreshMovingGizmoInput = () => {
     translate.mouseButtons[0] = translateGizmoTransforming || !rotateGizmoTransforming;
@@ -361,21 +293,45 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   refreshMovingGizmoInput(); refreshClipGizmoInput();
   const movingEntity = () => entities[effectiveMoving()];
   [translate, rotate].forEach(gizmo => gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => display.applyHandle()));
-  const attach = () => {
-    translate.detach(); rotate.detach(); clipTranslate.detach(); clipRotate.detach();
-    coordinateQuery?.setClippingActive(clippingInteractionActive);
-    if (clippingInteractionActive) {
+  type EditingToolId = 'idle' | 'model-transform' | 'clipping' | 'coordinate-query';
+  const toolManager = new ToolManager<EditingToolId>();
+  toolManager.register({
+    id: 'idle',
+    activate: () => {},
+    deactivate: () => {},
+  });
+  toolManager.register({
+    id: 'model-transform',
+    activate: () => { translate.attach(display.handle); rotate.attach(display.handle); },
+    deactivate: () => { translate.detach(); rotate.detach(); },
+  });
+  toolManager.register({
+    id: 'clipping',
+    activate: () => {
       const activeMode = clippingControlMode === 'joint' ? clippingModeValue : independentModeValues[independentEditor];
       const helperVisible = clippingControlMode === 'joint' ? clipHelperVisible.checked : independentHelperVisible[independentEditor];
       const activeBox = clippingControlMode === 'joint' ? clipBox : independentClipBoxes[independentEditor];
       if (activeMode === 'box' && helperVisible) {
         clipTranslate.attach(activeBox);
         clipRotate.attach(activeBox);
+      } else {
+        clipTranslate.detach();
+        clipRotate.detach();
       }
-    } else if (!queryActive && !clippingInteractionActive && !running && modelVisible[effectiveMoving()]) {
-      translate.attach(display.handle);
-      rotate.attach(display.handle);
-    }
+    },
+    deactivate: () => { clipTranslate.detach(); clipRotate.detach(); },
+  });
+  toolManager.register({
+    id: 'coordinate-query',
+    activate: () => {},
+    deactivate: () => {},
+  });
+  const attach = () => {
+    coordinateQuery?.setClippingActive(clippingInteractionActive);
+    if (clippingInteractionActive) toolManager.activate('clipping');
+    else if (queryActive) toolManager.activate('coordinate-query');
+    else if (!running && modelVisible[effectiveMoving()]) toolManager.activate('model-transform');
+    else toolManager.activate('idle');
   };
 
   const visibilityButtons: Record<ModelId, HTMLButtonElement> = {
@@ -565,12 +521,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         if ([...value.translation,...value.rotation_degrees,...value.scale].some(number => !Number.isFinite(number))) throw new Error('参数必须是有效数字');
         if (value.scale.some(number => number <= 0)) throw new Error('缩放必须大于 0');
       }
-      const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }) });
+      const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }), signal });
       const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
       businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
       coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
       message.textContent = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
-    } catch (error) { message.textContent = `应用失败：${String(error)}`; }
+    } catch (error) { if (!signal.aborted) message.textContent = `应用失败：${String(error)}`; }
   });
 
   const clipMinState = new pc.Vec3(); const clipMaxState = new pc.Vec3(); const worldToClipBox = new pc.Mat4();
@@ -658,7 +614,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     a: root.querySelector<HTMLInputElement>('#ind-a-helper-visible')!, b: root.querySelector<HTMLInputElement>('#ind-b-helper-visible')!,
   };
   resetButton.addEventListener('click', () => { if (!running) display.reset(effectiveMoving()); });
-  root.querySelector('#fit')!.addEventListener('click', fitCamera);
+  root.querySelector('#fit')!.addEventListener('click', () => cameraController.fit());
   clippingToggle.addEventListener('click', () => {
     clippingPanel.hidden = !clippingPanel.hidden;
     if (!clippingPanel.hidden) originPlanePanel.hidden = true;
@@ -725,7 +681,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     () => clippingControlMode === 'joint' ? getAxisClipState() : axisClipState(independentAxisInputs[independentEditor]),
     (axis, side, value) => clippingControlMode === 'joint' ? setAxisBoundary(axis, side, value) : setAxisBoundaryIn(independentAxisInputs[independentEditor], axis, side, value),
     () => clippingControlMode === 'joint' ? clipHelperVisible.checked : independentHelperVisible[independentEditor],
-    active => { gizmoTransforming = active; if (active) navigation = null; },
+    active => { gizmoTransforming = active; },
   );
 
   const worldBounds = (models: ModelId[]) => {
@@ -809,116 +765,32 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   refreshClippingMode();
   root.querySelector('#new-task')!.addEventListener('click', () => { location.href = '/'; });
 
-  const setViewDirection = (direction: pc.Vec3) => {
-    direction.normalize();
-    cameraDirection.copy(direction);
-    cameraUp.copy(Math.abs(direction.z) > 0.999 ? pc.Vec3.UP : zUp);
-    updateCamera();
-  };
-  root.querySelectorAll<HTMLButtonElement>('.view-cube button[data-direction]').forEach(button => {
-    button.addEventListener('click', () => {
-      const [x, y, z] = button.dataset.direction!.split(',').map(Number);
-      setViewDirection(new pc.Vec3(x, y, z));
-    });
-  });
-  const viewCubeScene = root.querySelector<HTMLElement>('.view-cube-scene')!;
-  let cubeDragging = false;
-  let cubeDragMoved = false;
-  let cubeDragDistance = 0;
-  let cubeDragAxis: 'horizontal' | 'vertical' | 'free' | null = null;
-  let cubeStartX = 0;
-  let cubeStartY = 0;
-  let cubeLastX = 0;
-  let cubeLastY = 0;
-  viewCubeScene.addEventListener('pointerdown', event => {
-    if (event.button !== 0) return;
-    cubeDragging = true; cubeDragMoved = false; cubeDragDistance = 0; cubeDragAxis = null;
-    cubeStartX = cubeLastX = event.clientX;
-    cubeStartY = cubeLastY = event.clientY;
-  });
-  viewCubeScene.addEventListener('pointermove', event => {
-    if (!cubeDragging) return;
-    const dx = event.clientX - cubeLastX; const dy = event.clientY - cubeLastY;
-    cubeLastX = event.clientX; cubeLastY = event.clientY; cubeDragDistance += Math.hypot(dx, dy);
-    if (cubeDragDistance > 5 && !cubeDragMoved) {
-      cubeDragMoved = true;
-      const totalX = event.clientX - cubeStartX; const totalY = event.clientY - cubeStartY;
-      cubeDragAxis = Math.abs(totalY) > Math.abs(totalX) * 1.5
-        ? 'vertical' : Math.abs(totalX) > Math.abs(totalY) * 1.5 ? 'horizontal' : 'free';
-      viewCubeScene.setPointerCapture(event.pointerId);
-      viewCubeScene.classList.add('dragging');
-    }
-    if (!cubeDragMoved) return;
-    orbitCamera((cubeDragAxis === 'vertical' ? 0 : dx) * 0.6, (cubeDragAxis === 'horizontal' ? 0 : dy) * 0.6);
-  });
-  viewCubeScene.addEventListener('pointerup', event => {
-    cubeDragging = false; viewCubeScene.classList.remove('dragging');
-    if (viewCubeScene.hasPointerCapture(event.pointerId)) viewCubeScene.releasePointerCapture(event.pointerId);
-  });
-  viewCubeScene.addEventListener('pointercancel', () => { cubeDragging = false; viewCubeScene.classList.remove('dragging'); });
-  viewCubeScene.addEventListener('click', event => {
-    if (!cubeDragMoved) return;
-    event.preventDefault(); event.stopImmediatePropagation(); cubeDragMoved = false;
-  }, { capture: true });
-  root.querySelectorAll<HTMLButtonElement>('.projection-switch button').forEach(button => {
-    button.addEventListener('click', () => {
-      const orthographic = button.dataset.projection === 'orthographic';
-      camera.camera!.projection = orthographic ? pc.PROJECTION_ORTHOGRAPHIC : pc.PROJECTION_PERSPECTIVE;
-      camera.camera!.orthoHeight = cameraOrthoHeight;
-      root.querySelectorAll('.projection-switch button').forEach(item => item.classList.remove('active'));
-      button.classList.add('active');
-    });
-  });
-
-  let navigation: 'orbit' | 'pan' | null = null; let lastX = 0; let lastY = 0;
-  canvas.addEventListener('contextmenu', event => event.preventDefault());
-  canvas.addEventListener('pointermove', event => {
-    if (clippingHandles?.pointerMove(event)) {
-      canvas.style.cursor = clippingHandles.dragging ? 'grabbing' : 'grab';
-      navigation = null;
-    } else {
+  const inputController = new InputController(canvas, cameraController, {
+    pointerMove: event => {
+      if (clippingHandles?.pointerMove(event)) {
+        canvas.style.cursor = clippingHandles.dragging ? 'grabbing' : 'grab';
+        return true;
+      }
       canvas.style.cursor = '';
-    }
-  }, { capture: true });
-  canvas.addEventListener('pointerleave', () => clippingHandles?.pointerLeave());
-  canvas.addEventListener('pointerdown', event => {
-    if (coordinateQuery?.pointerDown(event)) { event.preventDefault(); event.stopImmediatePropagation(); navigation = null; return; }
-    if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) { navigation = null; return; }
-    if (clippingHandles?.pointerDown(event)) { event.preventDefault(); event.stopImmediatePropagation(); navigation = null; return; }
-    const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
-    const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
-    if (event.button === 2 || gizmoTransforming || (event.button === 0 && gizmoHovered)) return;
-    if (event.button === 0) navigation = 'orbit'; else if (event.button === 1) navigation = 'pan'; else return;
-    lastX = event.clientX; lastY = event.clientY;
-  }, { capture: true });
-  window.addEventListener('pointerup', event => {
-    clippingHandles?.pointerUp(event);
-    syncClipState(true);
-    navigation = null;
-    canvas.style.cursor = '';
+      return false;
+    },
+    pointerLeave: () => clippingHandles?.pointerLeave(),
+    pointerDown: event => {
+      if (coordinateQuery?.pointerDown(event)) return true;
+      if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) return true;
+      return clippingHandles?.pointerDown(event) ?? false;
+    },
+    pointerUp: event => {
+      clippingHandles?.pointerUp(event);
+      syncClipState(true);
+    },
+    navigationBlocked: event => {
+      const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
+      const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
+      return event.button === 2 || gizmoTransforming || (event.button === 0 && gizmoHovered);
+    },
+    dragBlocked: () => gizmoTransforming || Boolean(coordinateQuery?.dragging),
   });
-  window.addEventListener('pointermove', event => {
-    if (!navigation || gizmoTransforming || coordinateQuery?.dragging) return; const dx = event.clientX - lastX; const dy = event.clientY - lastY; lastX = event.clientX; lastY = event.clientY;
-    if (navigation === 'orbit') orbitCamera(dx * 180 / Math.max(1, canvas.clientWidth), dy * 180 / Math.max(1, canvas.clientHeight));
-    else {
-      const worldPerPixel = camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC
-        ? cameraOrthoHeight * 2 / Math.max(canvas.clientHeight, 1)
-        : 2 * cameraDistance * Math.tan(camera.camera!.fov * Math.PI / 360) / Math.max(canvas.clientHeight, 1);
-      const right = new pc.Vec3().cross(cameraUp, cameraDirection).normalize();
-      cameraTarget.add(right.mulScalar(-dx * worldPerPixel)).add(cameraUp.clone().mulScalar(dy * worldPerPixel));
-      updateCamera();
-    }
-  });
-  canvas.addEventListener('wheel', event => {
-    event.preventDefault();
-    if (camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC) {
-      cameraOrthoHeight = Math.max(bounds.diagonal * 0.001, cameraOrthoHeight * Math.exp(event.deltaY * 0.001));
-      camera.camera!.orthoHeight = cameraOrthoHeight;
-    } else {
-      cameraDistance = Math.max(bounds.diagonal * 0.001, cameraDistance * Math.exp(event.deltaY * 0.001));
-      updateCamera();
-    }
-  }, { passive: false });
 
   let finalText = '';
   let inverseText = '';
@@ -966,43 +838,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!,
     root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
     root.querySelector<HTMLInputElement>('#overlap')!, root.querySelector<HTMLInputElement>('#random-seed')!];
-  let activeJobId = '';
-  let activeProgressUrl = '';
-  let cancelRequested = false;
-  let progressSource: EventSource | null = null;
-  let lastProgressMatrix: Matrix4 | null = null;
   let latestProgressIteration = 0;
-  const stopProgressDisplay = () => {
-    progressSource?.close();
-    progressSource = null;
-  };
-  const startProgressDisplay = () => {
-    if (!activeProgressUrl || progressSource) return;
-    iterationProgress.hidden = false;
-    iterationProgress.textContent = latestProgressIteration > 0
-      ? iterationProgress.textContent : '正在读取当前 ICP 进度……';
-    progressSource = new EventSource(`${activeProgressUrl}?from_latest=true`);
-    progressSource.addEventListener('iteration', event => {
-      const progress = JSON.parse((event as MessageEvent<string>).data) as IterationEvent;
-      if (progress.iteration <= latestProgressIteration) return;
-      latestProgressIteration = progress.iteration;
-      lastProgressMatrix = progress.moving_local_to_fixed_local;
-      display.setMovingLocalToFixedLocal(lastProgressMatrix);
-      iterationProgress.textContent = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
-    });
-    progressSource.addEventListener('terminal', stopProgressDisplay);
-  };
-  progressCheckbox.addEventListener('change', () => {
-    if (progressCheckbox.checked) {
-      iterationProgress.hidden = false;
-      if (latestProgressIteration === 0) iterationProgress.textContent = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
-      positionProgress();
-      if (running) startProgressDisplay();
-    } else {
-      stopProgressDisplay();
-      iterationProgress.hidden = true;
-    }
-  });
   const setRunning = (value: boolean) => {
     running = value;
     registerButton.disabled = value || queryActive;
@@ -1020,9 +856,9 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: bounds.diagonal,
     localToDisplay: model => display.localToDisplay(model),
     signature: () => display.signature(),
-    setOriginal: original => { display.setOriginal(original); fitCamera(); },
+    setOriginal: original => { display.setOriginal(original); cameraController.fit(); },
     lock: active => {
-      queryActive = active; navigation = null;
+      queryActive = active;
       registrationControls.forEach(control => { control.disabled = active || running; });
       registerButton.disabled = active || running;
       registerButton.title = active ? '请先返回配准编辑，再执行 ICP' : '';
@@ -1078,17 +914,48 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     root.querySelector<HTMLElement>('#file-inverse-matrix')!.textContent = fileInverseText;
     root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${result.metrics.final_rms.toFixed(6)} m　点数：${result.metrics.final_point_count}　耗时：${result.metrics.elapsed_seconds.toFixed(2)} s`;
   };
+  const log = root.querySelector<HTMLElement>('#job-status')!;
+  const jobController = new RegistrationJobController({
+    runningChanged: setRunning,
+    statusChanged: status => { log.textContent = status; },
+    progressChanged: (progress: RegistrationIteration) => {
+      latestProgressIteration = progress.iteration;
+      display.setMovingLocalToFixedLocal(progress.moving_local_to_fixed_local);
+      iterationProgress.textContent = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
+    },
+    succeeded: (result, jobId) => {
+      showResult(result, jobId);
+      if (progressCheckbox.checked) {
+        iterationProgress.hidden = false;
+        iterationProgress.classList.add('completed');
+        iterationProgress.textContent = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
+        positionProgress();
+      }
+      log.textContent = '配准完成。';
+    },
+    cancelled: latestProgress => {
+      if (latestProgress) display.setMovingLocalToFixedLocal(latestProgress.moving_local_to_fixed_local);
+      log.textContent = latestProgress
+        ? '任务已终止。视口停留在未收敛的中间姿态，该姿态不是有效业务矩阵，可继续粗调后重新执行。'
+        : '任务已终止，可调整参数或粗配准后重新执行。';
+    },
+  }, signal);
+  progressCheckbox.addEventListener('change', () => {
+    jobController.setProgressVisible(progressCheckbox.checked);
+    if (progressCheckbox.checked) {
+      iterationProgress.hidden = false;
+      if (latestProgressIteration === 0) iterationProgress.textContent = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
+      positionProgress();
+    } else iterationProgress.hidden = true;
+  });
   cancelButton.addEventListener('click', async () => {
-    cancelRequested = true;
     cancelButton.disabled = true;
     cancelButton.textContent = '正在终止…';
-    if (!activeJobId) return;
     try {
-      const response = await fetch(`/api/v1/registrations/${activeJobId}/cancel`, { method: 'POST' });
-      if (!response.ok && response.status !== 409) throw new Error(`HTTP ${response.status}`);
+      await jobController.cancel();
     } catch (error) {
-      root.querySelector<HTMLElement>('#job-status')!.textContent = `终止失败：${String(error)}`;
-      cancelRequested = false;
+      if (signal.aborted) return;
+      log.textContent = `终止失败：${String(error)}`;
       cancelButton.disabled = false;
       cancelButton.textContent = '终止任务';
     }
@@ -1096,62 +963,32 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   registerButton.addEventListener('click', async () => {
     if (running || queryActive) return;
     coordinateQuery?.invalidate();
-    const log = root.querySelector<HTMLElement>('#job-status')!;
-    activeJobId = ''; activeProgressUrl = ''; cancelRequested = false; lastProgressMatrix = null; latestProgressIteration = 0;
+    latestProgressIteration = 0;
     iterationProgress.classList.remove('completed');
     iterationProgress.hidden = !progressCheckbox.checked;
     iterationProgress.textContent = progressCheckbox.checked ? '等待首轮 ICP 结果……' : '';
-    setRunning(true); log.textContent = '正在提交……';
+    jobController.setProgressVisible(progressCheckbox.checked);
     try {
-      const response = await fetch(`/api/v2/registration-sessions/${sessionId}/register`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(), output_direction: outputDirection.value,
-          moving_model: movingSelect.value, min_rms_decrease: Number((root.querySelector('#min-rms') as HTMLInputElement).value),
-          sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value), overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
-          random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
-          show_registration_progress: true,
-          coordinate_space: 'business',
-        }),
-      });
-      const created = await response.json(); if (!response.ok) throw new Error(created.detail ?? `HTTP ${response.status}`);
-      activeJobId = created.job_id;
-      activeProgressUrl = created.progress_url;
-      if (progressCheckbox.checked) startProgressDisplay();
-      if (cancelRequested) await fetch(`/api/v1/registrations/${activeJobId}/cancel`, { method: 'POST' });
-      while (true) {
-        const status = await fetch(created.status_url).then(value => value.json()); log.textContent = `任务状态：${status.status}`;
-        if (status.status === 'cancelled') {
-          if (lastProgressMatrix) display.setMovingLocalToFixedLocal(lastProgressMatrix);
-          log.textContent = lastProgressMatrix
-            ? '任务已终止。视口停留在未收敛的中间姿态，该姿态不是有效业务矩阵，可继续粗调后重新执行。'
-            : '任务已终止，可调整参数或粗配准后重新执行。';
-          break;
-        }
-        if (status.status === 'failed') throw new Error(status.error ?? 'ICP 失败');
-        if (status.status === 'succeeded') {
-          const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
-          progressSource?.close(); progressSource = null;
-          showResult(result, activeJobId);
-          if (progressCheckbox.checked) {
-            iterationProgress.hidden = false;
-            iterationProgress.classList.add('completed');
-            iterationProgress.textContent = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
-            positionProgress();
-          }
-          log.textContent = '配准完成。';
-          break;
-        }
-        await sleep(1000);
-      }
-    } catch (error) { log.textContent = `失败：${String(error)}`; }
-    finally { stopProgressDisplay(); activeJobId = ''; activeProgressUrl = ''; cancelRequested = false; setRunning(false); }
+      const request: RegistrationRequest = {
+        initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(),
+        output_direction: outputDirection.value as RegistrationRequest['output_direction'],
+        moving_model: movingSelect.value as RegistrationRequest['moving_model'],
+        min_rms_decrease: Number((root.querySelector('#min-rms') as HTMLInputElement).value),
+        sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value),
+        overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
+        random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
+        show_registration_progress: true,
+        coordinate_space: 'business',
+      };
+      await jobController.run(sessionId, request);
+    } catch (error) { if (!signal.aborted) log.textContent = `失败：${String(error)}`; }
   });
   const latest = session.registrations?.at(-1);
   if (latest?.status === 'succeeded' && latest.result_url) {
     const signature = display.signature();
     try {
-      const response = await fetch(latest.result_url);
-      if (!response.ok) return;
+      const response = await fetch(latest.result_url, { signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json() as RegistrationResult;
       const matching = result.coordinate_space === 'business' && (['a', 'b'] as ModelId[]).every(model => {
         const matrix = result.business_transforms?.[model].matrix ?? transformParametersMatrix(defaultTransform());
@@ -1165,8 +1002,29 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         Object.entries(fields).forEach(([name, id]) => { if (latest.parameters[name] !== undefined) root.querySelector<HTMLInputElement>(`#${id}`)!.value = String(latest.parameters[name]); });
         showResult(result, latest.job_id);
         root.querySelector<HTMLElement>('#job-status')!.textContent = '已恢复最近一次配准结果。';
-        fitCamera();
+        cameraController.fit();
       }
-    } catch { root.querySelector<HTMLElement>('#job-status')!.textContent = '历史结果暂时无法加载，可重新配准。'; }
+    } catch { if (!signal.aborted) root.querySelector<HTMLElement>('#job-status')!.textContent = '历史结果暂时无法加载，可重新配准。'; }
   }
+  let destroyed = false;
+  return () => {
+    if (destroyed) return;
+    destroyed = true;
+    lifecycle.abort();
+    externalSignal?.removeEventListener('abort', abortLifecycle);
+    jobController.destroy();
+    progressResize.disconnect();
+    coordinateQuery?.destroy();
+    originPlanes.destroy();
+    clippingHandles?.destroy();
+    (['a', 'b'] as ModelId[]).forEach(releaseGaussian);
+    toolManager.destroy();
+    translate.destroy();
+    rotate.destroy();
+    clipTranslate.destroy();
+    clipRotate.destroy();
+    inputController.destroy();
+    cameraController.destroy();
+    engine.destroy();
+  };
 }

@@ -127,7 +127,7 @@ export class CoordinateQuery {
       (event.currentTarget as HTMLElement).classList.toggle('active', this.axesVisible[model]);
       (event.currentTarget as HTMLElement).setAttribute('aria-pressed', String(this.axesVisible[model]));
     }));
-    app.on('update', () => this.update());
+    app.on('update', this.update, this);
   }
 
   private makeMarker(model: Model, color: pc.Color): pc.Entity {
@@ -254,6 +254,19 @@ export class CoordinateQuery {
     if (active) this.picking = false;
     this.refresh();
     if (active) this.message.textContent = '正在编辑剖切；关闭剖切面板后恢复点移动手柄，剖切效果仍保留。';
+  }
+
+  destroy(): void {
+    if (this.active) this.close();
+    this.options.app.off('update', this.update, this);
+    this.gizmo.destroy();
+    this.anchor.destroy();
+    models.forEach(model => {
+      this.markers[model].destroy();
+      this.labels[model].remove();
+      this.axisLabels[model].forEach(label => label.remove());
+    });
+    this.panel.remove();
   }
 
   private update(): void {

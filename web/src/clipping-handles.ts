@@ -221,6 +221,20 @@ export class ClippingHandles {
     return this.getMode() === 'box' && this.helperVisible();
   }
 
+  destroy(): void {
+    this.drag = null;
+    this.dragging = false;
+    this.hovered = false;
+    this.hoveredHandle = null;
+    this.revealedHandle = null;
+    Object.values(this.axisPlanes).forEach(entity => entity.destroy());
+    this.handles.forEach(handle => {
+      handle.entity.destroy();
+      handle.label.remove();
+    });
+    this.handles.length = 0;
+  }
+
   private pointerPosition(event: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {

@@ -3,11 +3,18 @@
 ## 当前阶段
 
 ```text
-阶段 7：Web 人工粗配准
+阶段 8：整体架构与交互重构
 状态：进行中
 ```
 
+## 进行中
+
+- 2026-09-08：在 `codex/refactor-registration-workbench` 分支重建项目结构。目标为 Vue 3 界面层、纯 TypeScript PlayCanvas 内核、类型化工作台状态、停靠式工具检查器与结果抽屉，并拆分 FastAPI 服务和 C++ Worker 外壳。重构期间保持 `main` 为已验证版本，现有 API、矩阵、ICP、历史档案和运行目录兼容。
+- 下一步：继续将 Gaussian、剖切和坐标查询迁入独立引擎模块，把工作台表单状态接入 Pinia，并拆分 FastAPI 路由／领域服务及 C++ Worker 命令执行层。
+
 ## 已完成
+
+- 2026-09-09：完成正式重构第一批基础设施。Web 入口迁移到 Vue 3、Pinia 和真实 Vue Router，首页改为组件化双模型任务创建与历史面板；v2 工作台采用顶部应用栏、左侧模型流程、中央 PlayCanvas 视口、右侧配准检查器和底部结果抽屉，1440×900 工具栏无需横向滚动，1280×720 核心区域可达。PlayCanvas 已提取 `RegistrationApplication`、`InputController`、`ViewportCameraController`、`ToolManager` 和 `RegistrationJobController`，页面卸载会终止请求、SSE、观察器、Gizmo、控制器和应用实例。FastAPI 已提取配置与请求 Schema，并增加可直接刷新的 `/registration/{session_id}` 页面入口；旧 `/?session=...&api=v2` 地址继续兼容。Vue 类型检查、Web 生产构建、9 项服务测试、真实历史会话路由恢复及浏览器控制台检查通过。
 
 - 2026-09-08：通用配准结果同时展示「业务场景转换矩阵（含预设）」与「原始模型坐标转换矩阵」。业务矩阵继续按 `M_business_a_to_b = P_b × M_file_a_to_b × inverse(P_a)` 作为主结果和坐标查询依据，原始矩阵用于文件坐标换算；两套矩阵均显示当前 A／B 方向、坐标公式、反向矩阵和独立复制按钮。真实历史结果页面确认两套数值不同且标识清晰，业务矩阵组合测试 `5／5`、类型检查和 Web 构建通过，浏览器控制台无错误。
 
