@@ -119,7 +119,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           <section id="result" class="result" hidden><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-result" class="full-width">复制最终业务矩阵</button><details><summary>查看反向矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向矩阵</button></details></section>
         </section>
       </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button></div></div><div id="iteration-progress" class="viewport-progress" hidden></div>
+      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
           <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
           <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
@@ -962,6 +962,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     coordinateQuery?.invalidate();
     const log = root.querySelector<HTMLElement>('#job-status')!;
     activeJobId = ''; activeProgressUrl = ''; cancelRequested = false; lastProgressMatrix = null; latestProgressIteration = 0;
+    iterationProgress.classList.remove('completed');
     iterationProgress.hidden = !progressCheckbox.checked;
     iterationProgress.textContent = progressCheckbox.checked ? '等待首轮 ICP 结果……' : '';
     setRunning(true); log.textContent = '正在提交……';
@@ -995,6 +996,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           const result = await fetch(status.result_url).then(value => value.json()) as RegistrationResult;
           progressSource?.close(); progressSource = null;
           showResult(result, activeJobId);
+          if (progressCheckbox.checked) {
+            iterationProgress.hidden = false;
+            iterationProgress.classList.add('completed');
+            iterationProgress.textContent = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
+            positionProgress();
+          }
           log.textContent = '配准完成。';
           break;
         }

@@ -147,6 +147,13 @@
   pointer-events: none;
 }
 
+.viewport-progress.completed {
+  border-color: #49b98d;
+  background: #12382feF;
+  color: #8ff0c5;
+  box-shadow: 0 0 0 1px #49b98d26, 0 4px 16px #0004;
+}
+
 .model-visibility button.gaussian-toggle.available:not(.active) {
   border-color: #7d8fe8;
   background: #263252e8;
