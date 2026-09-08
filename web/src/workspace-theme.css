@@ -15,12 +15,12 @@
 }
 .integrated-editor * { scrollbar-width: thin; scrollbar-color: #52617a #172131; }
 
-.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) {
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel, .origin-planes-panel) {
   padding: var(--ui-padding);
   font-size: var(--ui-body);
   line-height: 1.5;
 }
-.integrated-editor :is(.workflow-step, .clipping-panel, .coordinate-panel) {
+.integrated-editor :is(.workflow-step, .clipping-panel, .coordinate-panel, .origin-planes-panel) {
   border: 1px solid var(--ui-border);
   border-radius: 10px;
   background: #111c2bf5;
@@ -44,7 +44,7 @@
 .integrated-editor :is(.step-hint, .workflow-title small, .clipping-panel p, .coordinate-panel small) { color: var(--ui-muted); }
 
 /* Exclude the navigation cube: its faces and corners have geometric sizes. */
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button,
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button,
 .integrated-editor .projection-switch button {
   min-height: var(--ui-control);
   padding: 7px 12px;
@@ -56,10 +56,10 @@
   white-space: normal;
   cursor: pointer;
 }
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button:not(:disabled):hover {
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button:not(:disabled):hover {
   border-color: #84a0be; background: #30435c;
 }
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button.active,
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button.active,
 .integrated-editor .projection-switch button.active {
   border-color: #4dbb92; background: #24775f; color: #fff;
 }
@@ -68,7 +68,7 @@
   opacity: .5; color: #91a0b5; background: #1a2433; border-color: #3b4658; cursor: not-allowed;
 }
 .integrated-editor :is(button, input, select, summary):focus-visible { outline: 2px solid #78b8f2; outline-offset: 2px; }
-.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) :is(input[type="number"], select) {
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel, .origin-planes-panel) :is(input[type="number"], select) {
   min-width: 0; width: 100%; min-height: var(--ui-control); margin-top: 0;
   padding: 7px 8px; border: 1px solid var(--ui-border); border-radius: 6px;
   background: #0f1724; color: var(--ui-text); font-size: var(--ui-body); line-height: 20px;

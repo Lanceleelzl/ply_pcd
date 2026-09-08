@@ -154,6 +154,64 @@
   box-shadow: 0 0 0 1px #49b98d26, 0 4px 16px #0004;
 }
 
+.origin-planes-panel {
+  position: absolute;
+  z-index: 5;
+  top: 66px;
+  left: 12px;
+  width: min(340px, calc(100% - 24px));
+  max-height: calc(100% - 78px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #42516a;
+  border-radius: 10px;
+  background: #111c2bf5;
+}
+
+.origin-planes-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.origin-planes-title button {
+  width: 36px;
+  padding: 0;
+  font-size: 18px;
+}
+
+.origin-planes-panel p {
+  margin: 8px 0;
+  color: #a9b7ca;
+  font-size: 12px;
+}
+
+.origin-planes-panel fieldset {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid #42516a;
+  border-radius: 7px;
+}
+
+.origin-plane-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 116px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.origin-plane-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.origin-plane-row select {
+  min-height: 32px !important;
+}
+
 .model-visibility button.gaussian-toggle.available:not(.active) {
   border-color: #7d8fe8;
   background: #263252e8;

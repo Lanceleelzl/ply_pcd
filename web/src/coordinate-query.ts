@@ -51,6 +51,7 @@ export class CoordinateQuery {
       ['配准与视图', ['reset', 'fit', 'clipping-toggle']],
       ['模型显隐', ['toggle-model-a', 'toggle-model-b']],
       ['高斯显示', ['gaussian-model-a', 'gaussian-model-b']],
+      ['平面工具', ['origin-planes-toggle']],
       ['坐标工具', ['coordinate-query', 'origin-a', 'origin-b']],
     ] as const;
     for (const [label, ids] of groups) {

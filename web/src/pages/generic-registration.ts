@@ -4,6 +4,7 @@ import { transformParametersMatrix, transformXYZ, type TransformParameters, type
 import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { GaussianClipController } from '../gaussian-clipping';
+import { OriginPlaneController } from '../origin-planes';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
@@ -119,7 +120,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
           <section id="result" class="result" hidden><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><div id="result-metrics"></div><button id="copy-result" class="full-width">复制最终业务矩阵</button><details><summary>查看反向矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向矩阵</button></details></section>
         </section>
       </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
+      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button><button id="origin-planes-toggle" aria-pressed="false">原点平面</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
           <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
           <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
@@ -197,6 +198,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
+  const originPlanes = new OriginPlaneController(root, application, entities,
+    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible);
   const cameraTarget = bounds.center.clone();
   let cameraDistance = Math.max(bounds.diagonal * 1.2, 0.1);
   let cameraOrthoHeight = Math.max(bounds.diagonal * 0.6, 0.05);
@@ -565,9 +568,11 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       const inScope = clippingScope.value === 'both' || clippingScope.value === model;
       const enabled = currentClipMode !== 'off' && inScope;
       const boxEnabled = currentClipMode === 'box';
-      pointMaterials[model].setClipState(enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox);
+      const originSides = originPlanes.clipSides(model);
+      const worldToOrigin = originPlanes.getWorldToOrigin(model);
+      pointMaterials[model].setClipState(enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox, originSides, worldToOrigin);
       gaussianDisplays[model].clipController?.setClipState(
-        enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox, forceGaussian,
+        enabled, clipMinState, clipMaxState, boxEnabled, worldToClipBox, originSides, worldToOrigin, forceGaussian,
       );
     });
   };
@@ -595,6 +600,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   const resetButton = root.querySelector<HTMLButtonElement>('#reset')!;
   const clippingToggle = root.querySelector<HTMLButtonElement>('#clipping-toggle')!;
   const clippingPanel = root.querySelector<HTMLElement>('#clipping-panel')!;
+  const originPlanePanel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
   const clippingMode = root.querySelector<HTMLSelectElement>('#clipping-mode')!;
   const clippingScope = root.querySelector<HTMLSelectElement>('#clipping-scope')!;
   const axisClipping = root.querySelector<HTMLElement>('#axis-clipping')!;
@@ -604,6 +610,7 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
   root.querySelector('#fit')!.addEventListener('click', fitCamera);
   clippingToggle.addEventListener('click', () => {
     clippingPanel.hidden = !clippingPanel.hidden;
+    if (!clippingPanel.hidden) originPlanePanel.hidden = true;
     clippingInteractionActive = !clippingPanel.hidden && clippingMode.value !== 'off';
     attach();
   });
@@ -842,6 +849,8 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
     const panelTop = top + (iterationProgress.hidden ? 0 : iterationProgress.offsetHeight + 8);
     clippingPanel.style.top = `${panelTop}px`;
     clippingPanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
+    originPlanePanel.style.top = `${panelTop}px`;
+    originPlanePanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
   };
   const progressResize = new ResizeObserver(positionProgress);
   progressResize.observe(progressToolbar);
@@ -915,10 +924,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
       registerButton.title = active ? '请先返回配准编辑，再执行 ICP' : '';
       progressCheckbox.disabled = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
+      if (active) originPlanePanel.hidden = true;
       clippingToggle.disabled = false;
       attach();
     },
     visiblePoint: (model, point) => {
+      if (!originPlanes.visiblePoint(model, point)) return false;
       if (clippingMode.value === 'off' || (clippingScope.value !== 'both' && clippingScope.value !== model)) return true;
       if (clippingMode.value === 'box') {
         const local = worldToClipBox.transformPoint(point);
@@ -928,6 +939,12 @@ export async function renderGenericRegistration(root: HTMLElement, sessionId: st
         && point.y >= clipMinState.y && point.y <= clipMaxState.y
         && point.z >= clipMinState.z && point.z <= clipMaxState.z;
     },
+  });
+  root.querySelector('#origin-planes-toggle')!.addEventListener('click', () => {
+    if (originPlanePanel.hidden) return;
+    clippingPanel.hidden = true; clippingInteractionActive = false;
+    if (coordinateQuery?.active) coordinateQuery.close();
+    attach(); positionProgress();
   });
   const showResult = (result: RegistrationResult, jobId: string) => {
     display.setMovingLocalToFixedLocal(result.moving_local_to_fixed_local);
