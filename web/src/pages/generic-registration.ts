@@ -59,7 +59,7 @@ const formatBytes = (bytes?: number) => bytes
   : '大小未知';
 
 const transformEditor = (model: ModelId, value: TransformParameters): string => {
-  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label>${axis}<input type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"></label>`).join('')}</div>`;
+  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label class="transform-axis-input"><input aria-label="模型 ${model.toUpperCase()} ${label} ${axis}" type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"><span>${axis}</span></label>`).join('')}</div>`;
   return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
 };
 
