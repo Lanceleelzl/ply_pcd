@@ -94,6 +94,9 @@
 .integrated-editor :is(.status, #result-metrics) { margin: 12px 0; color: var(--ui-muted); }
 .integrated-editor summary { font-size: var(--ui-body); line-height: 1.6; margin-top: 12px; cursor: pointer; color: var(--ui-muted); }
 .integrated-editor .result button { margin-top: 8px; }
+.integrated-editor .result-matrix-group + .result-matrix-group { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--ui-border); }
+.integrated-editor .result-matrix-group h3 { margin-bottom: 6px; }
+.integrated-editor .result-formula { margin: 0; color: var(--ui-muted); overflow-wrap: anywhere; }
 
 .integrated-editor .viewport-toolbar { gap: 8px; padding: 8px; align-items: center; }
 .integrated-editor .model-visibility { flex-wrap: wrap; gap: 8px; margin-left: 0; min-width: 0; }
