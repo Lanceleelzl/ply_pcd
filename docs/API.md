@@ -491,11 +491,14 @@ Content-Type: multipart/form-data
 | `output_direction` | string | 否 | `a_to_b` | 页面重点展示 `a_to_b` 或 `b_to_a` |
 | `moving_model` | string | 否 | `auto` | `a`、`b` 或 `auto`；只影响 ICP 计算角色，不改变业务方向 |
 | `workspace_id` | string／UUID | 否 | 服务生成 | 隔离调用方历史；浏览器持久化生成的 UUID，API 调用方应保存并复用 |
+| `model_a_transform` | JSON string | 否 | 单位变换 | A 文件坐标→A 业务坐标的平移、旋转、缩放参数 |
+| `model_b_transform` | JSON string | 否 | 单位变换 | B 文件坐标→B 业务坐标的平移、旋转、缩放参数 |
 
 ```bash
 curl -X POST "http://localhost:8765/api/v2/registration-sessions" \
   -F "model_a=@scene.ply" \
   -F "model_b=@slam-map.laz" \
+  -F 'model_a_transform={"translation":[0,0,0],"rotation_degrees":[-90,0,0],"scale":[1,1,1]}' \
   -F "output_direction=a_to_b" \
   -F "moving_model=b"
 ```
@@ -519,6 +522,19 @@ GET /api/v2/registration-sessions/{session_id}/preview/gaussian-b
 
 Gaussian 地址仅在对应输入为包含 Gaussian 属性的 PLY 时存在。轻量预览不参与最终 ICP。
 
+预变换采用列向量和 `P = T × Rz × Ry × Rx × S`。平移单位为米，旋转单位为度，缩放必须大于零。未传参数时平移／旋转为 `0`、缩放为 `1`。会话创建后可更新：
+
+```http
+PUT /api/v2/registration-sessions/{session_id}/business-transforms
+Content-Type: application/json
+```
+
+```json
+{"model_a":{"translation":[0,0,0],"rotation_degrees":[-90,0,0],"scale":[1,1,1]},"model_b":{"translation":[0,0,0],"rotation_degrees":[0,0,0],"scale":[1,1,1]}}
+```
+
+运行 ICP 时禁止修改。修改后必须重新粗配准和 ICP。
+
 ### 15.2 提交粗配准矩阵并执行 ICP
 
 ```http
@@ -539,11 +555,12 @@ Content-Type: application/json
   "min_rms_decrease": 0.00001,
   "sampling_limit": 50000,
   "overlap": 1.0,
-  "random_seed": 42
+  "random_seed": 42,
+  "coordinate_space": "business"
 }
 ```
 
-`initial_moving_local_to_fixed_local` 必须与本次 `moving_model` 对应。例如 `moving_model=b` 时，它表示 B 局部坐标到 A 局部坐标的初始矩阵。对于 LAS／LAZ，大坐标世界原点由服务在双精度中组合，调用方不得把世界原点预先乘入该局部粗配准矩阵。
+新工作台固定提交 `coordinate_space=business`。此时 `initial_moving_local_to_fixed_local` 必须与本次 `moving_model` 对应，例如 `moving_model=b` 时，它表示 B 业务局部坐标到 A 业务局部坐标的刚体初始矩阵。省略该字段时使用兼容路径 `coordinate_space=file`，初值表示文件局部坐标。对于 LAS／LAZ，大坐标世界原点由服务在双精度中组合，调用方不得把世界原点预先乘入该局部粗配准矩阵。
 
 服务始终生成轻量逐轮事件，不需要调用方根据界面勾选状态决定是否输出。兼容旧版服务端时可以固定传入 `show_registration_progress=true`；新版服务端仍会接受该字段，但不再由它控制 Worker。是否显示只由浏览器订阅行为决定，不改变采样、收敛条件或最终矩阵。
 
@@ -552,8 +569,11 @@ Content-Type: application/json
 | 字段 | 说明 |
 |---|---|
 | `recommended_matrix` | 由 `output_direction` 选择的重点业务矩阵及明确公式 |
-| `a_to_b` | 模型 A 世界坐标到模型 B 世界坐标 |
-| `b_to_a` | 模型 B 世界坐标到模型 A 世界坐标 |
+| `a_to_b` | 模型 A 业务坐标到模型 B 业务坐标 |
+| `b_to_a` | 模型 B 业务坐标到模型 A 业务坐标，严格为前者的逆 |
+| `file_a_to_b`／`file_b_to_a` | 原始文件世界坐标之间的换算矩阵，用于诊断和兼容 |
+| `coordinate_space` | 本轮 Worker 的 ICP 坐标空间；新工作台为 `business` |
+| `business_transforms` | A／B 九参数及自动生成的文件→业务矩阵 |
 | `moving_model`／`fixed_model` | 本轮实际 ICP 角色 |
 | `initial_moving_local_to_fixed_local` | 人工粗配准局部矩阵 |
 | `icp_refinement_moving_local_to_fixed_local` | ICP 在初始矩阵后的增量 |
@@ -562,6 +582,12 @@ Content-Type: application/json
 | `metrics`／`parameters` | RMS、参与点数、耗时和实际参数 |
 
 客户端不得根据 `moving_model` 猜测矩阵方向，应始终按字段名读取 `a_to_b` 或 `b_to_a`。`recommended_matrix.value` 只是其中一个方向的快捷入口。
+
+业务路径中，Worker 先分别应用 `P_a`、`P_b`，直接在业务局部坐标中执行刚体 ICP，所得世界矩阵即 `a_to_b`。文件矩阵由 `file_a_to_b = inverse(P_b) × a_to_b × P_a` 反算。航点属于 A 业务场景时，可以直接使用 `a_to_b`，不得再次手工补旋转。
+
+`coordinate_space=business` 时，`initial_moving_local_to_fixed_local` 和 `moving_local_to_fixed_local` 都是业务局部坐标间的刚体矩阵。每个模型的预变换线性部分分别作用于自己的点云；网页采用刚体父层和模型业务线性变换子层，保证初始预览、粗配准、ICP 输入及过程显示使用同一条坐标链路。
+
+通过 `/api/v1/registrations/{job_id}/files/{filename}` 下载 v2 结果时，`a_to_b_matrix.txt` 和 `b_to_a_matrix.txt` 与 JSON 中的业务矩阵一致；`file_a_to_b_matrix.txt` 和 `file_b_to_a_matrix.txt` 保存原始文件坐标矩阵。历史档案保留业务矩阵、文件矩阵和当轮预变换，原始文件释放后仍可读取。
 
 ### 15.3 订阅 ICP 逐轮进度
 

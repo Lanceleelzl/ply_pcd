@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -185,6 +186,8 @@ struct ModelRegisterArguments
     registration::BidirectionalRegistrationOptions options;
     std::string outputDirection = "a_to_b";
     bool progressJsonLines = false;
+    std::optional<registration::Matrix4d> modelAToBusiness;
+    std::optional<registration::Matrix4d> modelBToBusiness;
 };
 
 ModelRegisterArguments parseModelRegisterArguments(int argc, char** argv)
@@ -219,6 +222,8 @@ ModelRegisterArguments parseModelRegisterArguments(int argc, char** argv)
         else if (option == "--adjust-scale") result.options.icp.adjustScale = true;
         else if (option == "--filter-farthest") result.options.icp.filterOutFarthestPoints = true;
         else if (option == "--initial-matrix") result.options.icp.initialMovingLocalToFixedLocal = registration::Matrix4d::fromFile(value());
+        else if (option == "--model-a-to-business") result.modelAToBusiness = registration::Matrix4d::fromFile(value());
+        else if (option == "--model-b-to-business") result.modelBToBusiness = registration::Matrix4d::fromFile(value());
         else throw std::runtime_error("Unknown register-models option: " + option);
     }
     if (result.modelA.empty() || result.modelB.empty() || result.outputDirectory.empty())
@@ -499,6 +504,41 @@ int runModelRegistration(const ModelRegisterArguments& arguments)
     std::filesystem::create_directories(arguments.outputDirectory);
     auto modelA = registration::ReferenceCloudReader().read(arguments.modelA);
     auto modelB = registration::ReferenceCloudReader().read(arguments.modelB);
+    const auto transformToBusiness = [](registration::ReferenceCloudReadResult& model,
+                                        const registration::Matrix4d& matrix) {
+        registration::Point3d businessOrigin{};
+        for (std::size_t row = 0; row < 3; ++row)
+        {
+            businessOrigin[row] = matrix.at(row, 3);
+            for (std::size_t column = 0; column < 3; ++column)
+                businessOrigin[row] += matrix.at(row, column) * model.origin[column];
+        }
+        registration::BoundingBox3d bounds;
+        bounds.min = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+        bounds.max = {-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+        for (auto& point : model.cloud.points)
+        {
+            registration::Point3d transformed{};
+            for (std::size_t row = 0; row < 3; ++row)
+                for (std::size_t column = 0; column < 3; ++column)
+                    transformed[row] += matrix.at(row, column) * static_cast<double>(point[column]);
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                point[axis] = static_cast<float>(transformed[axis]);
+                bounds.min[axis] = std::min(bounds.min[axis], businessOrigin[axis] + transformed[axis]);
+                bounds.max[axis] = std::max(bounds.max[axis], businessOrigin[axis] + transformed[axis]);
+            }
+        }
+        model.origin = businessOrigin;
+        model.worldBounds = bounds;
+    };
+    if (arguments.modelAToBusiness.has_value() != arguments.modelBToBusiness.has_value())
+        throw std::runtime_error("Both business transform matrices are required");
+    if (arguments.modelAToBusiness)
+    {
+        transformToBusiness(modelA, *arguments.modelAToBusiness);
+        transformToBusiness(modelB, *arguments.modelBToBusiness);
+    }
     auto options = arguments.options;
     if (arguments.progressJsonLines)
     {

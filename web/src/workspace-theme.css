@@ -15,12 +15,12 @@
 }
 .integrated-editor * { scrollbar-width: thin; scrollbar-color: #52617a #172131; }
 
-.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) {
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel, .origin-planes-panel) {
   padding: var(--ui-padding);
   font-size: var(--ui-body);
   line-height: 1.5;
 }
-.integrated-editor :is(.workflow-step, .clipping-panel, .coordinate-panel) {
+.integrated-editor :is(.workflow-step, .clipping-panel, .coordinate-panel, .origin-planes-panel) {
   border: 1px solid var(--ui-border);
   border-radius: 10px;
   background: #111c2bf5;
@@ -44,7 +44,7 @@
 .integrated-editor :is(.step-hint, .workflow-title small, .clipping-panel p, .coordinate-panel small) { color: var(--ui-muted); }
 
 /* Exclude the navigation cube: its faces and corners have geometric sizes. */
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button,
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button,
 .integrated-editor .projection-switch button {
   min-height: var(--ui-control);
   padding: 7px 12px;
@@ -56,10 +56,10 @@
   white-space: normal;
   cursor: pointer;
 }
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button:not(:disabled):hover {
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button:not(:disabled):hover {
   border-color: #84a0be; background: #30435c;
 }
-.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel) button.active,
+.integrated-editor :is(.workflow-panel, .viewport-toolbar, .clipping-panel, .coordinate-panel, .origin-planes-panel) button.active,
 .integrated-editor .projection-switch button.active {
   border-color: #4dbb92; background: #24775f; color: #fff;
 }
@@ -68,7 +68,7 @@
   opacity: .5; color: #91a0b5; background: #1a2433; border-color: #3b4658; cursor: not-allowed;
 }
 .integrated-editor :is(button, input, select, summary):focus-visible { outline: 2px solid #78b8f2; outline-offset: 2px; }
-.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel) :is(input[type="number"], select) {
+.integrated-editor :is(.workflow-panel, .clipping-panel, .coordinate-panel, .origin-planes-panel) :is(input[type="number"], select) {
   min-width: 0; width: 100%; min-height: var(--ui-control); margin-top: 0;
   padding: 7px 8px; border: 1px solid var(--ui-border); border-radius: 6px;
   background: #0f1724; color: var(--ui-text); font-size: var(--ui-body); line-height: 20px;
@@ -94,6 +94,9 @@
 .integrated-editor :is(.status, #result-metrics) { margin: 12px 0; color: var(--ui-muted); }
 .integrated-editor summary { font-size: var(--ui-body); line-height: 1.6; margin-top: 12px; cursor: pointer; color: var(--ui-muted); }
 .integrated-editor .result button { margin-top: 8px; }
+.integrated-editor .result-matrix-group + .result-matrix-group { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--ui-border); }
+.integrated-editor .result-matrix-group h3 { margin-bottom: 6px; }
+.integrated-editor .result-formula { margin: 0; color: var(--ui-muted); overflow-wrap: anywhere; }
 
 .integrated-editor .viewport-toolbar { gap: 8px; padding: 8px; align-items: center; }
 .integrated-editor .model-visibility { flex-wrap: wrap; gap: 8px; margin-left: 0; min-width: 0; }
@@ -106,6 +109,12 @@
 .integrated-editor .axis-clipping-grid label { display: flex; gap: 4px; align-items: center; }
 .integrated-editor .clip-tool-row { gap: 8px; margin: 12px 0; }
 .integrated-editor .clip-helper-option { gap: 8px; }
+.integrated-editor :is(.clipping-control-switch, .independent-editor-switch) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.integrated-editor :is(.clipping-control-switch, .independent-editor-switch) button { width: 100%; }
+.integrated-editor .independent-clip-model { margin: 8px 0; padding: 8px; border: 1px solid var(--ui-border); border-radius: 7px; }
+.integrated-editor .independent-clip-model.active-editor { border-color: #78b8f2; box-shadow: 0 0 0 1px #78b8f233; }
+.integrated-editor .independent-clip-model > label:first-of-type { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 8px; }
+.integrated-editor .independent-clip-model [data-independent-box] > button { width: 100%; }
 .integrated-editor .coordinate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .integrated-editor .coordinate-actions + .coordinate-actions { margin-top: 12px; }
 .integrated-editor .coordinate-panel fieldset { margin: 16px 0; padding: 12px; border-color: var(--ui-border); }

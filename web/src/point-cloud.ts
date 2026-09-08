@@ -9,7 +9,8 @@ export interface PreviewCloud {
 
 export interface PointCloudMaterial extends pc.ShaderMaterial {
   setPointColor(color: pc.Color): void;
-  setClipState(enabled: boolean, min: pc.Vec3, max: pc.Vec3, boxEnabled: boolean, worldToBox: pc.Mat4): void;
+  setClipState(enabled: boolean, min: pc.Vec3, max: pc.Vec3, boxEnabled: boolean, worldToBox: pc.Mat4,
+    originSides: pc.Vec3, worldToOrigin: pc.Mat4): void;
 }
 
 export async function loadPreview(url: string): Promise<PreviewCloud> {
@@ -52,6 +53,8 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
       uniform vec3 uClipMax;
       uniform float uClipBoxEnabled;
       uniform mat4 uClipWorldToBox;
+      uniform vec3 uOriginClipSides;
+      uniform mat4 uClipWorldToOrigin;
       varying vec3 vWorldPosition;
       void main(void) {
         if (uClipEnabled > 0.5) {
@@ -61,6 +64,10 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
             if (any(greaterThan(abs(boxPoint), vec3(0.5)))) discard;
           }
         }
+        vec3 originPoint = (uClipWorldToOrigin * vec4(vWorldPosition, 1.0)).xyz;
+        if ((uOriginClipSides.x > 0.5 && originPoint.x < 0.0) || (uOriginClipSides.x < -0.5 && originPoint.x > 0.0)
+          || (uOriginClipSides.y > 0.5 && originPoint.y < 0.0) || (uOriginClipSides.y < -0.5 && originPoint.y > 0.0)
+          || (uOriginClipSides.z > 0.5 && originPoint.z < 0.0) || (uOriginClipSides.z < -0.5 && originPoint.z > 0.0)) discard;
         gl_FragColor = vec4(uPointColor, 1.0);
       }
     `,
@@ -69,6 +76,8 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
   const clipMin = new Float32Array([-1e30, -1e30, -1e30]);
   const clipMax = new Float32Array([1e30, 1e30, 1e30]);
   const clipWorldToBox = new Float32Array(16);
+  const originClipSides = new Float32Array(3);
+  const clipWorldToOrigin = new Float32Array(16);
   material.setPointColor = nextColor => { pointColor.set([nextColor.r, nextColor.g, nextColor.b]); };
   material.setPointColor(color);
   material.setParameter('uPointColor', pointColor);
@@ -78,12 +87,17 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
   material.setParameter('uClipBoxEnabled', 0);
   clipWorldToBox.set(new pc.Mat4().data);
   material.setParameter('uClipWorldToBox', clipWorldToBox);
-  material.setClipState = (enabled, min, max, boxEnabled, worldToBox) => {
+  material.setParameter('uOriginClipSides', originClipSides);
+  clipWorldToOrigin.set(new pc.Mat4().data);
+  material.setParameter('uClipWorldToOrigin', clipWorldToOrigin);
+  material.setClipState = (enabled, min, max, boxEnabled, worldToBox, originSides, worldToOrigin) => {
     material.setParameter('uClipEnabled', enabled ? 1 : 0);
     clipMin.set([min.x, min.y, min.z]);
     clipMax.set([max.x, max.y, max.z]);
     material.setParameter('uClipBoxEnabled', boxEnabled ? 1 : 0);
     clipWorldToBox.set(worldToBox.data);
+    originClipSides.set([originSides.x, originSides.y, originSides.z]);
+    clipWorldToOrigin.set(worldToOrigin.data);
   };
   material.update();
   return material;

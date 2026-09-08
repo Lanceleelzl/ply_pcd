@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 import type { PreviewCloud } from './point-cloud';
-import { offsetXYZ, transformXYZ, type Matrix, type XYZ } from './coordinate-math';
+import { invertAffine, offsetXYZ, transformXYZ, type Matrix, type XYZ } from './coordinate-math';
 import './coordinate-query.css';
 
 type Model = 'a' | 'b';
@@ -10,6 +10,10 @@ interface Options {
   root: HTMLElement; app: pc.Application; camera: pc.Entity; canvas: HTMLCanvasElement;
   entities: Record<Model, pc.Entity>; clouds: Record<Model, PreviewCloud>;
   origins: Record<Model, XYZ>; diagonal: number; sessionId: string;
+  businessMatrices: Record<Model, Matrix>;
+  localToDisplay: (model: Model) => Matrix;
+  signature: () => string;
+  setOriginal: (original: boolean) => void;
   lock: (active: boolean) => void;
   visiblePoint: (model: Model, world: pc.Vec3) => boolean;
 }
@@ -26,7 +30,6 @@ export class CoordinateQuery {
   private jobId = '';
   private source: Model = 'a';
   private points: Record<Model, XYZ> | null = null;
-  private saved: Record<Model, { position: pc.Vec3; rotation: pc.Quat }> | null = null;
   private signature = '';
   private panel: HTMLElement;
   private toggle: HTMLButtonElement;
@@ -48,6 +51,7 @@ export class CoordinateQuery {
       ['配准与视图', ['reset', 'fit', 'clipping-toggle']],
       ['模型显隐', ['toggle-model-a', 'toggle-model-b']],
       ['高斯显示', ['gaussian-model-a', 'gaussian-model-b']],
+      ['平面工具', ['origin-planes-toggle']],
       ['坐标工具', ['coordinate-query', 'origin-a', 'origin-b']],
     ] as const;
     for (const [label, ids] of groups) {
@@ -64,9 +68,9 @@ export class CoordinateQuery {
       <div class="coordinate-title"><strong>坐标查询</strong><button data-query="close">返回配准编辑</button></div>
       <button data-query="state">当前位置：配准位置｜切换原始位置</button>
       <div class="coordinate-actions coordinate-point-tools" role="group" aria-label="选择编辑点与取点"><button data-move-point="a">移动 A 点</button><button data-move-point="b">移动 B 点</button><button data-query="pick">场景取点</button><button data-query="clear">清除点</button></div>
-      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 原始坐标（${model === 'a' ? '红色' : '蓝色'}）</legend>${['X', 'Y', 'Z'].map((axis, index) => `<label>${axis}<input data-model="${model}" data-index="${index}" type="number" step="0.001" value="0"></label>`).join('')}<button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
+      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 业务坐标（${model === 'a' ? '红色' : '蓝色'}）</legend>${['X', 'Y', 'Z'].map((axis, index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} 业务坐标 ${axis}" data-model="${model}" data-index="${index}" type="number" step="0.001" value="0"><span>${axis}</span></label>`).join('')}<button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
       <button data-query="copy-pair">复制坐标对</button><p class="coordinate-message"></p>
-      <small>坐标始终属于原文件；切换位置仅改变显示。取点使用轻量中心点预览，Gaussian 视觉表面可能与中心点不同。</small>
+      <small>坐标属于各模型业务坐标系；切换位置仅改变显示。取点使用轻量中心点预览，Gaussian 视觉表面可能与中心点不同。</small>
     </section>`);
     this.panel = root.querySelector('.coordinate-panel')!;
     this.toggle = root.querySelector('#coordinate-query')!;
@@ -89,9 +93,9 @@ export class CoordinateQuery {
     this.gizmo.on(pc.Gizmo.EVENT_POINTERMOVE, (_x: number, _y: number, mesh: unknown) => { this.hovered = Boolean(mesh); });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => { this.dragging = true; });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => {
-      const inverse = options.entities[this.source].getWorldTransform().clone().invert();
-      const local = inverse.transformPoint(this.anchor.getPosition());
-      this.setPoint(offsetXYZ([local.x, local.y, local.z], options.origins[this.source]), false);
+      const local = transformXYZ(invertAffine(options.localToDisplay(this.source)), this.anchor.getPosition().toArray() as XYZ);
+      const filePoint = offsetXYZ(local, options.origins[this.source]);
+      this.setPoint(transformXYZ(options.businessMatrices[this.source], filePoint), false);
     });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => { this.dragging = false; this.refresh(); });
     this.toggle.addEventListener('click', () => this.active ? this.close() : this.open());
@@ -135,12 +139,12 @@ export class CoordinateQuery {
   }
 
   private currentSignature(): string {
-    return models.map(model => Array.from(this.options.entities[model].getWorldTransform().data).join(',')).join('|');
+    return this.options.signature();
   }
 
   setResult(result: Result, jobId: string): void {
     this.result = result; this.jobId = jobId; this.signature = this.currentSignature(); this.toggle.disabled = false;
-    this.toggle.title = '使用本轮 ICP 矩阵查询 A／B 原始坐标对';
+    this.toggle.title = '使用本轮 ICP 矩阵查询 A／B 业务坐标对';
     if (this.points) this.setPoint(this.points[this.source]);
   }
 
@@ -151,7 +155,6 @@ export class CoordinateQuery {
 
   private open(): void {
     if (!this.result || this.signature !== this.currentSignature()) { this.invalidate(); return; }
-    this.saved = Object.fromEntries(models.map(model => [model, { position: this.options.entities[model].getLocalPosition().clone(), rotation: this.options.entities[model].getLocalRotation().clone() }])) as typeof this.saved;
     this.active = true; this.panel.hidden = false; this.toggle.classList.add('active'); this.options.lock(true);
     this.refresh();
   }
@@ -163,15 +166,7 @@ export class CoordinateQuery {
   }
 
   private applyPresentation(): void {
-    if (!this.saved || !this.result) return;
-    const fixed = this.result.moving_model === 'a' ? 'b' : 'a';
-    models.forEach(model => {
-      const entity = this.options.entities[model];
-      if (this.original) {
-        const position = offsetXYZ(this.options.origins[model], this.options.origins[fixed], -1);
-        entity.setLocalPosition(...position); entity.setLocalRotation(pc.Quat.IDENTITY);
-      } else { entity.setLocalPosition(this.saved![model].position); entity.setLocalRotation(this.saved![model].rotation); }
-    });
+    if (this.result) this.options.setOriginal(this.original);
   }
 
   private setPoint(point: XYZ, attach = true): void {
@@ -182,7 +177,12 @@ export class CoordinateQuery {
   }
 
   private displayPoint(model: Model, point: XYZ): pc.Vec3 {
-    return this.options.entities[model].getWorldTransform().transformPoint(new pc.Vec3(...offsetXYZ(point, this.options.origins[model], -1)));
+    const filePoint = transformXYZ(invertAffine(this.options.businessMatrices[model]), point);
+    return this.displayFilePoint(model, filePoint);
+  }
+
+  private displayFilePoint(model: Model, filePoint: XYZ): pc.Vec3 {
+    return new pc.Vec3(...transformXYZ(this.options.localToDisplay(model), offsetXYZ(filePoint, this.options.origins[model], -1)));
   }
 
   private refresh(attach = true): void {
@@ -197,7 +197,8 @@ export class CoordinateQuery {
     this.stateButton.textContent = this.original ? '当前位置：原始位置｜切换配准位置' : '当前位置：配准位置｜切换原始位置';
     this.panel.querySelectorAll<HTMLInputElement>('input').forEach(input => {
       const model = input.dataset.model as Model;
-      input.disabled = model !== this.source;
+      input.readOnly = model !== this.source;
+      input.setAttribute('aria-readonly', String(input.readOnly));
       if (document.activeElement !== input) input.value = this.points ? String(this.points[model][Number(input.dataset.index)]) : '0';
     });
     this.message.title = `转换依据：ICP ${this.jobId}`;
@@ -231,7 +232,8 @@ export class CoordinateQuery {
     }
     if (best >= 0) {
       this.picking = false;
-      this.setPoint(offsetXYZ([cloud.positions[best * 3], cloud.positions[best * 3 + 1], cloud.positions[best * 3 + 2]], origins[this.source]));
+      const filePoint = offsetXYZ([cloud.positions[best * 3], cloud.positions[best * 3 + 1], cloud.positions[best * 3 + 2]], origins[this.source]);
+      this.setPoint(transformXYZ(this.options.businessMatrices[this.source], filePoint));
     } else this.message.textContent = '未命中可见点，请重新点击或输入坐标。';
     return true;
   }
@@ -270,12 +272,12 @@ export class CoordinateQuery {
       }
       this.axisLabels[model].forEach(label => { label.hidden = true; });
       if (this.axesVisible[model]) {
-        const zero: XYZ = [0, 0, 0]; const start = this.displayPoint(model, zero);
+        const zero: XYZ = [0, 0, 0]; const start = this.displayFilePoint(model, zero);
         this.placeLabel(this.axisLabels[model][0], start, model === 'a' ? -20 : 3);
         const colors = [pc.Color.RED, pc.Color.GREEN, pc.Color.BLUE];
         for (let axis = 0; axis < 3; axis++) {
           const end: XYZ = [0, 0, 0]; end[axis] = Math.max(0.1, this.options.diagonal * 0.12);
-          const world = this.displayPoint(model, end);
+          const world = this.displayFilePoint(model, end);
           this.options.app.drawLine(start, world, colors[axis], false);
           this.placeLabel(this.axisLabels[model][axis + 1], world, model === 'a' ? -20 : 3);
         }
