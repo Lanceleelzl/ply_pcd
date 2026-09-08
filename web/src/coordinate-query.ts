@@ -197,7 +197,8 @@ export class CoordinateQuery {
     this.stateButton.textContent = this.original ? '当前位置：原始位置｜切换配准位置' : '当前位置：配准位置｜切换原始位置';
     this.panel.querySelectorAll<HTMLInputElement>('input').forEach(input => {
       const model = input.dataset.model as Model;
-      input.disabled = model !== this.source;
+      input.readOnly = model !== this.source;
+      input.setAttribute('aria-readonly', String(input.readOnly));
       if (document.activeElement !== input) input.value = this.points ? String(this.points[model][Number(input.dataset.index)]) : '0';
     });
     this.message.title = `转换依据：ICP ${this.jobId}`;
