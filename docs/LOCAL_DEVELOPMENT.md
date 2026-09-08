@@ -101,7 +101,7 @@ pnpm run build:native
 
 ```json
 {
-  "port": 8765,
+  "port": 8865,
   "web_port": 5173
 }
 ```
@@ -131,7 +131,7 @@ Docker 使用从同一份 `uv.lock` 导出的 `service/requirements.lock.txt`，
 
 ## 7．本地与 Docker 切换
 
-本地和 Docker 默认都使用 `8765`，同一时间只能启动一个：
+本地和 Docker 默认都使用 `8865`，同一时间只能启动一个：
 
 ```powershell
 pnpm run docker:down

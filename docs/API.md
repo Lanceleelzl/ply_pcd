@@ -8,7 +8,7 @@
 | API 版本 | `v2`（推荐）／`v1`（兼容） |
 | 服务版本 | `0.3.0` |
 | 协议 | HTTP／JSON／multipart/form-data |
-| 本地 Base URL | `http://localhost:8765` |
+| 本地 Base URL | `http://localhost:8865` |
 | OpenAPI | `/openapi.json` |
 | Swagger UI | `/docs` |
 | 认证 | 当前版本未启用，禁止直接暴露到公网 |
@@ -114,7 +114,7 @@ Content-Type: multipart/form-data
 ### 7.2 cURL 示例
 
 ```bash
-curl -X POST "http://localhost:8765/api/v1/registrations" \
+curl -X POST "http://localhost:8865/api/v1/registrations" \
   -F "ply=@point_cloud.ply" \
   -F "pcd=@GlobalMap.pcd" \
   -F "min_rms_decrease=0.00001" \
@@ -495,7 +495,7 @@ Content-Type: multipart/form-data
 | `model_b_transform` | JSON string | 否 | 单位变换 | B 文件坐标→B 业务坐标的平移、旋转、缩放参数 |
 
 ```bash
-curl -X POST "http://localhost:8765/api/v2/registration-sessions" \
+curl -X POST "http://localhost:8865/api/v2/registration-sessions" \
   -F "model_a=@scene.ply" \
   -F "model_b=@slam-map.laz" \
   -F 'model_a_transform={"translation":[0,0,0],"rotation_degrees":[-90,0,0],"scale":[1,1,1]}' \
