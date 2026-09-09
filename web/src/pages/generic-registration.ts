@@ -1,3 +1,4 @@
+import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
 import { createApp, h, reactive, shallowReactive } from 'vue';
@@ -90,8 +91,7 @@ export async function renderGenericRegistration(
             <label class="parameter-label">ICP 移动模型<select id="moving-model"><option value="auto">自动推荐（${session.metadata!.recommended_moving_model.toUpperCase()}）</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>
           </div>
           <p id="role-hint" class="step-hint"></p><p id="range-risk" class="range-risk" hidden></p>
-          <div class="pose-row"><span>平移／m</span><div class="field-grid" id="position"></div></div>
-          <div class="pose-row"><span>旋转／°</span><div class="field-grid" id="rotation"></div></div>
+          <div id="coarse-pose-form"></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
         <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
@@ -339,23 +339,14 @@ export async function renderGenericRegistration(
     presentationChanged: attach,
   });
 
-  const inputs: Record<string, HTMLInputElement> = {};
-  for (const [container, prefix, step] of [['position', 'p', '0.01'], ['rotation', 'r', '0.1']] as const) {
-    const parent = root.querySelector<HTMLElement>(`#${container}`)!;
-    for (const axis of ['x', 'y', 'z']) {
-      const label = document.createElement('label'); label.className = 'axis-input';
-      const input = document.createElement('input'); input.type = 'number'; input.step = step; input.value = '0';
-      input.setAttribute('aria-label', `${container === 'position' ? '平移' : '旋转'} ${axis.toUpperCase()}`);
-      const suffix = document.createElement('span'); suffix.textContent = axis.toUpperCase();
-      inputs[`${prefix}${axis}`] = input; label.append(input, suffix); parent.appendChild(label);
-      input.addEventListener('input', () => {
-        const fields = Object.values(inputs);
-        if (fields.some(field => field.value === '' || field.validity.badInput || !Number.isFinite(Number(field.value)))) return;
-        display.setPose([Number(inputs.px.value), Number(inputs.py.value), Number(inputs.pz.value)],
-          [Number(inputs.rx.value), Number(inputs.ry.value), Number(inputs.rz.value)]);
-      });
-    }
-  }
+  const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0], disabled: false });
+  const poseApp = createApp({ render: () => h(CoarsePoseForm, {
+    ...poseState,
+    onChange: (values: number[]) => {
+      display.setPose(values.slice(0, 3) as XYZ, values.slice(3) as XYZ);
+    },
+  }) });
+  poseApp.mount(root.querySelector<HTMLElement>('#coarse-pose-form')!);
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
@@ -423,7 +414,7 @@ export async function renderGenericRegistration(
     }
     const pose = display.getPose();
     const values = [...pose.position, ...pose.rotation];
-    ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
+    if (values.some((value, index) => value !== poseState.values[index])) poseState.values = values;
     root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(display.getMovingLocalToFixedLocal());
     clippingScene?.sync();
     clippingScene?.drawHelpers();
@@ -670,13 +661,13 @@ export async function renderGenericRegistration(
   progressResize.observe(iterationProgress);
   positionProgress();
   const registrationControls = [outputDirection, movingSelect, resetButton,
-    ...Object.values(inputs),
     ...Array.from(root.querySelectorAll<HTMLInputElement>('[data-business-model]')),
     root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
     running = value;
     icpState.disabled = value || queryActive;
+    poseState.disabled = value || queryActive;
     actionState.running = value;
     actionState.cancelling = false;
     registrationControls.forEach(control => { control.disabled = value || queryActive; });
@@ -692,6 +683,7 @@ export async function renderGenericRegistration(
     lock: active => {
       queryActive = active;
       icpState.disabled = active || running;
+      poseState.disabled = active || running;
       registrationControls.forEach(control => { control.disabled = active || running; });
       actionState.locked = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
@@ -823,6 +815,7 @@ export async function renderGenericRegistration(
     resultApp.unmount();
     icpApp.unmount();
     actionsApp.unmount();
+    poseApp.unmount();
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
