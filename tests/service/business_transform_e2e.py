@@ -127,7 +127,7 @@ for role in roles:
             close([transform_point(result["a_to_b"], transform_point(pa_matrix, point_a))], [transform_point(pb_matrix, point_b)], 2e-5)
     for name in ("a_to_b", "b_to_a", "file_a_to_b", "file_b_to_a"):
         connection = http.client.HTTPConnection(base.hostname, base.port, timeout=10)
-        connection.request("GET", f'/api/v1/registrations/{created_job["job_id"]}/files/{name}_matrix.txt')
+        connection.request("GET", f'/api/v2/registrations/{created_job["job_id"]}/files/{name}_matrix.txt')
         response = connection.getresponse()
         matrix = [[float(value) for value in row.split()] for row in response.read().decode().splitlines()]
         connection.close()

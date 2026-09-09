@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from service.background_tasks import BackgroundTasks
 from service.config import (
@@ -24,7 +23,6 @@ from service.config import (
     WORKER_TIMEOUT_SECONDS,
 )
 from service.schemas import (
-    ManualRegistrationRequest,
     TransformParameters,
 )
 from service.routes.history import create_history_router
@@ -52,12 +50,9 @@ from service.transform_math import (
 )
 from service.validation import (
     model_extension as _model_extension,
-    reference_extension as _reference_extension,
-    validate_initial_matrix as _validate_initial_matrix,
-    validate_registration_parameters as _validate_registration_parameters,
     validate_transform as _validate_transform,
 )
-from service.uploads import save_upload as _save_upload, save_upload_with_sha256 as _save_upload_with_sha256
+from service.uploads import save_upload_with_sha256 as _save_upload_with_sha256
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
 STATIC_ROOT = Path(__file__).parent / "static"
@@ -93,7 +88,14 @@ def _write_status(job_directory: Path, status: dict[str, Any]) -> None:
 
 
 def _read_status(job_directory: Path) -> dict[str, Any]:
-    return _storage_read_status(job_directory)
+    status = _storage_read_status(job_directory)
+    # Normalize persisted task links without rewriting historical files.
+    for record in [status, *status.get("registrations", [])]:
+        for field in ("status_url", "progress_url", "result_url"):
+            value = record.get(field)
+            if isinstance(value, str) and value.startswith("/api/v1/registrations/"):
+                record[field] = value.replace("/api/v1/registrations/", "/api/v2/registrations/", 1)
+    return status
 
 
 def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> bool:
@@ -284,16 +286,9 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
     )
 
 
-async def _run_preview(session_id: str, command: list[str]) -> None:
-    await run_preview_task(
-        session_id, command, "manual", _manual_session_directory, _read_status, _write_status,
-        _job_semaphore, WORKER_TIMEOUT_SECONDS,
-    )
-
-
 async def _run_model_preview(session_id: str, command: list[str]) -> None:
     await run_preview_task(
-        session_id, command, "models", _manual_session_directory, _read_status, _write_status,
+        session_id, command, _manual_session_directory, _read_status, _write_status,
         _job_semaphore, WORKER_TIMEOUT_SECONDS,
     )
 
@@ -362,57 +357,6 @@ async def _cleanup_loop() -> None:
 @app.on_event("startup")
 async def start_cleanup() -> None:
     _background_tasks.start(_cleanup_loop())
-
-
-@app.post("/api/v1/manual-registration-sessions", status_code=202)
-async def create_manual_registration_session(
-    ply: Annotated[UploadFile, File(description="Gaussian Splatting PLY model")],
-    pcd: Annotated[UploadFile, File(description="SLAM reference cloud in PCD, LAS, or LAZ format")],
-) -> dict[str, Any]:
-    if not (ply.filename or "").lower().endswith(".ply"):
-        raise HTTPException(status_code=400, detail="ply file must use .ply extension")
-    reference_extension = _reference_extension(pcd)
-    session_id = str(uuid.uuid4())
-    session_directory = _manual_session_directory(session_id)
-    input_directory = session_directory / "input"
-    preview_directory = session_directory / "preview"
-    input_directory.mkdir(parents=True)
-    preview_directory.mkdir()
-    ply_path = input_directory / "model.ply"
-    pcd_path = input_directory / f"reference{reference_extension}"
-    try:
-        ply_bytes = await _save_upload(ply, ply_path)
-        pcd_bytes = await _save_upload(pcd, pcd_path)
-        if ply_bytes == 0 or pcd_bytes == 0:
-            raise HTTPException(status_code=400, detail="Uploaded files must not be empty")
-    except Exception:
-        shutil.rmtree(session_directory, ignore_errors=True)
-        raise
-    status: dict[str, Any] = {
-        "session_id": session_id,
-        "status": "queued",
-        "created_at_unix": time.time(),
-        "inputs": {"ply_bytes": ply_bytes, "pcd_bytes": pcd_bytes, "reference_format": reference_extension[1:]},
-        "reference_filename": pcd_path.name,
-        "editor_url": f"/manual-registration/{session_id}",
-    }
-    _write_status(session_directory, status)
-    command = [
-        WORKER_PATH,
-        "prepare-preview",
-        "--ply", str(ply_path),
-        "--reference", str(pcd_path),
-        "--output-dir", str(preview_directory),
-        "--ply-limit", "300000",
-        "--pcd-limit", "300000",
-    ]
-    _background_tasks.start(_run_preview(session_id, command))
-    return {
-        "session_id": session_id,
-        "status": "queued",
-        "status_url": f"/api/v1/manual-registration-sessions/{session_id}",
-        "editor_url": f"/manual-registration/{session_id}",
-    }
 
 
 @app.post("/api/v2/registration-sessions", status_code=202)
@@ -491,159 +435,3 @@ async def create_model_registration_session(
         "status_url": f"/api/v2/registration-sessions/{session_id}",
         "editor_url": status["editor_url"],
     }
-
-
-@app.get("/api/v1/manual-registration-sessions/{session_id}")
-async def get_manual_registration_session(session_id: str) -> dict[str, Any]:
-    return _read_status(_manual_session_directory(session_id))
-
-
-@app.get("/api/v1/manual-registration-sessions/{session_id}/preview/{cloud}")
-async def get_manual_registration_preview(session_id: str, cloud: str) -> FileResponse:
-    filenames = {
-        "ply": "ply-points.bin",
-        "pcd": "pcd-points.bin",
-        "reference": "pcd-points.bin",
-    }
-    if cloud == "gaussian":
-        path = _manual_session_directory(session_id) / "input" / "model.ply"
-        filename = "original-gaussian-model.ply"
-    elif cloud in filenames:
-        path = _manual_session_directory(session_id) / "preview" / filenames[cloud]
-        filename = filenames[cloud]
-    else:
-        raise HTTPException(status_code=404, detail="Preview not found")
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Preview not found")
-    media_type = "application/octet-stream" if cloud != "gaussian" else "application/ply"
-    return FileResponse(path, media_type=media_type, filename=filename)
-
-
-@app.post("/api/v1/manual-registration-sessions/{session_id}/register", status_code=202)
-async def register_manual_session(
-    session_id: str, request: ManualRegistrationRequest
-) -> dict[str, Any]:
-    _validate_initial_matrix(request.initial_pcd_to_ply)
-    _validate_registration_parameters(
-        request.min_rms_decrease, request.sampling_limit, request.overlap, request.random_seed,
-        request.precision_mode,
-    )
-    async with _manual_submission_lock:
-        session_directory = _manual_session_directory(session_id)
-        session_status = _read_status(session_directory)
-        if session_status.get("status") != "ready":
-            raise HTTPException(status_code=409, detail=f"Manual session status is {session_status.get('status')}")
-        active_job_id = session_status.get("active_job_id")
-        if active_job_id:
-            try:
-                active_status = _read_status(_job_directory(active_job_id)).get("status")
-            except HTTPException:
-                active_status = None
-            if active_status in {"queued", "running"}:
-                raise HTTPException(status_code=409, detail="Manual session already has an active registration")
-            session_status["active_job_id"] = None
-        job_id = str(uuid.uuid4())
-        job_directory = _job_directory(job_id)
-        input_directory = job_directory / "input"
-        result_directory = job_directory / "result"
-        input_directory.mkdir(parents=True)
-        result_directory.mkdir()
-        matrix_path = input_directory / "initial_pcd_to_ply.txt"
-        matrix_path.write_text(
-            "\n".join(" ".join(f"{value:.17g}" for value in row) for row in request.initial_pcd_to_ply) + "\n",
-            encoding="utf-8",
-        )
-        status: dict[str, Any] = {
-            "job_id": job_id,
-            "status": "queued",
-            "created_at_unix": time.time(),
-            "manual_session_id": session_id,
-            "inputs": session_status["inputs"],
-        }
-        _write_status(job_directory, status)
-        session_status.setdefault("registrations", []).append({
-            "job_id": job_id,
-            "status": "queued",
-            "created_at_unix": status["created_at_unix"],
-            "initial_pcd_to_ply": request.initial_pcd_to_ply,
-            "precision_mode": request.precision_mode,
-            "parameters": {
-                "min_rms_decrease": request.min_rms_decrease,
-                "sampling_limit": request.sampling_limit,
-                "overlap": request.overlap,
-                "random_seed": request.random_seed,
-            },
-            "status_url": f"/api/v1/registrations/{job_id}",
-        })
-        session_status["active_job_id"] = job_id
-        _write_status(session_directory, session_status)
-    command = [
-        WORKER_PATH,
-        "register",
-        "--ply", str(session_directory / "input" / "model.ply"),
-        "--reference", str(session_directory / "input" / session_status["reference_filename"]),
-        "--initial-matrix", str(matrix_path),
-        "--output-dir", str(result_directory),
-        "--min-rms-decrease", str(request.min_rms_decrease),
-        "--sampling-limit", str(request.sampling_limit),
-        "--overlap", str(request.overlap),
-        "--random-seed", str(request.random_seed),
-        "--precision-mode", request.precision_mode,
-    ]
-    _background_tasks.start(_run_worker(job_id, command))
-    return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/registrations/{job_id}"}
-
-
-@app.post("/api/v1/registrations", status_code=202)
-async def create_registration(
-    ply: Annotated[UploadFile, File(description="Gaussian Splatting PLY model")],
-    pcd: Annotated[UploadFile, File(description="SLAM reference cloud in PCD, LAS, or LAZ format")],
-    min_rms_decrease: Annotated[float, Form()] = 1.0e-5,
-    sampling_limit: Annotated[int, Form()] = 50000,
-    overlap: Annotated[float, Form()] = 1.0,
-    random_seed: Annotated[int, Form()] = 42,
-    precision_mode: Annotated[str, Form()] = "recommended",
-) -> dict[str, Any]:
-    if not (ply.filename or "").lower().endswith(".ply"):
-        raise HTTPException(status_code=400, detail="ply file must use .ply extension")
-    reference_extension = _reference_extension(pcd)
-    _validate_registration_parameters(min_rms_decrease, sampling_limit, overlap, random_seed, precision_mode)
-
-    job_id = str(uuid.uuid4())
-    job_directory = _job_directory(job_id)
-    input_directory = job_directory / "input"
-    result_directory = job_directory / "result"
-    input_directory.mkdir(parents=True)
-    result_directory.mkdir()
-    ply_path = input_directory / "model.ply"
-    pcd_path = input_directory / f"reference{reference_extension}"
-    try:
-        ply_bytes = await _save_upload(ply, ply_path)
-        pcd_bytes = await _save_upload(pcd, pcd_path)
-        if ply_bytes == 0 or pcd_bytes == 0:
-            raise HTTPException(status_code=400, detail="Uploaded files must not be empty")
-    except Exception:
-        shutil.rmtree(job_directory, ignore_errors=True)
-        raise
-
-    status: dict[str, Any] = {
-        "job_id": job_id,
-        "status": "queued",
-        "created_at_unix": time.time(),
-        "inputs": {"ply_bytes": ply_bytes, "pcd_bytes": pcd_bytes, "reference_format": reference_extension[1:]},
-    }
-    _write_status(job_directory, status)
-    command = [
-        WORKER_PATH,
-        "register",
-        "--ply", str(ply_path),
-        "--reference", str(pcd_path),
-        "--output-dir", str(result_directory),
-        "--min-rms-decrease", str(min_rms_decrease),
-        "--sampling-limit", str(sampling_limit),
-        "--overlap", str(overlap),
-        "--random-seed", str(random_seed),
-        "--precision-mode", precision_mode,
-    ]
-    _background_tasks.start(_run_worker(job_id, command))
-    return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/registrations/{job_id}"}

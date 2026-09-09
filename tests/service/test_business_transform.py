@@ -1,35 +1,10 @@
 import math
-import asyncio
-import json
 import unittest
-from unittest.mock import AsyncMock, patch
 
 from service import app as service
 
 
 class BusinessTransformTest(unittest.TestCase):
-    def test_v1_worker_result_remains_compatible(self) -> None:
-        result = {"ply_to_pcd": [[1, 0, 0, 0]] * 4}
-        status = {"job_id": "legacy", "manual_session_id": "legacy-session", "status": "queued"}
-        process = AsyncMock()
-        process.returncode = 0
-        process.stdout.readline.return_value = b""
-        process.stderr.read.return_value = b""
-        with patch.object(service, "_read_status", side_effect=lambda path: {"api_version": "v1"} if "manual-sessions" in str(path) else dict(status)), \
-             patch.object(service, "_write_status") as write_status, \
-             patch.object(service, "_sync_manual_session_job"), \
-             patch.object(service.asyncio, "create_subprocess_exec", return_value=process), \
-             patch.object(service.Path, "is_file", return_value=True), \
-             patch.object(service.Path, "read_text", return_value=json.dumps(result)), \
-             patch.object(service.Path, "write_text") as write_text, \
-             patch.object(service.Path, "write_bytes"), \
-             patch.object(service.shutil, "rmtree"), \
-             patch.object(service, "_job_directory", return_value=service.Path("runtime/jobs/legacy")), \
-             patch.object(service, "_manual_session_directory", return_value=service.Path("runtime/manual-sessions/legacy")):
-            asyncio.run(service._run_worker("legacy", ["worker"]))
-        self.assertEqual(write_status.call_args.args[1]["status"], "succeeded")
-        write_text.assert_not_called()
-
     def test_trs_order_and_inverse(self) -> None:
         value = {"translation": [2.0, 3.0, 4.0], "rotation_degrees": [-90.0, 0.0, 0.0], "scale": [1.0, 2.0, 3.0]}
         matrix = service._transform_matrix(value)

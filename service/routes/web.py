@@ -34,11 +34,6 @@ def create_web_router(
     async def index() -> Response:
         return web_index()
 
-    @router.get("/manual-registration/{session_id}")
-    async def manual_registration_page(session_id: str) -> Response:
-        session_directory(session_id)
-        return web_index()
-
     @router.get("/registration/{session_id}")
     async def model_registration_page(session_id: str) -> Response:
         status = read_status(session_directory(session_id))

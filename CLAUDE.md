@@ -34,6 +34,7 @@ p_target = T_source_to_target * p_source
 
 ## 当前实施决策
 
+- 2026-09-09：用户确认停止提供 v1 API 与旧版手工配准页面；新版任务状态、进度、取消、结果和下载统一使用 `/api/v2/registrations`。保留已有历史矩阵档案及运行目录，恢复仍可用的新版会话时，将其任务链接规范化为 v2。下文关于保持 v1 入口兼容的历史要求由本条替代。
 - 整体重构必须在独立分支进行，保持 `main` 为当前已验证版本；重构完成并经用户验证前不得合并或推送到 `main`。
 - Web 界面采用 Vue 3 负责组件与业务状态，PlayCanvas 保持纯 TypeScript 编辑器内核；两者通过类型化命令、查询接口和少量瞬时事件连接，禁止 Vue 组件直接操作 PlayCanvas 内部实体。
 - PlayCanvas 内核借鉴航线规划项目的 Application／InputController／ToolManager／Module／Entity／Tool 分层，但不复制其 Monorepo、iframe 或大型组件库结构。编辑工具互斥，视图命令在 ICP 期间继续可用。

@@ -72,7 +72,7 @@ class JobRouteTest(unittest.IsolatedAsyncioTestCase):
 
         await app({
             "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-            "method": "POST", "scheme": "http", "path": "/api/v1/registrations/job/cancel",
+            "method": "POST", "scheme": "http", "path": "/api/v2/registrations/job/cancel",
             "query_string": b"", "root_path": "", "headers": [],
             "client": ("127.0.0.1", 1234), "server": ("127.0.0.1", 8865),
         }, receive, send)

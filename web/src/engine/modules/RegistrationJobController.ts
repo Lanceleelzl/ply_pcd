@@ -131,7 +131,7 @@ export class RegistrationJobController {
   }
 
   private async sendCancel(): Promise<void> {
-    const response = await fetch(`/api/v1/registrations/${this.activeJobId}/cancel`, {
+    const response = await fetch(`/api/v2/registrations/${this.activeJobId}/cancel`, {
       method: 'POST',
       signal: this.lifecycle.signal,
     });

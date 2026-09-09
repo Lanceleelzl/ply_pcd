@@ -89,8 +89,8 @@ def create_registration_router(
                     "overlap": request.overlap,
                     "random_seed": request.random_seed,
                 },
-                "status_url": f"/api/v1/registrations/{job_id}",
-                "progress_url": f"/api/v1/registrations/{job_id}/events",
+                "status_url": f"/api/v2/registrations/{job_id}",
+                "progress_url": f"/api/v2/registrations/{job_id}/events",
             })
             session_status["active_job_id"] = job_id
             session_status["output_direction"] = request.output_direction
@@ -119,8 +119,8 @@ def create_registration_router(
         return {
             "job_id": job_id,
             "status": "queued",
-            "status_url": f"/api/v1/registrations/{job_id}",
-            "progress_url": f"/api/v1/registrations/{job_id}/events",
+            "status_url": f"/api/v2/registrations/{job_id}",
+            "progress_url": f"/api/v2/registrations/{job_id}/events",
         }
 
     return router

@@ -22,12 +22,12 @@ def create_job_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/v1/registrations/{job_id}")
+    @router.get("/api/v2/registrations/{job_id}")
     async def get_registration(job_id: str) -> dict[str, Any]:
         return _read_status(_job_directory(job_id))
 
 
-    @router.get("/api/v1/registrations/{job_id}/events")
+    @router.get("/api/v2/registrations/{job_id}/events")
     async def stream_registration_events(job_id: str, from_latest: bool = False) -> StreamingResponse:
         job_directory = _job_directory(job_id)
         _read_status(job_directory)
@@ -67,7 +67,7 @@ def create_job_router(
         )
 
 
-    @router.post("/api/v1/registrations/{job_id}/cancel")
+    @router.post("/api/v2/registrations/{job_id}/cancel")
     async def cancel_registration(job_id: str) -> dict[str, Any]:
         job_directory = _job_directory(job_id)
         status = _read_status(job_directory)
@@ -91,37 +91,20 @@ def create_job_router(
         return status
 
 
-    @router.get("/api/v1/registrations/{job_id}/result")
+    @router.get("/api/v2/registrations/{job_id}/result")
     async def get_registration_result(job_id: str) -> dict[str, Any]:
         job_directory = _job_directory(job_id)
         status = _read_status(job_directory)
         if status["status"] != "succeeded":
             raise HTTPException(status_code=409, detail=f"Job status is {status['status']}")
         result = json.loads((job_directory / "result" / "registration.json").read_text(encoding="utf-8"))
-        if "a_to_b" in result and "b_to_a" in result:
-            return result
-        return {
-            "recommended_matrix": {
-                "name": "T_ply_to_reference",
-                "direction": "PLY_TO_REFERENCE_WORLD",
-                "formula": "p_reference_world = T_ply_to_reference * p_ply",
-                "usage": "Use this matrix to transform Gaussian PLY points into the SLAM reference cloud world coordinate system.",
-                "value": result["ply_to_reference"],
-                "cloudcompare_value": result["ply_to_reference_cloudcompare"],
-            },
-            **result,
-        }
+        return result
 
 
-    @router.get("/api/v1/registrations/{job_id}/files/{filename}")
+    @router.get("/api/v2/registrations/{job_id}/files/{filename}")
     async def download_result_file(job_id: str, filename: str) -> FileResponse:
         allowed = {
             "registration.json",
-            "ply_to_reference_matrix.txt",
-            "reference_to_ply_matrix.txt",
-            "reference_local_to_ply_matrix.txt",
-            "initial_reference_local_to_ply_matrix.txt",
-            "icp_refinement_reference_local_to_ply_matrix.txt",
             "a_to_b_matrix.txt",
             "b_to_a_matrix.txt",
             "file_a_to_b_matrix.txt",
@@ -129,14 +112,6 @@ def create_job_router(
             "moving_local_to_fixed_local_matrix.txt",
             "initial_moving_local_to_fixed_local_matrix.txt",
             "icp_refinement_moving_local_to_fixed_local_matrix.txt",
-            "ply_to_reference_cloudcompare_matrix.txt",
-            "reference_to_ply_cloudcompare_matrix.txt",
-            "ply_to_pcd_matrix.txt",
-            "pcd_to_ply_matrix.txt",
-            "ply_to_pcd_cloudcompare_matrix.txt",
-            "pcd_to_ply_cloudcompare_matrix.txt",
-            "initial_pcd_to_ply_matrix.txt",
-            "icp_refinement_pcd_to_ply_matrix.txt",
             "registration.log",
         }
         if filename not in allowed:

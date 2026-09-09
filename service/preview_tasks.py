@@ -6,10 +6,9 @@ import json
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 
-PreviewKind = Literal["manual", "models"]
 SessionDirectory = Callable[[str], Path]
 StatusReader = Callable[[Path], dict[str, Any]]
 StatusWriter = Callable[[Path, dict[str, Any]], None]
@@ -18,7 +17,6 @@ StatusWriter = Callable[[Path, dict[str, Any]], None]
 async def run_preview_task(
     session_id: str,
     command: list[str],
-    kind: PreviewKind,
     session_directory: SessionDirectory,
     read_status: StatusReader,
     write_status: StatusWriter,
@@ -50,29 +48,18 @@ async def run_preview_task(
                 else:
                     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                     status.update(status="ready", metadata=metadata)
-                    if kind == "manual":
-                        status.update(
-                            ply_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/ply",
-                            pcd_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/pcd",
-                            reference_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/reference",
+                    status.update(
+                        model_a_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-a",
+                        model_b_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-b",
+                    )
+                    if metadata.get("gaussian_a_available"):
+                        status["gaussian_a_url"] = (
+                            f"/api/v2/registration-sessions/{session_id}/preview/gaussian-a"
                         )
-                        if metadata.get("gaussian_available"):
-                            status["gaussian_preview_url"] = (
-                                f"/api/v1/manual-registration-sessions/{session_id}/preview/gaussian"
-                            )
-                    else:
-                        status.update(
-                            model_a_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-a",
-                            model_b_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-b",
+                    if metadata.get("gaussian_b_available"):
+                        status["gaussian_b_url"] = (
+                            f"/api/v2/registration-sessions/{session_id}/preview/gaussian-b"
                         )
-                        if metadata.get("gaussian_a_available"):
-                            status["gaussian_a_url"] = (
-                                f"/api/v2/registration-sessions/{session_id}/preview/gaussian-a"
-                            )
-                        if metadata.get("gaussian_b_available"):
-                            status["gaussian_b_url"] = (
-                                f"/api/v2/registration-sessions/{session_id}/preview/gaussian-b"
-                            )
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()

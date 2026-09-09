@@ -120,7 +120,7 @@ async def run_registration_task(
                                 encoding="utf-8",
                             )
                         result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-                    status.update(status="succeeded", result_url=f"/api/v1/registrations/{job_id}/result")
+                    status.update(status="succeeded", result_url=f"/api/v2/registrations/{job_id}/result")
         except Exception as error:  # Keep API alive if worker startup itself fails.
             current_status = read_status(job_directory)
             if current_status.get("status") == "cancelled":

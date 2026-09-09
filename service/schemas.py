@@ -4,15 +4,6 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
-class ManualRegistrationRequest(BaseModel):
-    initial_pcd_to_ply: list[list[float]]
-    precision_mode: str = "recommended"
-    min_rms_decrease: float = 1.0e-5
-    sampling_limit: int = 50000
-    overlap: float = 1.0
-    random_seed: int = 42
-
-
 class ModelRegistrationRequest(BaseModel):
     initial_moving_local_to_fixed_local: list[list[float]]
     output_direction: str = "a_to_b"

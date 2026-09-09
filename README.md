@@ -73,7 +73,7 @@ REGISTRATION_SOURCE_RETENTION_HOURS
 
 清理范围仅限服务管理的 `runtime/jobs/{job_id}` 和 `runtime/manual-sessions/{session_id}`，不会处理只读的 `source` 原始数据。历史档案保存在 `runtime/history/{workspace_id}`，源文件释放后矩阵仍可查看和复制。
 
-推荐使用通用 `v2` 会话接口；现有 `v1` PLY→定位参考点云接口继续兼容：
+仅提供通用 `v2` 会话及任务接口，旧版 `v1` API 与手工配准页面已移除：
 
 ```text
 POST /api/v2/registration-sessions
@@ -83,15 +83,15 @@ GET  /api/v2/registration-history?workspace_id={workspace_id}
 POST /api/v2/registration-sessions/{session_id}/retain
 POST /api/v2/registration-sessions/{session_id}/release
 POST /api/v2/registration-sessions/{session_id}/resume
-POST /api/v1/registrations
-GET  /api/v1/registrations/{job_id}
-GET  /api/v1/registrations/{job_id}/result
-GET  /api/v1/registrations/{job_id}/events
-GET  /api/v1/registrations/{job_id}/files/{filename}
+POST /api/v2/registrations/{job_id}/cancel
+GET  /api/v2/registrations/{job_id}
+GET  /api/v2/registrations/{job_id}/result
+GET  /api/v2/registrations/{job_id}/events
+GET  /api/v2/registrations/{job_id}/files/{filename}
 GET  /health
 ```
 
-Python 示例见 `examples/python_client.py`，需要安装 `requests`。Java 11＋无第三方依赖示例见 `examples/RegistrationClient.java`。
+调用顺序：上传模型创建会话，等待会话就绪，提交配准，再通过响应中的状态和结果链接读取任务。已有历史矩阵档案保留，旧任务链接在读取时转换为 v2。
 
 ## Docker 部署与验证
 

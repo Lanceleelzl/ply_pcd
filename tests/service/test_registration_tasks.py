@@ -50,7 +50,7 @@ class RegistrationTaskTest(unittest.IsolatedAsyncioTestCase):
     async def test_success_sets_result_url(self):
         status, _ = await self.run_case()
         self.assertEqual(status["status"], "succeeded")
-        self.assertEqual(status["result_url"], "/api/v1/registrations/test-job/result")
+        self.assertEqual(status["result_url"], "/api/v2/registrations/test-job/result")
 
     async def test_failed_worker_preserves_exit_code_and_error(self):
         status, _ = await self.run_case(exit_code=50)

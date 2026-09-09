@@ -12,11 +12,5 @@ export const router = createRouter({
       component: LegacyWorkbenchView,
       props: route => ({ sessionId: route.params.sessionId, apiVersion: 'v2' }),
     },
-    {
-      path: '/manual-registration/:sessionId',
-      name: 'manual-registration',
-      component: LegacyWorkbenchView,
-      props: route => ({ sessionId: route.params.sessionId, apiVersion: 'v1' }),
-    },
   ],
 });
