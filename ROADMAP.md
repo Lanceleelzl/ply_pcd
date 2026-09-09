@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-09：v2 配准历史列表与详情 API 迁入 `service/routes/history.py`，通过 Router 工厂注入历史目录、记录路径、视图和工作区校验依赖；保留 `workspace_id` 查询参数、完成时间倒序、损坏记录跳过和缺失记录 404 行为。`service/app.py` 降至 1038 行；Python 编译检查、服务测试 9／9 及路由签名和响应检查通过。
+
 - 2026-09-09：C++ Worker 的矩阵 JSON、紧凑进度矩阵和点云摘要输出迁入 `worker_output.hpp／cpp`，`main.cpp` 由约 565 行降至 520 行，只保留命令流程编排和调用。Windows Release Worker 已重建并刷新预编译文件与源码指纹，CTest 1／1 通过。
 
 - 2026-09-09：普通文件上传与带 SHA-256 的流式上传迁入 `service/uploads.py`，继续采用固定分块写入并在完成后关闭 `UploadFile`；应用入口只保留调用，服务端测试 9／9 和 Python 编译检查通过。

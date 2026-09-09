@@ -29,6 +29,7 @@ from service.schemas import (
     TransformParameters,
     WorkspaceRequest,
 )
+from service.routes.history import create_history_router
 from service.routes.web import create_web_router
 from service.storage import (
     history_directory as _storage_history_directory,
@@ -207,6 +208,9 @@ def _history_view(record: dict[str, Any]) -> dict[str, Any]:
         "restartable": source_available,
         "source_expires_at_unix": source_expires,
     }
+
+
+app.include_router(create_history_router(_history_directory, _history_path, _history_view, _workspace_id))
 
 
 def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
@@ -656,29 +660,6 @@ async def get_model_registration_session(session_id: str) -> dict[str, Any]:
     status["source_available"] = _v2_source_available(session_directory, status)
     status["restartable"] = status["source_available"]
     return status
-
-
-@app.get("/api/v2/registration-history")
-async def get_registration_history(workspace_id: str) -> dict[str, Any]:
-    directory = _history_directory(workspace_id)
-    records: list[dict[str, Any]] = []
-    if directory.is_dir():
-        for path in directory.glob("*.json"):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-                records.append(_history_view(record))
-            except (OSError, ValueError, json.JSONDecodeError, HTTPException):
-                continue
-    records.sort(key=lambda item: float(item.get("completed_at_unix") or 0), reverse=True)
-    return {"workspace_id": _workspace_id(workspace_id), "items": records}
-
-
-@app.get("/api/v2/registration-history/{session_id}")
-async def get_registration_history_item(session_id: str, workspace_id: str) -> dict[str, Any]:
-    path = _history_path(workspace_id, session_id)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Registration history not found")
-    return _history_view(json.loads(path.read_text(encoding="utf-8")))
 
 
 @app.post("/api/v2/registration-sessions/{session_id}/retain")
