@@ -10,9 +10,11 @@
 ## 进行中
 
 - 2026-09-08：在 `codex/refactor-registration-workbench` 分支重建项目结构。目标为 Vue 3 界面层、纯 TypeScript PlayCanvas 内核、类型化工作台状态、停靠式工具检查器与结果抽屉，并拆分 FastAPI 服务和 C++ Worker 外壳。重构期间保持 `main` 为已验证版本，现有 API、矩阵、ICP、历史档案和运行目录兼容。
-- 下一步：拆分 FastAPI API 路由与任务执行服务，并分离 C++ Worker 各命令执行与结果输出层；随后将工作台剩余表单和结果展示逐步迁入 Vue 组件。
+- 下一步：拆分 FastAPI API 路由与任务执行服务，并继续分离 C++ Worker 各命令执行层；随后将工作台剩余表单和结果展示逐步迁入 Vue 组件。
 
 ## 已完成
+
+- 2026-09-09：C++ Worker 的矩阵 JSON、紧凑进度矩阵和点云摘要输出迁入 `worker_output.hpp／cpp`，`main.cpp` 由约 565 行降至 520 行，只保留命令流程编排和调用。Windows Release Worker 已重建并刷新预编译文件与源码指纹，CTest 1／1 通过。
 
 - 2026-09-09：普通文件上传与带 SHA-256 的流式上传迁入 `service/uploads.py`，继续采用固定分块写入并在完成后关闭 `UploadFile`；应用入口只保留调用，服务端测试 9／9 和 Python 编译检查通过。
 

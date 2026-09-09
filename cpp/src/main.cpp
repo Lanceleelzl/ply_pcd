@@ -6,6 +6,7 @@
 #include "registration/point_cloud_preview.hpp"
 #include "registration/reference_cloud_reader.hpp"
 #include "worker_arguments.hpp"
+#include "worker_output.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -28,6 +29,9 @@ using registration::worker::ModelPreviewArguments;
 using registration::worker::ModelRegisterArguments;
 using registration::worker::PreviewArguments;
 using registration::worker::RegisterArguments;
+using registration::worker::printCloudSummary;
+using registration::worker::writeCompactMatrixJson;
+using registration::worker::writeMatrixJson;
 
 bool hasGaussianProperties(const std::filesystem::path& path)
 {
@@ -94,39 +98,6 @@ double rotationDistanceDegrees(const registration::Matrix4d& left, const registr
             trace += left.at(row, column) * right.at(row, column);
     const double cosine = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
     return std::acos(cosine) * 57.2957795130823208768;
-}
-
-void writeMatrixJson(std::ostream& output, const registration::Matrix4d& matrix, int indent)
-{
-    output << "[\n";
-    for (std::size_t row = 0; row < 4; ++row)
-    {
-        output << std::string(static_cast<std::size_t>(indent + 2), ' ') << '[';
-        for (std::size_t column = 0; column < 4; ++column)
-        {
-            if (column != 0) output << ", ";
-            output << matrix.at(row, column);
-        }
-        output << ']' << (row == 3 ? "\n" : ",\n");
-    }
-    output << std::string(static_cast<std::size_t>(indent), ' ') << ']';
-}
-
-void writeCompactMatrixJson(std::ostream& output, const registration::Matrix4d& matrix)
-{
-    output << '[';
-    for (std::size_t row = 0; row < 4; ++row)
-    {
-        if (row != 0) output << ',';
-        output << '[';
-        for (std::size_t column = 0; column < 4; ++column)
-        {
-            if (column != 0) output << ',';
-            output << matrix.at(row, column);
-        }
-        output << ']';
-    }
-    output << ']';
 }
 
 registration::Matrix4d translationMatrix(const registration::Point3d& translation)
@@ -501,24 +472,6 @@ int runModelPreview(const ModelPreviewArguments& arguments)
     return 0;
 }
 
-void printCloudSummary(const std::string& type,
-                       std::uint64_t declared,
-                       std::uint64_t valid,
-                       std::uint64_t invalid,
-                       const registration::BoundingBox& box)
-{
-    std::cout << std::fixed << std::setprecision(6)
-              << "{\n"
-              << "  \"type\": \"" << type << "\",\n"
-              << "  \"declared_points\": " << declared << ",\n"
-              << "  \"valid_points\": " << valid << ",\n"
-              << "  \"invalid_points\": " << invalid << ",\n"
-              << "  \"bounds\": {\n"
-              << "    \"min\": [" << box.min[0] << ", " << box.min[1] << ", " << box.min[2] << "],\n"
-              << "    \"max\": [" << box.max[0] << ", " << box.max[1] << ", " << box.max[2] << "]\n"
-              << "  }\n"
-              << "}\n";
-}
 } // namespace
 
 int main(int argc, char** argv)
