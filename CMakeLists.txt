@@ -39,7 +39,10 @@ else()
     target_compile_options(registration_io PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_executable(registration_worker cpp/src/main.cpp)
+add_executable(registration_worker
+    cpp/src/main.cpp
+    cpp/src/worker_arguments.cpp
+)
 if(WIN32)
     set(REGISTRATION_LASZIP_TARGET laszip3)
 else()
