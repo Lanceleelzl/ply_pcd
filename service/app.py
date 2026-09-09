@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
@@ -29,6 +29,7 @@ from service.schemas import (
     WorkspaceRequest,
 )
 from service.routes.history import create_history_router
+from service.routes.jobs import create_job_router
 from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
 from service.preview_tasks import run_preview_task
@@ -253,6 +254,11 @@ def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
             _write_v2_history(session_directory, session_status)
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+
+
+app.include_router(create_job_router(
+    _job_directory, _read_status, _write_status, _sync_manual_session_job, _running_processes,
+))
 
 
 async def _run_worker(job_id: str, command: list[str]) -> None:
@@ -796,128 +802,3 @@ async def create_registration(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/registrations/{job_id}"}
-
-
-@app.get("/api/v1/registrations/{job_id}")
-async def get_registration(job_id: str) -> dict[str, Any]:
-    return _read_status(_job_directory(job_id))
-
-
-@app.get("/api/v1/registrations/{job_id}/events")
-async def stream_registration_events(job_id: str, from_latest: bool = False) -> StreamingResponse:
-    job_directory = _job_directory(job_id)
-    _read_status(job_directory)
-
-    async def event_stream():
-        offset = 0
-        heartbeat = 0
-        if from_latest:
-            progress_path = job_directory / "progress.ndjson"
-            if progress_path.is_file():
-                with progress_path.open("r", encoding="utf-8") as progress_input:
-                    lines = [line.strip() for line in progress_input.read().splitlines() if line.strip()]
-                    offset = progress_input.tell()
-                if lines:
-                    yield f"event: iteration\ndata: {lines[-1]}\n\n"
-        while True:
-            progress_path = job_directory / "progress.ndjson"
-            if progress_path.is_file():
-                with progress_path.open("r", encoding="utf-8") as progress_input:
-                    progress_input.seek(offset)
-                    for line in progress_input:
-                        yield f"event: iteration\ndata: {line.strip()}\n\n"
-                    offset = progress_input.tell()
-            status = _read_status(job_directory)
-            if status.get("status") in {"succeeded", "failed", "cancelled"}:
-                payload = json.dumps({"status": status["status"]}, separators=(",", ":"))
-                yield f"event: terminal\ndata: {payload}\n\n"
-                break
-            heartbeat += 1
-            if heartbeat % 20 == 0:
-                yield ": keep-alive\n\n"
-            await asyncio.sleep(0.25)
-
-    return StreamingResponse(
-        event_stream(), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/api/v1/registrations/{job_id}/cancel")
-async def cancel_registration(job_id: str) -> dict[str, Any]:
-    job_directory = _job_directory(job_id)
-    status = _read_status(job_directory)
-    if status.get("status") == "cancelled":
-        return status
-    if status.get("status") not in {"queued", "running"}:
-        raise HTTPException(status_code=409, detail=f"Job status is {status.get('status')}")
-    status.update(
-        status="cancelled",
-        error_code="task_cancelled",
-        error="Registration cancelled by user",
-        finished_at_unix=time.time(),
-    )
-    _write_status(job_directory, status)
-    _sync_manual_session_job(status)
-    process = _running_processes.get(job_id)
-    if process is not None and process.returncode is None:
-        process.kill()
-    if process is None:
-        shutil.rmtree(job_directory / "input", ignore_errors=True)
-    return status
-
-
-@app.get("/api/v1/registrations/{job_id}/result")
-async def get_registration_result(job_id: str) -> dict[str, Any]:
-    job_directory = _job_directory(job_id)
-    status = _read_status(job_directory)
-    if status["status"] != "succeeded":
-        raise HTTPException(status_code=409, detail=f"Job status is {status['status']}")
-    result = json.loads((job_directory / "result" / "registration.json").read_text(encoding="utf-8"))
-    if "a_to_b" in result and "b_to_a" in result:
-        return result
-    return {
-        "recommended_matrix": {
-            "name": "T_ply_to_reference",
-            "direction": "PLY_TO_REFERENCE_WORLD",
-            "formula": "p_reference_world = T_ply_to_reference * p_ply",
-            "usage": "Use this matrix to transform Gaussian PLY points into the SLAM reference cloud world coordinate system.",
-            "value": result["ply_to_reference"],
-            "cloudcompare_value": result["ply_to_reference_cloudcompare"],
-        },
-        **result,
-    }
-
-
-@app.get("/api/v1/registrations/{job_id}/files/{filename}")
-async def download_result_file(job_id: str, filename: str) -> FileResponse:
-    allowed = {
-        "registration.json",
-        "ply_to_reference_matrix.txt",
-        "reference_to_ply_matrix.txt",
-        "reference_local_to_ply_matrix.txt",
-        "initial_reference_local_to_ply_matrix.txt",
-        "icp_refinement_reference_local_to_ply_matrix.txt",
-        "a_to_b_matrix.txt",
-        "b_to_a_matrix.txt",
-        "file_a_to_b_matrix.txt",
-        "file_b_to_a_matrix.txt",
-        "moving_local_to_fixed_local_matrix.txt",
-        "initial_moving_local_to_fixed_local_matrix.txt",
-        "icp_refinement_moving_local_to_fixed_local_matrix.txt",
-        "ply_to_reference_cloudcompare_matrix.txt",
-        "reference_to_ply_cloudcompare_matrix.txt",
-        "ply_to_pcd_matrix.txt",
-        "pcd_to_ply_matrix.txt",
-        "ply_to_pcd_cloudcompare_matrix.txt",
-        "pcd_to_ply_cloudcompare_matrix.txt",
-        "initial_pcd_to_ply_matrix.txt",
-        "icp_refinement_pcd_to_ply_matrix.txt",
-        "registration.log",
-    }
-    if filename not in allowed:
-        raise HTTPException(status_code=404, detail="File not found")
-    path = _job_directory(job_id) / "result" / filename
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=filename)
