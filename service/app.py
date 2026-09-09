@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from service.background_tasks import BackgroundTasks
+from service.history import write_history, release_source_data, history_view
+from service.cleanup import cleanup_completed_jobs
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
     MAX_CONCURRENT_JOBS,
@@ -112,106 +112,15 @@ app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _re
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
-    workspace_id = session_status.get("workspace_id")
-    if session_status.get("api_version") != "v2" or not workspace_id:
-        return None
-    completed = [entry for entry in session_status.get("registrations", []) if entry.get("status") == "succeeded"]
-    if not completed:
-        return None
-    latest = max(completed, key=lambda entry: float(entry.get("finished_at_unix", 0)))
-    job_id = latest.get("job_id")
-    if not job_id:
-        return None
-    result_path = _job_directory(job_id) / "result" / "registration.json"
-    if not result_path.is_file():
-        existing = _history_path(workspace_id, session_status["session_id"])
-        return json.loads(existing.read_text(encoding="utf-8")) if existing.is_file() else None
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    metadata = session_status.get("metadata", {}).get("models", {})
-    inputs = session_status.get("inputs", {})
-    record = {
-        "session_id": session_status["session_id"],
-        "workspace_id": workspace_id,
-        "status": "succeeded",
-        "created_at_unix": session_status.get("created_at_unix"),
-        "completed_at_unix": latest.get("finished_at_unix"),
-        "source_expires_at_unix": session_status.get("source_expires_at_unix"),
-        "service_version": SERVICE_VERSION,
-        "output_direction": latest.get("output_direction", session_status.get("output_direction")),
-        "moving_model": latest.get("moving_model", session_status.get("moving_model")),
-        "models": {
-            "a": {
-                "filename": inputs.get("model_a_original_filename", session_status.get("model_a_filename")),
-                "format": inputs.get("model_a_format"), "bytes": inputs.get("model_a_bytes"),
-                "sha256": inputs.get("model_a_sha256"), "point_count": metadata.get("a", {}).get("source_point_count"),
-            },
-            "b": {
-                "filename": inputs.get("model_b_original_filename", session_status.get("model_b_filename")),
-                "format": inputs.get("model_b_format"), "bytes": inputs.get("model_b_bytes"),
-                "sha256": inputs.get("model_b_sha256"), "point_count": metadata.get("b", {}).get("source_point_count"),
-            },
-        },
-        "parameters": latest.get("parameters", result.get("parameters", {})),
-        "recommended_matrix": result.get("recommended_matrix"),
-        "a_to_b": result.get("a_to_b"), "b_to_a": result.get("b_to_a"),
-        "file_a_to_b": result.get("file_a_to_b"), "file_b_to_a": result.get("file_b_to_a"),
-        "business_transforms": result.get("business_transforms", session_status.get("business_transforms")),
-        "metrics": result.get("metrics", {}),
-    }
-    directory = _history_directory(workspace_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    path = _history_path(workspace_id, session_status["session_id"])
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
-    return record
+    return write_history(session_directory, session_status, _job_directory=_job_directory, _history_path=_history_path, _history_directory=_history_directory, SERVICE_VERSION=SERVICE_VERSION)
 
 
 def _release_v2_source_data(session_directory: Path, session_status: dict[str, Any]) -> None:
-    active_job_id = session_status.get("active_job_id")
-    if active_job_id:
-        try:
-            if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
-                raise HTTPException(status_code=409, detail="Active registration must finish or be cancelled first")
-        except HTTPException as error:
-            if error.status_code == 409:
-                raise
-    _write_v2_history(session_directory, session_status)
-    shutil.rmtree(session_directory / "input", ignore_errors=True)
-    shutil.rmtree(session_directory / "preview", ignore_errors=True)
-    for filename in ("worker.stdout.log", "worker.stderr.log"):
-        (session_directory / filename).unlink(missing_ok=True)
-    for entry in session_status.get("registrations", []):
-        job_id = entry.get("job_id")
-        if not job_id:
-            continue
-        job_directory = _job_directory(job_id)
-        try:
-            job_status = _read_status(job_directory)
-        except HTTPException:
-            continue
-        if job_status.get("status") in {"succeeded", "failed", "cancelled"}:
-            shutil.rmtree(job_directory)
-    session_status["source_released_at_unix"] = time.time()
-    session_status["source_available"] = False
-    _write_status(session_directory, session_status)
+    return release_source_data(session_directory, session_status, _job_directory=_job_directory, _read_status=_read_status, _write_status=_write_status, _write_v2_history=_write_v2_history)
 
 
 def _history_view(record: dict[str, Any]) -> dict[str, Any]:
-    session_directory = _manual_session_directory(record["session_id"])
-    try:
-        status = _read_status(session_directory)
-        source_available = _v2_source_available(session_directory, status)
-        source_expires = status.get("source_expires_at_unix")
-    except (HTTPException, OSError, json.JSONDecodeError):
-        source_available = False
-        source_expires = record.get("source_expires_at_unix")
-    return {
-        **record,
-        "source_available": source_available,
-        "restartable": source_available,
-        "source_expires_at_unix": source_expires,
-    }
+    return history_view(record, _manual_session_directory=_manual_session_directory, _read_status=_read_status, _v2_source_available=_v2_source_available)
 
 
 app.include_router(create_history_router(_history_directory, _history_path, _history_view, _workspace_id))
@@ -299,58 +208,10 @@ async def _run_model_preview(session_id: str, command: list[str]) -> None:
 
 
 def _cleanup_completed_jobs() -> None:
-    jobs_directory = RUNTIME_ROOT / "jobs"
-    if not jobs_directory.is_dir():
-        return
-    expires_before = time.time() - RESULT_RETENTION_HOURS * 3600
-    for job_directory in jobs_directory.iterdir():
-        if not job_directory.is_dir():
-            continue
-        try:
-            uuid.UUID(job_directory.name)
-            status = _read_status(job_directory)
-        except (ValueError, HTTPException, OSError, json.JSONDecodeError):
-            continue
-        if status.get("status") not in {"succeeded", "failed", "cancelled"}:
-            continue
-        shutil.rmtree(job_directory / "input", ignore_errors=True)
-        if float(status.get("updated_at_unix", 0)) < expires_before:
-            shutil.rmtree(job_directory)
-
-    sessions_directory = RUNTIME_ROOT / "manual-sessions"
-    if not sessions_directory.is_dir():
-        return
-    for session_directory in sessions_directory.iterdir():
-        if not session_directory.is_dir():
-            continue
-        try:
-            uuid.UUID(session_directory.name)
-            status = _read_status(session_directory)
-        except (ValueError, HTTPException, OSError, json.JSONDecodeError):
-            continue
-        if status.get("status") not in {"ready", "failed"}:
-            continue
-        active_job_id = status.get("active_job_id")
-        if active_job_id:
-            try:
-                if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
-                    continue
-            except HTTPException:
-                pass
-        source_expires = status.get("source_expires_at_unix")
-        if (
-            status.get("api_version") == "v2"
-            and source_expires is not None
-            and _v2_source_available(session_directory, status)
-            and float(source_expires) <= time.time()
-        ):
-            try:
-                _release_v2_source_data(session_directory, status)
-            except (HTTPException, OSError, ValueError, json.JSONDecodeError):
-                continue
-            continue
-        if float(status.get("updated_at_unix", 0)) < expires_before:
-            shutil.rmtree(session_directory)
+    cleanup_completed_jobs(
+        RUNTIME_ROOT, RESULT_RETENTION_HOURS, _job_directory, _read_status,
+        _v2_source_available, _release_v2_source_data,
+    )
 
 
 async def _cleanup_loop() -> None:
