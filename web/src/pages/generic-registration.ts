@@ -59,6 +59,7 @@ export async function renderGenericRegistration(
   root: HTMLElement,
   sessionId: string,
   externalSignal?: AbortSignal,
+  navigateHome?: () => void,
 ): Promise<() => void> {
   const lifecycle = new AbortController();
   const abortLifecycle = () => lifecycle.abort();
@@ -648,7 +649,10 @@ export async function renderGenericRegistration(
     });
   });
   refreshClippingMode();
-  root.querySelector('#new-task')!.addEventListener('click', () => { location.href = '/'; });
+  root.querySelector('#new-task')!.addEventListener('click', () => {
+    if (navigateHome) navigateHome();
+    else location.href = '/';
+  });
 
   const inputController = new InputController(canvas, cameraController, {
     pointerMove: event => {
