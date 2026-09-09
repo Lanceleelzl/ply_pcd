@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import shutil
 import time
@@ -20,7 +19,6 @@ from service.config import (
     RUNTIME_ROOT,
     SERVICE_VERSION,
     SOURCE_RETENTION_HOURS,
-    UPLOAD_CHUNK_BYTES,
     WORKER_PATH,
     WORKER_TIMEOUT_SECONDS,
 )
@@ -55,6 +53,7 @@ from service.validation import (
     validate_registration_parameters as _validate_registration_parameters,
     validate_transform as _validate_transform,
 )
+from service.uploads import save_upload as _save_upload, save_upload_with_sha256 as _save_upload_with_sha256
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
 STATIC_ROOT = Path(__file__).parent / "static"
@@ -236,28 +235,6 @@ def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
             _write_v2_history(session_directory, session_status)
         except (OSError, ValueError, json.JSONDecodeError):
             pass
-
-
-async def _save_upload(upload: UploadFile, destination: Path) -> int:
-    total = 0
-    with destination.open("wb") as output:
-        while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
-            output.write(chunk)
-            total += len(chunk)
-    await upload.close()
-    return total
-
-
-async def _save_upload_with_sha256(upload: UploadFile, destination: Path) -> tuple[int, str]:
-    total = 0
-    digest = hashlib.sha256()
-    with destination.open("wb") as output:
-        while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
-            output.write(chunk)
-            digest.update(chunk)
-            total += len(chunk)
-    await upload.close()
-    return total, digest.hexdigest()
 
 
 async def _run_worker(job_id: str, command: list[str]) -> None:

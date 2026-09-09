@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-09：普通文件上传与带 SHA-256 的流式上传迁入 `service/uploads.py`，继续采用固定分块写入并在完成后关闭 `UploadFile`；应用入口只保留调用，服务端测试 9／9 和 Python 编译检查通过。
+
 - 2026-09-09：FastAPI 健康检查、首页、手工配准页和 v2 会话 SPA 页面迁入 `service/routes/web.py`，通过 Router 工厂注入会话目录及状态读取依赖，应用入口只负责装配。服务测试 9／9 和 Python 编译检查通过；真实 HTTP 验证 `/health`、首页、有效 v2 会话返回 200，无效会话返回 404。
 
 - 2026-09-09：FastAPI 的 Job／会话／历史路径解析、工作区 UUID 校验及状态文件原子读写迁入 `service/storage.py`。`service.app` 通过当前 `RUNTIME_ROOT` 调用存储模块并保留原包装函数，因此临时运行目录注入、既有测试猴子补丁和 API 行为不变；Python 编译检查及服务端测试 9／9 通过。
