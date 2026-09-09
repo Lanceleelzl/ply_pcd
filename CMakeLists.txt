@@ -42,6 +42,7 @@ endif()
 add_executable(registration_worker
     cpp/src/main.cpp
     cpp/src/worker_arguments.cpp
+    cpp/src/worker_commands.cpp
     cpp/src/worker_output.cpp
 )
 if(WIN32)
