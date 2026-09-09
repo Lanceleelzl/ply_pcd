@@ -10,9 +10,11 @@
 ## 进行中
 
 - 2026-09-08：在 `codex/refactor-registration-workbench` 分支重建项目结构。目标为 Vue 3 界面层、纯 TypeScript PlayCanvas 内核、类型化工作台状态、停靠式工具检查器与结果抽屉，并拆分 FastAPI 服务和 C++ Worker 外壳。重构期间保持 `main` 为已验证版本，现有 API、矩阵、ICP、历史档案和运行目录兼容。
-- 下一步：继续将 Gaussian、剖切和坐标查询迁入独立引擎模块，把工作台表单状态接入 Pinia，并拆分 FastAPI 路由／领域服务及 C++ Worker 命令执行层。
+- 下一步：继续将剖切场景对象和坐标查询迁入独立引擎模块，把工作台表单状态接入 Pinia，并拆分 FastAPI 路由／领域服务及 C++ Worker 命令执行层。
 
 ## 已完成
+
+- 2026-09-09：完成正式重构第二批引擎职责拆分。完整 Gaussian 的按需加载、中心点显隐、GPU 剖切同步、资源释放和界面状态迁入 `GaussianDisplayController`；联合／独立剖切模式、当前编辑模型、辅助体显隐、启用状态和摘要迁入 `ClippingStateController`，页面脚本不再保存重复的剖切状态。真实历史会话验证 A 坐标轴与 B 长方体可同时启用，编辑模型和帮助提示同步；A Gaussian 可在独立剖切下加载、同步并释放。Vue 类型检查、Web 生产构建和浏览器控制台检查通过。
 
 - 2026-09-09：完成正式重构第一批基础设施。Web 入口迁移到 Vue 3、Pinia 和真实 Vue Router，首页改为组件化双模型任务创建与历史面板；v2 工作台采用顶部应用栏、左侧模型流程、中央 PlayCanvas 视口、右侧配准检查器和底部结果抽屉，1440×900 工具栏无需横向滚动，1280×720 核心区域可达。PlayCanvas 已提取 `RegistrationApplication`、`InputController`、`ViewportCameraController`、`ToolManager` 和 `RegistrationJobController`，页面卸载会终止请求、SSE、观察器、Gizmo、控制器和应用实例。FastAPI 已提取配置与请求 Schema，并增加可直接刷新的 `/registration/{session_id}` 页面入口；旧 `/?session=...&api=v2` 地址继续兼容。Vue 类型检查、Web 生产构建、9 项服务测试、真实历史会话路由恢复及浏览器控制台检查通过。
 
@@ -229,8 +231,9 @@
 ## 最近验证
 
 ```text
-日期：2026-09-08
-方式：Windows CTest＋服务单元测试＋业务坐标 Worker HTTP 端到端＋PlayCanvas 分层显示测试＋Playwright 真实浏览器＋Vite
+日期：2026-09-09
+方式：Vue 类型检查＋Vite 生产构建＋Playwright 真实浏览器；既有 Windows CTest、服务单元测试和业务坐标回归基线沿用第一批验证结果
+重构第二批：真实历史会话中验证独立剖切 A 坐标轴／B 长方体组合、编辑模型切换、Gaussian 加载／剖切同步／资源释放，浏览器控制台 0 错误、0 警告。
 结果：Windows CTest 1／1、服务端 9／9、坐标数学及显示回归通过。已知对应关系合成点云在 A 非等比缩放及复合旋转下，移动 A／B 两轮业务 ICP RMS 分别为 7.41627e-7 m、5.04159e-7 m；业务矩阵接近单位矩阵，反算文件矩阵接近 `P_a`，正反向、四种下载和历史档案一致。
 真实数据：3777901 点 PLY／149317 点 PCD 在 `A Rx=-90°`、B 单位预设下完成业务 ICP，RMS 为 0.457745013019 m。浏览器输入 A 业务坐标 `(3,4,5)` 得到 B 业务坐标 `(3.031071691123,8.727348067593,-1.561734026339)`；原始／配准显示切换不改变坐标值，控制台无错误。
 所见即所得：同一真实会话和相机下，A 的 `Rx=0°` 与 `Rx=-90°` 初始截图明显不同；显示回归进一步断言修改 A 不改变 B。证据为 `output/playwright/business-initial-a-rx0.png`、`output/playwright/business-initial-a-rx-90.png` 及 `runtime/business-verification/{synthetic,real}-summary.json`。

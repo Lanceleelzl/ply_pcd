@@ -3,7 +3,6 @@ import { CoordinateQuery } from '../coordinate-query';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
 import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
-import { GaussianClipController } from '../gaussian-clipping';
 import { OriginPlaneController } from '../origin-planes';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
@@ -13,6 +12,8 @@ import { InputController } from '../engine/core/InputController';
 import { RegistrationApplication } from '../engine/core/Application';
 import { ToolManager } from '../engine/core/ToolManager';
 import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
+import { GaussianDisplayController } from '../engine/modules/GaussianDisplayController';
+import { ClippingStateController } from '../engine/modules/ClippingStateController';
 import type {
   Matrix4,
   ModelId,
@@ -28,7 +29,6 @@ const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value
 const formatBytes = (bytes?: number) => bytes
   ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
   : '大小未知';
-
 const transformEditor = (model: ModelId, value: TransformParameters): string => {
   const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} ${label} ${axis}" type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"><span>${axis}</span></label>`).join('')}</div>`;
   return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
@@ -166,24 +166,6 @@ export async function renderGenericRegistration(
     b: createClipBox('Model B Clipping Box', new pc.Color(1.0, 0.72, 0.08)),
   };
   const modelVisible: Record<ModelId, boolean> = { a: true, b: true };
-  const gaussianUrls: Record<ModelId, string | undefined> = {
-    a: session.gaussian_a_url,
-    b: session.gaussian_b_url,
-  };
-  const gaussianBytes: Record<ModelId, number | undefined> = {
-    a: session.inputs?.model_a_bytes,
-    b: session.inputs?.model_b_bytes,
-  };
-  const gaussianDisplays: Record<ModelId, {
-    entity: pc.Entity | null;
-    asset: pc.Asset | null;
-    clipController: GaussianClipController | null;
-    active: boolean;
-    loading: boolean;
-  }> = {
-    a: { entity: null, asset: null, clipController: null, active: false, loading: false },
-    b: { entity: null, asset: null, clipController: null, active: false, loading: false },
-  };
   const display = new RegistrationDisplay(application.root, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms);
   display.reset(effectiveMoving());
@@ -227,11 +209,7 @@ export async function renderGenericRegistration(
   rotate.mouseButtons[1] = rotate.mouseButtons[2] = false;
   clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
   clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
-  let clippingModeValue: 'off' | 'axis' | 'box' = 'off';
-  let clippingControlMode: 'joint' | 'independent' = 'joint';
-  let independentEditor: ModelId = 'a';
-  const independentModeValues: Record<ModelId, 'off' | 'axis' | 'box'> = { a: 'off', b: 'off' };
-  const independentHelperVisible: Record<ModelId, boolean> = { a: true, b: true };
+  const clippingState = new ClippingStateController();
   let clippingInteractionActive = false;
   let running = false;
   let queryActive = false;
@@ -308,9 +286,9 @@ export async function renderGenericRegistration(
   toolManager.register({
     id: 'clipping',
     activate: () => {
-      const activeMode = clippingControlMode === 'joint' ? clippingModeValue : independentModeValues[independentEditor];
-      const helperVisible = clippingControlMode === 'joint' ? clipHelperVisible.checked : independentHelperVisible[independentEditor];
-      const activeBox = clippingControlMode === 'joint' ? clipBox : independentClipBoxes[independentEditor];
+      const activeMode = clippingState.editedMode();
+      const helperVisible = clippingState.helperVisible();
+      const activeBox = clippingState.controlMode === 'joint' ? clipBox : independentClipBoxes[clippingState.editor];
       if (activeMode === 'box' && helperVisible) {
         clipTranslate.attach(activeBox);
         clipRotate.attach(activeBox);
@@ -351,106 +329,16 @@ export async function renderGenericRegistration(
     visibilityButtons[model].setAttribute('aria-pressed', 'true');
   });
 
-  const gaussianButtons: Record<ModelId, HTMLButtonElement> = {
-    a: root.querySelector<HTMLButtonElement>('#gaussian-model-a')!,
-    b: root.querySelector<HTMLButtonElement>('#gaussian-model-b')!,
-  };
-  const gaussianStatus = root.querySelector<HTMLElement>('#gaussian-status')!;
-  const refreshGaussianStatus = (error?: string) => {
-    const activeModels = (['a', 'b'] as ModelId[]).filter(model => gaussianDisplays[model].active);
-    if (error) {
-      gaussianStatus.hidden = false;
-      gaussianStatus.classList.add('error');
-      gaussianStatus.textContent = error;
-      return;
-    }
-    gaussianStatus.classList.remove('error');
-    if (activeModels.length === 0) {
-      gaussianStatus.hidden = true;
-      gaussianStatus.textContent = '';
-      return;
-    }
-    gaussianStatus.hidden = false;
-    const models = activeModels.map(model => model.toUpperCase()).join('、');
-    const clippingEnabled = clippingControlMode === 'joint' ? clippingModeValue !== 'off'
-      : independentModeValues.a !== 'off' || independentModeValues.b !== 'off';
-    gaussianStatus.textContent = !clippingEnabled
-      ? `模型 ${models} 正在显示完整 Gaussian；该模式仅用于视觉确认，不改变 ICP 输入。`
-      : `模型 ${models} 正在显示完整 Gaussian，并与当前剖切范围同步；剖切仅影响视觉预览。`;
-  };
-  const releaseGaussian = (model: ModelId) => {
-    const display = gaussianDisplays[model];
-    display.clipController = null;
-    display.entity?.destroy();
-    if (display.asset) {
-      display.asset.unload();
-      application.assets.remove(display.asset);
-    }
-    display.entity = null;
-    display.asset = null;
-    display.active = false;
-    entities[model].render!.enabled = true;
-    const button = gaussianButtons[model];
-    button.textContent = `${model.toUpperCase()}：高斯`;
-    button.classList.remove('active');
-    button.setAttribute('aria-pressed', 'false');
-    button.title = `加载模型 ${model.toUpperCase()} 原始 Gaussian（${formatBytes(gaussianBytes[model])}）`;
-  };
-  const toggleGaussian = async (model: ModelId) => {
-    const url = gaussianUrls[model];
-    const display = gaussianDisplays[model];
-    const button = gaussianButtons[model];
-    if (!url || display.loading) return;
-    display.loading = true;
-    button.disabled = true;
-    try {
-      if (display.active) {
-        releaseGaussian(model);
-        refreshGaussianStatus();
-        attach();
-        return;
-      }
-      button.textContent = `${model.toUpperCase()}：高斯`;
-      button.title = '正在加载原始 Gaussian…';
-      const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
-        url,
-        filename: `model-${model}-original-gaussian.ply`,
-      });
-      display.asset = asset;
-      application.assets.add(asset);
-      await new Promise<void>((resolve, reject) => {
-        asset.ready(() => resolve());
-        asset.once('error', (loadError: unknown) => reject(loadError));
-        application.assets.load(asset);
-      });
-      const gaussianEntity = new pc.Entity(`Model ${model.toUpperCase()} Original Gaussian`);
-      gaussianEntity.addComponent('gsplat', { asset });
-      const origin = model === 'a' ? infoA.origin : infoB.origin;
-      gaussianEntity.setLocalPosition(-origin[0], -origin[1], -origin[2]);
-      entities[model].addChild(gaussianEntity);
-      display.entity = gaussianEntity;
-      display.clipController = new GaussianClipController(gaussianEntity.gsplat!);
-      syncClipState(true);
-      display.active = true;
-      entities[model].render!.enabled = false;
-      button.textContent = `${model.toUpperCase()}：点云`;
-      button.classList.add('active');
-      button.setAttribute('aria-pressed', 'true');
-      button.title = `释放模型 ${model.toUpperCase()} Gaussian 并显示中心点`;
-      refreshGaussianStatus();
-      attach();
-    } catch (error) {
-      releaseGaussian(model);
-      refreshGaussianStatus(`模型 ${model.toUpperCase()} Gaussian 加载失败，已保留中心点：${String(error)}`);
-      console.error(error);
-    } finally {
-      display.loading = false;
-      button.disabled = false;
-    }
-  };
-  (['a', 'b'] as ModelId[]).forEach(model => {
-    gaussianButtons[model].setAttribute('aria-pressed', 'false');
-    gaussianButtons[model].addEventListener('click', () => void toggleGaussian(model));
+  const gaussianController = new GaussianDisplayController({
+    app: application,
+    root,
+    entities,
+    urls: { a: session.gaussian_a_url, b: session.gaussian_b_url },
+    bytes: { a: session.inputs?.model_a_bytes, b: session.inputs?.model_b_bytes },
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
+    clippingEnabled: () => clippingState.enabled(),
+    clipStateChanged: () => syncClipState(true),
+    presentationChanged: attach,
   });
 
   const inputs: Record<string, HTMLInputElement> = {};
@@ -542,8 +430,8 @@ export async function renderGenericRegistration(
   let clippingHandles: ClippingHandles | null = null;
   const syncClipState = (forceGaussian = false) => {
     (['a', 'b'] as ModelId[]).forEach(model => {
-      const independent = clippingControlMode === 'independent';
-      const mode = independent ? independentModes[model].value as 'off' | 'axis' | 'box' : clippingMode.value as 'off' | 'axis' | 'box';
+      const independent = clippingState.controlMode === 'independent';
+      const mode = clippingState.mode(model);
       const inputs = independent ? independentAxisInputs[model] : axisInputs;
       const min = independent ? independentClipMin[model] : clipMinState;
       const max = independent ? independentClipMax[model] : clipMaxState;
@@ -565,7 +453,7 @@ export async function renderGenericRegistration(
       const originSides = originPlanes.clipSides(model);
       const worldToOrigin = originPlanes.getWorldToOrigin(model);
       pointMaterials[model].setClipState(enabled, min, max, boxEnabled, boxMatrix, originSides, worldToOrigin);
-      gaussianDisplays[model].clipController?.setClipState(
+      gaussianController.setClipState(model,
         enabled, min, max, boxEnabled, boxMatrix, originSides, worldToOrigin, forceGaussian,
       );
     });
@@ -587,9 +475,9 @@ export async function renderGenericRegistration(
         const other = index ^ bit; if (index < other) application.drawLine(clipCornerWorld[index], clipCornerWorld[other], color, false);
       }
     };
-    if (clippingControlMode === 'joint' && clippingMode.value === 'box' && clipHelperVisible.checked) drawBoxEdges(clipBox, clipEdgeColor);
-    if (clippingControlMode === 'independent') for (const model of ['a', 'b'] as ModelId[]) {
-      if (independentModes[model].value === 'box' && independentHelperVisible[model]) drawBoxEdges(independentClipBoxes[model], independentClipEdgeColors[model]);
+    if (clippingState.controlMode === 'joint' && clippingState.jointMode === 'box' && clippingState.jointHelperVisible) drawBoxEdges(clipBox, clipEdgeColor);
+    if (clippingState.controlMode === 'independent') for (const model of ['a', 'b'] as ModelId[]) {
+      if (clippingState.independentModes[model] === 'box' && clippingState.independentHelpers[model]) drawBoxEdges(independentClipBoxes[model], independentClipEdgeColors[model]);
     }
     clippingHandles?.update();
   });
@@ -676,11 +564,11 @@ export async function renderGenericRegistration(
     });
   }
   clippingHandles = new ClippingHandles(
-    application, camera, canvas, () => clippingControlMode === 'joint' ? clipBox : independentClipBoxes[independentEditor], originalBounds.min, originalBounds.max,
-    () => queryActive && !clippingInteractionActive ? 'off' : clippingControlMode === 'joint' ? clippingModeValue : independentModeValues[independentEditor],
-    () => clippingControlMode === 'joint' ? getAxisClipState() : axisClipState(independentAxisInputs[independentEditor]),
-    (axis, side, value) => clippingControlMode === 'joint' ? setAxisBoundary(axis, side, value) : setAxisBoundaryIn(independentAxisInputs[independentEditor], axis, side, value),
-    () => clippingControlMode === 'joint' ? clipHelperVisible.checked : independentHelperVisible[independentEditor],
+    application, camera, canvas, () => clippingState.controlMode === 'joint' ? clipBox : independentClipBoxes[clippingState.editor], originalBounds.min, originalBounds.max,
+    () => queryActive && !clippingInteractionActive ? 'off' : clippingState.editedMode(),
+    () => clippingState.controlMode === 'joint' ? getAxisClipState() : axisClipState(independentAxisInputs[clippingState.editor]),
+    (axis, side, value) => clippingState.controlMode === 'joint' ? setAxisBoundary(axis, side, value) : setAxisBoundaryIn(independentAxisInputs[clippingState.editor], axis, side, value),
+    () => clippingState.helperVisible(),
     active => { gizmoTransforming = active; },
   );
 
@@ -708,32 +596,29 @@ export async function renderGenericRegistration(
   root.querySelector('#clip-fit-all')!.addEventListener('click', () => fitClipBox(['a', 'b']));
   (['a', 'b'] as ModelId[]).forEach(model => root.querySelector(`[data-independent-fit="${model}"]`)!.addEventListener('click', () => fitClipBox([model], independentClipBoxes[model])));
   const refreshClippingMode = () => {
-    clippingModeValue = clippingMode.value as typeof clippingModeValue;
+    clippingState.jointMode = clippingMode.value as typeof clippingState.jointMode;
+    clippingState.jointHelperVisible = clipHelperVisible.checked;
     (['a', 'b'] as ModelId[]).forEach(model => {
-      independentModeValues[model] = independentModes[model].value as 'off' | 'axis' | 'box';
-      independentHelperVisible[model] = independentHelperInputs[model].checked;
-      root.querySelector<HTMLElement>(`[data-independent-axis="${model}"]`)!.hidden = independentModeValues[model] !== 'axis';
-      root.querySelector<HTMLElement>(`[data-independent-box="${model}"]`)!.hidden = independentModeValues[model] !== 'box';
-      independentClipBoxes[model].enabled = clippingControlMode === 'independent'
-        && independentModeValues[model] === 'box' && independentHelperVisible[model];
+      clippingState.independentModes[model] = independentModes[model].value as typeof clippingState.independentModes[ModelId];
+      clippingState.independentHelpers[model] = independentHelperInputs[model].checked;
+      root.querySelector<HTMLElement>(`[data-independent-axis="${model}"]`)!.hidden = clippingState.independentModes[model] !== 'axis';
+      root.querySelector<HTMLElement>(`[data-independent-box="${model}"]`)!.hidden = clippingState.independentModes[model] !== 'box';
+      independentClipBoxes[model].enabled = clippingState.controlMode === 'independent'
+        && clippingState.independentModes[model] === 'box' && clippingState.independentHelpers[model];
     });
-    jointClipping.hidden = clippingControlMode !== 'joint'; independentClipping.hidden = clippingControlMode !== 'independent';
-    controlButtons.forEach(button => button.classList.toggle('active', button.dataset.clippingControl === clippingControlMode));
-    editorButtons.forEach(button => button.classList.toggle('active', button.dataset.clipEditor === independentEditor));
-    root.querySelectorAll<HTMLElement>('[data-independent-model]').forEach(fieldset => fieldset.classList.toggle('active-editor', fieldset.dataset.independentModel === independentEditor));
-    const clippingEnabled = clippingControlMode === 'joint'
-      ? clippingModeValue !== 'off'
-      : (['a', 'b'] as ModelId[]).some(model => independentModeValues[model] !== 'off');
+    jointClipping.hidden = clippingState.controlMode !== 'joint'; independentClipping.hidden = clippingState.controlMode !== 'independent';
+    controlButtons.forEach(button => button.classList.toggle('active', button.dataset.clippingControl === clippingState.controlMode));
+    editorButtons.forEach(button => button.classList.toggle('active', button.dataset.clipEditor === clippingState.editor));
+    root.querySelectorAll<HTMLElement>('[data-independent-model]').forEach(fieldset => fieldset.classList.toggle('active-editor', fieldset.dataset.independentModel === clippingState.editor));
+    const clippingEnabled = clippingState.enabled();
     clippingToggle.classList.toggle('active', clippingEnabled);
     clippingToggle.setAttribute('aria-pressed', String(clippingEnabled));
-    const summary = clippingControlMode === 'joint' ? `联合剖切：${clippingModeValue === 'off' ? '关闭' : clippingModeValue === 'axis' ? '坐标轴' : '长方体'}`
-      : `独立剖切：A ${independentModeValues.a === 'off' ? '关闭' : independentModeValues.a === 'axis' ? '坐标轴' : '长方体'}，B ${independentModeValues.b === 'off' ? '关闭' : independentModeValues.b === 'axis' ? '坐标轴' : '长方体'}`;
-    clippingToggle.title = `${summary}；点击打开或关闭剖切面板`;
-    refreshGaussianStatus();
-    const editedMode = clippingControlMode === 'joint' ? clippingModeValue : independentModeValues[independentEditor];
+    clippingToggle.title = `${clippingState.summary()}；点击打开或关闭剖切面板`;
+    gaussianController.refreshStatus();
+    const editedMode = clippingState.editedMode();
     clippingInteractionActive = !clippingPanel.hidden && editedMode !== 'off';
-    axisClipping.hidden = clippingModeValue !== 'axis'; boxClipping.hidden = clippingModeValue !== 'box';
-    clipBox.enabled = clippingControlMode === 'joint' && clippingModeValue === 'box' && clipHelperVisible.checked;
+    axisClipping.hidden = clippingState.jointMode !== 'axis'; boxClipping.hidden = clippingState.jointMode !== 'box';
+    clipBox.enabled = clippingState.controlMode === 'joint' && clippingState.jointMode === 'box' && clippingState.jointHelperVisible;
     attach();
     root.querySelector<HTMLElement>('#viewport-help')!.textContent = editedMode === 'box'
       ? '左键空白：旋转　中键：平移　滚轮：缩放　左键手柄：调整剖切长方体'
@@ -748,10 +633,10 @@ export async function renderGenericRegistration(
     clippingMode.value = 'off'; resetAxisInputs(); fitClipBox(['a', 'b']); refreshClippingMode();
   });
   controlButtons.forEach(button => button.addEventListener('click', () => {
-    clippingControlMode = button.dataset.clippingControl as 'joint' | 'independent'; refreshClippingMode();
+    clippingState.controlMode = button.dataset.clippingControl as typeof clippingState.controlMode; refreshClippingMode();
   }));
   editorButtons.forEach(button => button.addEventListener('click', () => {
-    independentEditor = button.dataset.clipEditor as ModelId; refreshClippingMode();
+    clippingState.editor = button.dataset.clipEditor as ModelId; refreshClippingMode();
   }));
   (['a', 'b'] as ModelId[]).forEach(model => {
     independentModes[model].addEventListener('change', refreshClippingMode);
@@ -870,8 +755,8 @@ export async function renderGenericRegistration(
     },
     visiblePoint: (model, point) => {
       if (!originPlanes.visiblePoint(model, point)) return false;
-      const independent = clippingControlMode === 'independent';
-      const mode = independent ? independentModeValues[model] : clippingModeValue;
+      const independent = clippingState.controlMode === 'independent';
+      const mode = clippingState.mode(model);
       if (mode === 'off' || (!independent && clippingScope.value !== 'both' && clippingScope.value !== model)) return true;
       if (mode === 'box') {
         const local = (independent ? independentWorldToBox[model] : worldToClipBox).transformPoint(point);
@@ -1017,7 +902,7 @@ export async function renderGenericRegistration(
     coordinateQuery?.destroy();
     originPlanes.destroy();
     clippingHandles?.destroy();
-    (['a', 'b'] as ModelId[]).forEach(releaseGaussian);
+    gaussianController.destroy();
     toolManager.destroy();
     translate.destroy();
     rotate.destroy();
