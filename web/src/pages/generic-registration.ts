@@ -1,3 +1,4 @@
+import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
 import { createApp, h, reactive, shallowReactive } from 'vue';
 import RegistrationResultPanel from '../views/workbench/RegistrationResultPanel.vue';
@@ -93,7 +94,7 @@ export async function renderGenericRegistration(
           <div class="pose-row"><span>旋转／°</span><div class="field-grid" id="rotation"></div></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
-        <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><label class="progress-option"><input id="show-registration-progress" type="checkbox">在三维场景中显示配准过程</label><div class="registration-actions"><button id="register" class="primary">执行 ICP 精配准</button><button id="cancel-registration" class="cancel-action" hidden>终止任务</button></div></section>
+        <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
         <section class="workflow-step"><h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
           <section id="result" class="result" hidden></section>
         </section>
@@ -652,9 +653,7 @@ export async function renderGenericRegistration(
     onChange: (key: string, value: string) => { icpValues[key] = value; },
   }) });
   icpApp.mount(root.querySelector<HTMLElement>('#icp-parameters')!);
-  const registerButton = root.querySelector<HTMLButtonElement>('#register')!;
-  const cancelButton = root.querySelector<HTMLButtonElement>('#cancel-registration')!;
-  const progressCheckbox = root.querySelector<HTMLInputElement>('#show-registration-progress')!;
+  const actionState = shallowReactive({ running: false, locked: false, cancelling: false, progress: false });
   const iterationProgress = root.querySelector<HTMLElement>('#iteration-progress')!;
   const progressToolbar = root.querySelector<HTMLElement>('.viewport-toolbar')!;
   const positionProgress = () => {
@@ -678,14 +677,10 @@ export async function renderGenericRegistration(
   const setRunning = (value: boolean) => {
     running = value;
     icpState.disabled = value || queryActive;
-    registerButton.disabled = value || queryActive;
-    registerButton.classList.toggle('running', value);
-    registerButton.textContent = value ? 'ICP 配准中' : '执行 ICP 精配准';
-    cancelButton.hidden = !value;
-    cancelButton.disabled = false;
-    cancelButton.textContent = '终止任务';
+    actionState.running = value;
+    actionState.cancelling = false;
     registrationControls.forEach(control => { control.disabled = value || queryActive; });
-    progressCheckbox.disabled = queryActive;
+    actionState.locked = queryActive;
     attach();
   };
   coordinateQuery = new CoordinateQuery({
@@ -698,9 +693,7 @@ export async function renderGenericRegistration(
       queryActive = active;
       icpState.disabled = active || running;
       registrationControls.forEach(control => { control.disabled = active || running; });
-      registerButton.disabled = active || running;
-      registerButton.title = active ? '请先返回配准编辑，再执行 ICP' : '';
-      progressCheckbox.disabled = active;
+      actionState.locked = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
       if (active) originPlanePanel.hidden = true;
       clippingToggle.disabled = false;
@@ -736,7 +729,7 @@ export async function renderGenericRegistration(
     },
     succeeded: (result, jobId) => {
       showResult(result, jobId);
-      if (progressCheckbox.checked) {
+      if (actionState.progress) {
         iterationProgress.hidden = false;
         iterationProgress.classList.add('completed');
         iterationProgress.textContent = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
@@ -751,34 +744,34 @@ export async function renderGenericRegistration(
         : '任务已终止，可调整参数或粗配准后重新执行。';
     },
   }, signal);
-  progressCheckbox.addEventListener('change', () => {
-    jobController.setProgressVisible(progressCheckbox.checked);
-    if (progressCheckbox.checked) {
+  const setProgress = (visible: boolean) => {
+    actionState.progress = visible;
+    jobController.setProgressVisible(actionState.progress);
+    if (actionState.progress) {
       iterationProgress.hidden = false;
       if (latestProgressIteration === 0) iterationProgress.textContent = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
       positionProgress();
     } else iterationProgress.hidden = true;
-  });
-  cancelButton.addEventListener('click', async () => {
-    cancelButton.disabled = true;
-    cancelButton.textContent = '正在终止…';
+  };
+  const cancelRegistration = async () => {
+    if (!running || actionState.cancelling) return;
+    actionState.cancelling = true;
     try {
       await jobController.cancel();
     } catch (error) {
       if (signal.aborted) return;
       log.textContent = `终止失败：${String(error)}`;
-      cancelButton.disabled = false;
-      cancelButton.textContent = '终止任务';
+      actionState.cancelling = false;
     }
-  });
-  registerButton.addEventListener('click', async () => {
+  };
+  const runRegistration = async () => {
     if (running || queryActive) return;
     coordinateQuery?.invalidate();
     latestProgressIteration = 0;
     iterationProgress.classList.remove('completed');
-    iterationProgress.hidden = !progressCheckbox.checked;
-    iterationProgress.textContent = progressCheckbox.checked ? '等待首轮 ICP 结果……' : '';
-    jobController.setProgressVisible(progressCheckbox.checked);
+    iterationProgress.hidden = !actionState.progress;
+    iterationProgress.textContent = actionState.progress ? '等待首轮 ICP 结果……' : '';
+    jobController.setProgressVisible(actionState.progress);
     try {
       const request: RegistrationRequest = {
         initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(),
@@ -793,7 +786,12 @@ export async function renderGenericRegistration(
       };
       await jobController.run(sessionId, request);
     } catch (error) { if (!signal.aborted) log.textContent = `失败：${String(error)}`; }
-  });
+  };
+  const actionsApp = createApp({ render: () => h(RegistrationActions, {
+    ...actionState, onRun: runRegistration, onCancel: cancelRegistration, onProgress: setProgress,
+  }) });
+  actionsApp.mount(root.querySelector<HTMLElement>('#registration-actions-host')!);
+
   const latest = session.registrations?.at(-1);
   if (latest?.status === 'succeeded' && latest.result_url) {
     const signature = display.signature();
@@ -824,6 +822,7 @@ export async function renderGenericRegistration(
     destroyed = true;
     resultApp.unmount();
     icpApp.unmount();
+    actionsApp.unmount();
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
