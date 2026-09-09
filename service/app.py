@@ -31,6 +31,16 @@ from service.schemas import (
     TransformParameters,
     WorkspaceRequest,
 )
+from service.storage import (
+    history_directory as _storage_history_directory,
+    history_path as _storage_history_path,
+    job_directory as _storage_job_directory,
+    read_status as _storage_read_status,
+    session_directory as _storage_session_directory,
+    status_path as _storage_status_path,
+    workspace_id as _storage_workspace_id,
+    write_status as _storage_write_status,
+)
 from service.transform_math import (
     business_transforms as _business_transforms,
     inverse_affine as _inverse_affine,
@@ -55,48 +65,31 @@ _running_processes: dict[str, asyncio.subprocess.Process] = {}
 
 
 def _job_directory(job_id: str) -> Path:
-    try:
-        parsed = uuid.UUID(job_id)
-    except ValueError as error:
-        raise HTTPException(status_code=404, detail="Job not found") from error
-    return RUNTIME_ROOT / "jobs" / str(parsed)
+    return _storage_job_directory(RUNTIME_ROOT, job_id)
 
 
 def _manual_session_directory(session_id: str) -> Path:
-    try:
-        parsed = uuid.UUID(session_id)
-    except ValueError as error:
-        raise HTTPException(status_code=404, detail="Manual registration session not found") from error
-    return RUNTIME_ROOT / "manual-sessions" / str(parsed)
+    return _storage_session_directory(RUNTIME_ROOT, session_id)
 
 
 def _workspace_id(value: str) -> str:
-    try:
-        return str(uuid.UUID(value))
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail="workspace_id must be a UUID") from error
+    return _storage_workspace_id(value)
 
 
 def _history_directory(workspace_id: str) -> Path:
-    return RUNTIME_ROOT / "history" / _workspace_id(workspace_id)
+    return _storage_history_directory(RUNTIME_ROOT, workspace_id)
 
 
 def _status_path(job_directory: Path) -> Path:
-    return job_directory / "status.json"
+    return _storage_status_path(job_directory)
 
 
 def _write_status(job_directory: Path, status: dict[str, Any]) -> None:
-    status["updated_at_unix"] = time.time()
-    temporary = job_directory / "status.json.tmp"
-    temporary.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(_status_path(job_directory))
+    _storage_write_status(job_directory, status)
 
 
 def _read_status(job_directory: Path) -> dict[str, Any]:
-    path = _status_path(job_directory)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Job not found")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _storage_read_status(job_directory)
 
 
 def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> bool:
@@ -107,7 +100,7 @@ def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> boo
 
 
 def _history_path(workspace_id: str, session_id: str) -> Path:
-    return _history_directory(workspace_id) / f"{uuid.UUID(session_id)}.json"
+    return _storage_history_path(RUNTIME_ROOT, workspace_id, session_id)
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
