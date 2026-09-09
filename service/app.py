@@ -23,13 +23,13 @@ from service.config import (
     WORKER_TIMEOUT_SECONDS,
 )
 from service.schemas import (
-    BusinessTransformsRequest,
     ManualRegistrationRequest,
     ModelRegistrationRequest,
     TransformParameters,
     WorkspaceRequest,
 )
 from service.routes.history import create_history_router
+from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
 from service.storage import (
     history_directory as _storage_history_directory,
@@ -211,6 +211,18 @@ def _history_view(record: dict[str, Any]) -> dict[str, Any]:
 
 
 app.include_router(create_history_router(_history_directory, _history_path, _history_view, _workspace_id))
+app.include_router(create_session_router(
+    _manual_session_directory,
+    _job_directory,
+    _read_status,
+    _write_status,
+    _v2_source_available,
+    _workspace_id,
+    _validate_transform,
+    _write_v2_history,
+    _release_v2_source_data,
+    SOURCE_RETENTION_HOURS,
+))
 
 
 def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
@@ -629,61 +641,6 @@ async def create_model_registration_session(
         "status_url": f"/api/v2/registration-sessions/{session_id}",
         "editor_url": status["editor_url"],
     }
-
-
-@app.put("/api/v2/registration-sessions/{session_id}/business-transforms")
-async def update_business_transforms(session_id: str, request: BusinessTransformsRequest) -> dict[str, Any]:
-    _validate_transform(request.model_a); _validate_transform(request.model_b)
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2":
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    active_job_id = status.get("active_job_id")
-    if active_job_id:
-        try:
-            if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
-                raise HTTPException(status_code=409, detail="Cannot change transforms during registration")
-        except HTTPException as error:
-            if error.status_code == 409: raise
-    status["business_transforms"] = {"a": request.model_a.model_dump(), "b": request.model_b.model_dump()}
-    status["active_job_id"] = None
-    _write_status(session_directory, status)
-    return {"business_transforms": status["business_transforms"]}
-
-
-@app.get("/api/v2/registration-sessions/{session_id}")
-async def get_model_registration_session(session_id: str) -> dict[str, Any]:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2":
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    status["source_available"] = _v2_source_available(session_directory, status)
-    status["restartable"] = status["source_available"]
-    return status
-
-
-@app.post("/api/v2/registration-sessions/{session_id}/retain")
-async def retain_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    if not _v2_source_available(session_directory, status):
-        raise HTTPException(status_code=409, detail="Source model files have been cleaned")
-    status["source_expires_at_unix"] = time.time() + SOURCE_RETENTION_HOURS * 3600
-    _write_status(session_directory, status)
-    record = _write_v2_history(session_directory, status)
-    return {"session_id": session_id, "source_expires_at_unix": status["source_expires_at_unix"], "history": record}
-
-
-@app.post("/api/v2/registration-sessions/{session_id}/release")
-async def release_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    _release_v2_source_data(session_directory, status)
-    return {"session_id": session_id, "source_available": False, "restartable": False}
 
 
 @app.post("/api/v2/registration-sessions/{session_id}/resume", status_code=202)
