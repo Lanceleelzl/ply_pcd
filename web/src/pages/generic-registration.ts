@@ -1,4 +1,5 @@
-import { createApp, h, shallowReactive } from 'vue';
+import IcpParameters from '../views/workbench/IcpParameters.vue';
+import { createApp, h, reactive, shallowReactive } from 'vue';
 import RegistrationResultPanel from '../views/workbench/RegistrationResultPanel.vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
@@ -92,12 +93,7 @@ export async function renderGenericRegistration(
           <div class="pose-row"><span>旋转／°</span><div class="field-grid" id="rotation"></div></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
-        <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div class="icp-grid">
-          <label>RMS 阈值<input id="min-rms" type="number" value="0.00001" step="0.000001"></label>
-          <label>采样上限<input id="sampling-limit" type="number" value="50000" step="1000"></label>
-          <label>重叠率<input id="overlap" type="number" value="1" min="0.01" max="1" step="0.01"></label>
-          <label>随机种子<input id="random-seed" type="number" value="42" min="0" step="1"></label>
-        </div><label class="progress-option"><input id="show-registration-progress" type="checkbox">在三维场景中显示配准过程</label><div class="registration-actions"><button id="register" class="primary">执行 ICP 精配准</button><button id="cancel-registration" class="cancel-action" hidden>终止任务</button></div></section>
+        <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><label class="progress-option"><input id="show-registration-progress" type="checkbox">在三维场景中显示配准过程</label><div class="registration-actions"><button id="register" class="primary">执行 ICP 精配准</button><button id="cancel-registration" class="cancel-action" hidden>终止任务</button></div></section>
         <section class="workflow-step"><h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
           <section id="result" class="result" hidden></section>
         </section>
@@ -647,6 +643,15 @@ export async function renderGenericRegistration(
   });
   const resultApp = createApp({ render: () => h(RegistrationResultPanel, resultState) });
   resultApp.mount(root.querySelector<HTMLElement>('#result')!);
+  const icpValues = reactive<Record<string, string>>({
+    min_rms_decrease: '0.00001', sampling_limit: '50000', overlap: '1', random_seed: '42',
+  });
+  const icpState = shallowReactive({ disabled: false });
+  const icpApp = createApp({ render: () => h(IcpParameters, {
+    values: icpValues, disabled: icpState.disabled,
+    onChange: (key: string, value: string) => { icpValues[key] = value; },
+  }) });
+  icpApp.mount(root.querySelector<HTMLElement>('#icp-parameters')!);
   const registerButton = root.querySelector<HTMLButtonElement>('#register')!;
   const cancelButton = root.querySelector<HTMLButtonElement>('#cancel-registration')!;
   const progressCheckbox = root.querySelector<HTMLInputElement>('#show-registration-progress')!;
@@ -668,12 +673,11 @@ export async function renderGenericRegistration(
   const registrationControls = [outputDirection, movingSelect, resetButton,
     ...Object.values(inputs),
     ...Array.from(root.querySelectorAll<HTMLInputElement>('[data-business-model]')),
-    root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!,
-    root.querySelector<HTMLInputElement>('#min-rms')!, root.querySelector<HTMLInputElement>('#sampling-limit')!,
-    root.querySelector<HTMLInputElement>('#overlap')!, root.querySelector<HTMLInputElement>('#random-seed')!];
+    root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
     running = value;
+    icpState.disabled = value || queryActive;
     registerButton.disabled = value || queryActive;
     registerButton.classList.toggle('running', value);
     registerButton.textContent = value ? 'ICP 配准中' : '执行 ICP 精配准';
@@ -692,6 +696,7 @@ export async function renderGenericRegistration(
     setOriginal: original => { display.setOriginal(original); cameraController.fit(); },
     lock: active => {
       queryActive = active;
+      icpState.disabled = active || running;
       registrationControls.forEach(control => { control.disabled = active || running; });
       registerButton.disabled = active || running;
       registerButton.title = active ? '请先返回配准编辑，再执行 ICP' : '';
@@ -779,10 +784,10 @@ export async function renderGenericRegistration(
         initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(),
         output_direction: outputDirection.value as RegistrationRequest['output_direction'],
         moving_model: movingSelect.value as RegistrationRequest['moving_model'],
-        min_rms_decrease: Number((root.querySelector('#min-rms') as HTMLInputElement).value),
-        sampling_limit: Number((root.querySelector('#sampling-limit') as HTMLInputElement).value),
-        overlap: Number((root.querySelector('#overlap') as HTMLInputElement).value),
-        random_seed: Number((root.querySelector('#random-seed') as HTMLInputElement).value),
+        min_rms_decrease: Number(icpValues.min_rms_decrease),
+        sampling_limit: Number(icpValues.sampling_limit),
+        overlap: Number(icpValues.overlap),
+        random_seed: Number(icpValues.random_seed),
         show_registration_progress: true,
         coordinate_space: 'business',
       };
@@ -804,8 +809,9 @@ export async function renderGenericRegistration(
         movingSelect.value = result.moving_model;
         outputDirection.value = latest.output_direction;
         refreshRoles(true);
-        const fields: Record<string, string> = { min_rms_decrease: 'min-rms', sampling_limit: 'sampling-limit', overlap: 'overlap', random_seed: 'random-seed' };
-        Object.entries(fields).forEach(([name, id]) => { if (latest.parameters[name] !== undefined) root.querySelector<HTMLInputElement>(`#${id}`)!.value = String(latest.parameters[name]); });
+        Object.keys(icpValues).forEach(name => {
+          if (latest.parameters[name] !== undefined) icpValues[name] = String(latest.parameters[name]);
+        });
         showResult(result, latest.job_id);
         root.querySelector<HTMLElement>('#job-status')!.textContent = '已恢复最近一次配准结果。';
         cameraController.fit();
@@ -817,6 +823,7 @@ export async function renderGenericRegistration(
     if (destroyed) return;
     destroyed = true;
     resultApp.unmount();
+    icpApp.unmount();
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
