@@ -1,3 +1,4 @@
+import BusinessTransformForm from '../views/workbench/BusinessTransformForm.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
@@ -35,10 +36,6 @@ const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value
 const formatBytes = (bytes?: number) => bytes
   ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
   : '大小未知';
-const transformEditor = (model: ModelId, value: TransformParameters): string => {
-  const row = (label: string, kind: keyof TransformParameters, values: XYZ) => `<div class="transform-row"><span>${label}</span>${['X','Y','Z'].map((axis,index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} ${label} ${axis}" type="number" step="any" data-business-model="${model}" data-business-kind="${kind}" data-index="${index}" value="${values[index]}"><span>${axis}</span></label>`).join('')}</div>`;
-  return `<div class="business-transform-model"><h3>模型 ${model.toUpperCase()}</h3>${row('平移／m','translation',value.translation)}${row('旋转／°','rotation_degrees',value.rotation_degrees)}${row('缩放','scale',value.scale)}<pre class="matrix" data-business-matrix="${model}">${matrixText(transformParametersMatrix(value))}</pre></div>`;
-};
 
 function boundsOf(a: PreviewCloud, b: PreviewCloud): { center: pc.Vec3; diagonal: number } {
   const min = new pc.Vec3(Math.min(a.min.x, b.min.x), Math.min(a.min.y, b.min.y), Math.min(a.min.z, b.min.z));
@@ -84,7 +81,7 @@ export async function renderGenericRegistration(
     <main class="editor integrated-editor"><div class="workspace integrated-workspace">
       <aside class="panel workflow-panel">
         <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
-        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><details class="business-transform-editor"><summary>业务场景矩阵</summary><p class="business-transform-note">文件坐标 → 业务坐标；应用后需重新配准。</p>${transformEditor('a',businessTransforms.a)}${transformEditor('b',businessTransforms.b)}<div class="business-transform-actions"><button id="save-business-transforms">应用场景矩阵</button><button id="reset-business-transforms">恢复默认</button></div><p id="business-transform-status" class="business-transform-note"></p></details><p id="gaussian-status" class="gaussian-status" hidden></p></section>
+        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><details class="business-transform-editor"><summary>业务场景矩阵</summary><p class="business-transform-note">文件坐标 → 业务坐标；应用后需重新配准。</p><div id="business-form-a"></div><div id="business-form-b"></div><div class="business-transform-actions"><button id="save-business-transforms">应用场景矩阵</button><button id="reset-business-transforms">恢复默认</button></div><p id="business-transform-status" class="business-transform-note"></p></details><p id="gaussian-status" class="gaussian-status" hidden></p></section>
         <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
           <div class="role-grid">
             <label class="parameter-label">转换方向<select id="output-direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
@@ -371,24 +368,25 @@ export async function renderGenericRegistration(
   outputDirection.addEventListener('change', () => { root.querySelector<HTMLElement>('#result')!.hidden = true; });
   refreshRoles();
 
+  const toDraft = (value: TransformParameters) => ({
+    translation: value.translation.map(String), rotation_degrees: value.rotation_degrees.map(String), scale: value.scale.map(String),
+  });
+  const businessDraft = reactive({ a: toDraft(businessTransforms.a), b: toDraft(businessTransforms.b) });
+  const businessState = shallowReactive({ disabled: false });
+  const businessApps = (['a', 'b'] as ModelId[]).map(model => {
+    const component = createApp({ render: () => h(BusinessTransformForm, {
+      model, values: businessDraft[model], disabled: businessState.disabled,
+      onChange: (kind: keyof TransformParameters, index: number, value: string) => { businessDraft[model][kind][index] = value; },
+    }) });
+    component.mount(root.querySelector<HTMLElement>(`#business-form-${model}`)!);
+    return component;
+  });
   const readBusinessTransform = (model: ModelId): TransformParameters => {
-    const values = (kind: keyof TransformParameters) => Array.from(root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`)).map(input => {
-      if (input.validity.badInput) throw new Error('参数必须是有效数字');
-      return input.value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(input.value);
-    }) as XYZ;
+    const values = (kind: keyof TransformParameters) => businessDraft[model][kind].map(value =>
+      value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(value)) as XYZ;
     return { translation: values('translation'), rotation_degrees: values('rotation_degrees'), scale: values('scale') };
   };
-  const renderBusinessMatrix = (model: ModelId) => {
-    const value = readBusinessTransform(model);
-    root.querySelector<HTMLElement>(`[data-business-matrix="${model}"]`)!.textContent = matrixText(transformParametersMatrix(value));
-  };
-  root.querySelectorAll<HTMLInputElement>('[data-business-model]').forEach(input => input.addEventListener('input', () => {
-    try { renderBusinessMatrix(input.dataset.businessModel as ModelId); } catch { /* apply reports invalid values */ }
-  }));
-  const setBusinessInputs = (model: ModelId, value: TransformParameters) => {
-    (['translation','rotation_degrees','scale'] as const).forEach(kind => root.querySelectorAll<HTMLInputElement>(`[data-business-model="${model}"][data-business-kind="${kind}"]`).forEach((input,index) => { input.value = String(value[kind][index]); }));
-    renderBusinessMatrix(model);
-  };
+  const setBusinessInputs = (model: ModelId, value: TransformParameters) => { businessDraft[model] = toDraft(value); };
   root.querySelector('#reset-business-transforms')!.addEventListener('click', () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); });
   root.querySelector('#save-business-transforms')!.addEventListener('click', async () => {
     const message = root.querySelector<HTMLElement>('#business-transform-status')!;
@@ -661,13 +659,13 @@ export async function renderGenericRegistration(
   progressResize.observe(iterationProgress);
   positionProgress();
   const registrationControls = [outputDirection, movingSelect, resetButton,
-    ...Array.from(root.querySelectorAll<HTMLInputElement>('[data-business-model]')),
     root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
     running = value;
     icpState.disabled = value || queryActive;
     poseState.disabled = value || queryActive;
+    businessState.disabled = value || queryActive;
     actionState.running = value;
     actionState.cancelling = false;
     registrationControls.forEach(control => { control.disabled = value || queryActive; });
@@ -684,6 +682,7 @@ export async function renderGenericRegistration(
       queryActive = active;
       icpState.disabled = active || running;
       poseState.disabled = active || running;
+      businessState.disabled = active || running;
       registrationControls.forEach(control => { control.disabled = active || running; });
       actionState.locked = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
@@ -816,6 +815,7 @@ export async function renderGenericRegistration(
     icpApp.unmount();
     actionsApp.unmount();
     poseApp.unmount();
+    businessApps.forEach(component => component.unmount());
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
