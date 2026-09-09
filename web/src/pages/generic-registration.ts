@@ -1,5 +1,5 @@
 import * as pc from 'playcanvas';
-import { CoordinateQuery } from '../coordinate-query';
+import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
 import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
