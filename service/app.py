@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
@@ -31,6 +31,7 @@ from service.schemas import (
     TransformParameters,
     WorkspaceRequest,
 )
+from service.routes.web import create_web_router
 from service.storage import (
     history_directory as _storage_history_directory,
     history_path as _storage_history_path,
@@ -101,6 +102,9 @@ def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> boo
 
 def _history_path(workspace_id: str, session_id: str) -> Path:
     return _storage_history_path(RUNTIME_ROOT, workspace_id, session_id)
+
+
+app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _read_status))
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
@@ -511,11 +515,6 @@ async def start_cleanup() -> None:
     task = asyncio.create_task(_cleanup_loop())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
 
 
 @app.post("/api/v1/manual-registration-sessions", status_code=202)
@@ -1166,30 +1165,3 @@ async def download_result_file(job_id: str, filename: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path, filename=filename)
-
-
-def _web_index() -> Response:
-    built_index = STATIC_ROOT / "index.html"
-    if built_index.is_file():
-        return FileResponse(built_index)
-    return HTMLResponse((Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
-
-
-@app.get("/")
-async def index() -> Response:
-    return _web_index()
-
-
-@app.get("/manual-registration/{session_id}")
-async def manual_registration_page(session_id: str) -> Response:
-    _manual_session_directory(session_id)
-    return _web_index()
-
-
-@app.get("/registration/{session_id}")
-async def model_registration_page(session_id: str) -> Response:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2":
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    return _web_index()

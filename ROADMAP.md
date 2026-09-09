@@ -10,9 +10,11 @@
 ## 进行中
 
 - 2026-09-08：在 `codex/refactor-registration-workbench` 分支重建项目结构。目标为 Vue 3 界面层、纯 TypeScript PlayCanvas 内核、类型化工作台状态、停靠式工具检查器与结果抽屉，并拆分 FastAPI 服务和 C++ Worker 外壳。重构期间保持 `main` 为已验证版本，现有 API、矩阵、ICP、历史档案和运行目录兼容。
-- 下一步：拆分 FastAPI 路由与任务执行服务，并分离 C++ Worker 各命令执行与结果输出层；随后将工作台剩余表单和结果展示逐步迁入 Vue 组件。
+- 下一步：拆分 FastAPI API 路由与任务执行服务，并分离 C++ Worker 各命令执行与结果输出层；随后将工作台剩余表单和结果展示逐步迁入 Vue 组件。
 
 ## 已完成
+
+- 2026-09-09：FastAPI 健康检查、首页、手工配准页和 v2 会话 SPA 页面迁入 `service/routes/web.py`，通过 Router 工厂注入会话目录及状态读取依赖，应用入口只负责装配。服务测试 9／9 和 Python 编译检查通过；真实 HTTP 验证 `/health`、首页、有效 v2 会话返回 200，无效会话返回 404。
 
 - 2026-09-09：FastAPI 的 Job／会话／历史路径解析、工作区 UUID 校验及状态文件原子读写迁入 `service/storage.py`。`service.app` 通过当前 `RUNTIME_ROOT` 调用存储模块并保留原包装函数，因此临时运行目录注入、既有测试猴子补丁和 API 行为不变；Python 编译检查及服务端测试 9／9 通过。
 
@@ -252,6 +254,7 @@ C++ 外壳：Windows Release Worker 重建完成，CTest 1／1（27.30 秒）通
 剖切场景：真实会话启用联合坐标轴剖切与 X 最小边界后加载 A Gaussian，状态显示与当前剖切同步；释放资源后恢复中心点，控制台 0 错误、0 警告。
 坐标查询：真实历史结果输入 A `(3,4,5)` 后得到 B `(1.527641002114,-3.851035931648,3.894179693202)`；编辑点和显示状态切换不改变坐标对，关闭查询并离开工作台后控制台 0 错误、0 警告。
 存储拆分：`python -m compileall -q service` 通过，服务端单元测试 9／9 通过，测试临时 `RUNTIME_ROOT` 注入保持有效。
+Web 路由：`/health`、`/`、真实 `/registration/{session_id}` 返回 200，随机不存在会话返回 404；服务端单元测试 9／9 通过。
 结果：Windows CTest 1／1、服务端 9／9、坐标数学及显示回归通过。已知对应关系合成点云在 A 非等比缩放及复合旋转下，移动 A／B 两轮业务 ICP RMS 分别为 7.41627e-7 m、5.04159e-7 m；业务矩阵接近单位矩阵，反算文件矩阵接近 `P_a`，正反向、四种下载和历史档案一致。
 真实数据：3777901 点 PLY／149317 点 PCD 在 `A Rx=-90°`、B 单位预设下完成业务 ICP，RMS 为 0.457745013019 m。浏览器输入 A 业务坐标 `(3,4,5)` 得到 B 业务坐标 `(3.031071691123,8.727348067593,-1.561734026339)`；原始／配准显示切换不改变坐标值，控制台无错误。
 所见即所得：同一真实会话和相机下，A 的 `Rx=0°` 与 `Rx=-90°` 初始截图明显不同；显示回归进一步断言修改 A 不改变 B。证据为 `output/playwright/business-initial-a-rx0.png`、`output/playwright/business-initial-a-rx-90.png` 及 `runtime/business-verification/{synthetic,real}-summary.json`。
