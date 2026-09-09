@@ -31,6 +31,7 @@ from service.schemas import (
 from service.routes.history import create_history_router
 from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
+from service.preview_tasks import run_preview_task
 from service.storage import (
     history_directory as _storage_history_directory,
     history_path as _storage_history_path,
@@ -360,86 +361,17 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
 
 
 async def _run_preview(session_id: str, command: list[str]) -> None:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    async with _job_semaphore:
-        status["status"] = "preparing"
-        status["started_at_unix"] = time.time()
-        _write_status(session_directory, status)
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=WORKER_TIMEOUT_SECONDS)
-            (session_directory / "worker.stdout.log").write_bytes(stdout)
-            (session_directory / "worker.stderr.log").write_bytes(stderr)
-            if process.returncode != 0:
-                message = stderr.decode("utf-8", errors="replace").strip()
-                status.update(status="failed", error_code="preview_worker_failed", error=message)
-            else:
-                metadata_path = session_directory / "preview" / "metadata.json"
-                if not metadata_path.is_file():
-                    status.update(status="failed", error_code="missing_preview", error="Worker produced no preview")
-                else:
-                    status.update(
-                        status="ready",
-                        metadata=json.loads(metadata_path.read_text(encoding="utf-8")),
-                        ply_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/ply",
-                        pcd_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/pcd",
-                        reference_preview_url=f"/api/v1/manual-registration-sessions/{session_id}/preview/reference",
-                    )
-                    if status["metadata"].get("gaussian_available"):
-                        status["gaussian_preview_url"] = f"/api/v1/manual-registration-sessions/{session_id}/preview/gaussian"
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            status.update(status="failed", error_code="preview_timeout", error="Preview generation timed out")
-        except Exception as error:
-            status.update(status="failed", error_code="preview_start_failed", error=str(error))
-        status["finished_at_unix"] = time.time()
-        _write_status(session_directory, status)
+    await run_preview_task(
+        session_id, command, "manual", _manual_session_directory, _read_status, _write_status,
+        _job_semaphore, WORKER_TIMEOUT_SECONDS,
+    )
 
 
 async def _run_model_preview(session_id: str, command: list[str]) -> None:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    async with _job_semaphore:
-        status["status"] = "preparing"
-        status["started_at_unix"] = time.time()
-        _write_status(session_directory, status)
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=WORKER_TIMEOUT_SECONDS)
-            (session_directory / "worker.stdout.log").write_bytes(stdout)
-            (session_directory / "worker.stderr.log").write_bytes(stderr)
-            if process.returncode != 0:
-                message = stderr.decode("utf-8", errors="replace").strip()
-                status.update(status="failed", error_code="preview_worker_failed", error=message)
-            else:
-                metadata_path = session_directory / "preview" / "metadata.json"
-                if not metadata_path.is_file():
-                    status.update(status="failed", error_code="missing_preview", error="Worker produced no preview")
-                else:
-                    status.update(
-                        status="ready",
-                        metadata=json.loads(metadata_path.read_text(encoding="utf-8")),
-                        model_a_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-a",
-                        model_b_preview_url=f"/api/v2/registration-sessions/{session_id}/preview/model-b",
-                    )
-                    if status["metadata"].get("gaussian_a_available"):
-                        status["gaussian_a_url"] = f"/api/v2/registration-sessions/{session_id}/preview/gaussian-a"
-                    if status["metadata"].get("gaussian_b_available"):
-                        status["gaussian_b_url"] = f"/api/v2/registration-sessions/{session_id}/preview/gaussian-b"
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            status.update(status="failed", error_code="preview_timeout", error="Preview generation timed out")
-        except Exception as error:
-            status.update(status="failed", error_code="preview_start_failed", error=str(error))
-        status["finished_at_unix"] = time.time()
-        _write_status(session_directory, status)
+    await run_preview_task(
+        session_id, command, "models", _manual_session_directory, _read_status, _write_status,
+        _job_semaphore, WORKER_TIMEOUT_SECONDS,
+    )
 
 
 def _cleanup_completed_jobs() -> None:

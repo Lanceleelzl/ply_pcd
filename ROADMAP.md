@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-09：v1 手工预览与 v2 双模型预览的子进程执行、超时和结果状态处理合并到 `service/preview_tasks.py`，应用层保留 `_run_preview`／`_run_model_preview` 兼容包装并动态注入目录、状态和并发依赖。`service/app.py` 由 1003 行降至 935 行；Python 编译检查、服务测试 9／9，以及两类模拟 Worker 成功路径和 URL 映射检查通过。
+
 - 2026-09-09：v2 会话状态、业务矩阵更新、源文件保留和释放 API 迁入 `service/routes/sessions.py`，共用会话归属校验并通过 Router 工厂注入存储、校验、历史与清理依赖；后台预览恢复和注册启动暂留应用层，等待任务服务拆分。`service/app.py` 降至 1003 行；Python 编译检查、服务测试 9／9，以及状态读取、矩阵更新、保留期限和释放路由注册检查通过。
 
 - 2026-09-09：C++ Worker 的注册、通用模型注册、两类预览、点云检查和矩阵求逆执行逻辑统一迁入 `worker_commands.hpp／cpp`；`main.cpp` 由 520 行降至 58 行，只保留命令分派与统一异常退出。Windows Release Worker 已重建，CTest 1／1 通过；CLI 黄金矩阵求逆、真实 PCD `149317` 点检查及空参数退出码 `10` 冒烟通过。
