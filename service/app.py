@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import math
 import shutil
 import time
 import uuid
@@ -31,6 +30,19 @@ from service.schemas import (
     ModelRegistrationRequest,
     TransformParameters,
     WorkspaceRequest,
+)
+from service.transform_math import (
+    business_transforms as _business_transforms,
+    inverse_affine as _inverse_affine,
+    matmul as _matmul,
+    transform_matrix as _transform_matrix,
+)
+from service.validation import (
+    model_extension as _model_extension,
+    reference_extension as _reference_extension,
+    validate_initial_matrix as _validate_initial_matrix,
+    validate_registration_parameters as _validate_registration_parameters,
+    validate_transform as _validate_transform,
 )
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
@@ -78,45 +90,6 @@ def _write_status(job_directory: Path, status: dict[str, Any]) -> None:
     temporary = job_directory / "status.json.tmp"
     temporary.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(_status_path(job_directory))
-
-
-def _validate_transform(value: TransformParameters) -> None:
-    for name, values in (("translation", value.translation), ("rotation_degrees", value.rotation_degrees), ("scale", value.scale)):
-        if len(values) != 3 or not all(math.isfinite(number) for number in values):
-            raise HTTPException(status_code=400, detail=f"{name} must contain three finite numbers")
-    if any(number <= 0 for number in value.scale):
-        raise HTTPException(status_code=400, detail="scale values must be greater than zero")
-
-
-def _transform_matrix(value: dict[str, Any]) -> list[list[float]]:
-    tx, ty, tz = value["translation"]
-    rx, ry, rz = (math.radians(number) for number in value["rotation_degrees"])
-    sx, sy, sz = value["scale"]
-    cx, qx, cy, qy, cz, qz = math.cos(rx), math.sin(rx), math.cos(ry), math.sin(ry), math.cos(rz), math.sin(rz)
-    return [[cz*cy*sx, (cz*qy*qx-qz*cx)*sy, (cz*qy*cx+qz*qx)*sz, tx],
-            [qz*cy*sx, (qz*qy*qx+cz*cx)*sy, (qz*qy*cx-cz*qx)*sz, ty],
-            [-qy*sx, cy*qx*sy, cy*cx*sz, tz], [0.0, 0.0, 0.0, 1.0]]
-
-
-def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
-    return [[sum(a[row][k] * b[k][column] for k in range(4)) for column in range(4)] for row in range(4)]
-
-
-def _inverse_affine(matrix: list[list[float]]) -> list[list[float]]:
-    a,b,c,_ = matrix[0]; d,e,f,_ = matrix[1]; g,h,i,_ = matrix[2]
-    determinant = a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g)
-    if abs(determinant) < 1e-15:
-        raise ValueError("Business transform is not invertible")
-    linear = [[(e*i-f*h)/determinant, (c*h-b*i)/determinant, (b*f-c*e)/determinant],
-              [(f*g-d*i)/determinant, (a*i-c*g)/determinant, (c*d-a*f)/determinant],
-              [(d*h-e*g)/determinant, (b*g-a*h)/determinant, (a*e-b*d)/determinant]]
-    translation = [matrix[row][3] for row in range(3)]
-    return [[*row, -sum(row[k]*translation[k] for k in range(3))] for row in linear] + [[0.0,0.0,0.0,1.0]]
-
-
-def _business_transforms(status: dict[str, Any]) -> dict[str, Any]:
-    default = {"translation": [0.0]*3, "rotation_degrees": [0.0]*3, "scale": [1.0]*3}
-    return status.get("business_transforms", {"a": default, "b": default})
 
 
 def _read_status(job_directory: Path) -> dict[str, Any]:
@@ -288,20 +261,6 @@ async def _save_upload_with_sha256(upload: UploadFile, destination: Path) -> tup
             total += len(chunk)
     await upload.close()
     return total, digest.hexdigest()
-
-
-def _reference_extension(upload: UploadFile) -> str:
-    suffix = Path(upload.filename or "").suffix.lower()
-    if suffix not in {".pcd", ".las", ".laz"}:
-        raise HTTPException(status_code=400, detail="reference cloud must use .pcd, .las, or .laz extension")
-    return suffix
-
-
-def _model_extension(upload: UploadFile) -> str:
-    suffix = Path(upload.filename or "").suffix.lower()
-    if suffix not in {".ply", ".pcd", ".las", ".laz"}:
-        raise HTTPException(status_code=400, detail="model must use .ply, .pcd, .las, or .laz extension")
-    return suffix
 
 
 async def _run_worker(job_id: str, command: list[str]) -> None:
@@ -564,48 +523,6 @@ async def start_cleanup() -> None:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-def _validate_registration_parameters(
-    min_rms_decrease: float, sampling_limit: int, overlap: float, random_seed: int,
-    precision_mode: str = "recommended",
-) -> None:
-    if not 1.0e-8 <= min_rms_decrease <= 1.0e-3:
-        raise HTTPException(status_code=400, detail="min_rms_decrease must be between 1e-8 and 1e-3")
-    if not 10000 <= sampling_limit <= 500000:
-        raise HTTPException(status_code=400, detail="sampling_limit must be between 10000 and 500000")
-    if not 0.5 <= overlap <= 1.0:
-        raise HTTPException(status_code=400, detail="overlap must be between 0.5 and 1.0")
-    if not 0 <= random_seed <= 4294967295:
-        raise HTTPException(status_code=400, detail="Invalid registration parameters")
-    if precision_mode not in {"recommended", "high_accuracy"}:
-        raise HTTPException(status_code=400, detail="precision_mode must be recommended or high_accuracy")
-
-
-def _validate_initial_matrix(matrix: list[list[float]], field_name: str = "initial_pcd_to_ply") -> None:
-    if len(matrix) != 4 or any(len(row) != 4 for row in matrix):
-        raise HTTPException(status_code=400, detail=f"{field_name} must be a 4x4 matrix")
-    if any(not isinstance(value, (int, float)) or not math.isfinite(value) for row in matrix for value in row):
-        raise HTTPException(status_code=400, detail=f"{field_name} must contain only numbers")
-    tolerance = 1.0e-5
-    if any(abs(matrix[3][column] - (1.0 if column == 3 else 0.0)) > tolerance for column in range(4)):
-        raise HTTPException(status_code=400, detail=f"{field_name} must have last row [0, 0, 0, 1]")
-    for column in range(3):
-        length_squared = sum(matrix[row][column] ** 2 for row in range(3))
-        if abs(length_squared - 1.0) > tolerance:
-            raise HTTPException(status_code=400, detail=f"{field_name} rotation must not contain scale")
-    for left in range(3):
-        for right in range(left + 1, 3):
-            dot = sum(matrix[row][left] * matrix[row][right] for row in range(3))
-            if abs(dot) > tolerance:
-                raise HTTPException(status_code=400, detail=f"{field_name} rotation must be orthogonal")
-    determinant = (
-        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
-        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
-        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
-    )
-    if abs(determinant - 1.0) > tolerance:
-        raise HTTPException(status_code=400, detail=f"{field_name} rotation determinant must be +1")
 
 
 @app.post("/api/v1/manual-registration-sessions", status_code=202)
