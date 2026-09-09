@@ -1,3 +1,5 @@
+import { createApp, h, shallowReactive } from 'vue';
+import RegistrationResultPanel from '../views/workbench/RegistrationResultPanel.vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
@@ -97,11 +99,7 @@ export async function renderGenericRegistration(
           <label>随机种子<input id="random-seed" type="number" value="42" min="0" step="1"></label>
         </div><label class="progress-option"><input id="show-registration-progress" type="checkbox">在三维场景中显示配准过程</label><div class="registration-actions"><button id="register" class="primary">执行 ICP 精配准</button><button id="cancel-registration" class="cancel-action" hidden>终止任务</button></div></section>
         <section class="workflow-step"><h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
-          <section id="result" class="result" hidden>
-            <div class="result-matrix-group"><h3 id="result-title"></h3><p id="result-formula" class="result-formula"></p><pre id="result-matrix" class="matrix"></pre><button id="copy-result" class="full-width">复制业务场景转换矩阵</button><details><summary>查看反向业务场景矩阵</summary><pre id="inverse-matrix" class="matrix"></pre><button id="copy-inverse" class="full-width">复制反向业务场景矩阵</button></details></div>
-            <div id="file-result" class="result-matrix-group"><h3 id="file-result-title"></h3><p id="file-result-formula" class="result-formula"></p><pre id="file-result-matrix" class="matrix"></pre><button id="copy-file-result" class="full-width">复制原始模型坐标转换矩阵</button><details><summary>查看反向原始模型矩阵</summary><pre id="file-inverse-matrix" class="matrix"></pre><button id="copy-file-inverse" class="full-width">复制反向原始模型矩阵</button></details></div>
-            <div id="result-metrics"></div>
-          </section>
+          <section id="result" class="result" hidden></section>
         </section>
       </aside>
       <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button><button id="origin-planes-toggle" aria-pressed="false">原点平面</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
@@ -644,28 +642,11 @@ export async function renderGenericRegistration(
     dragBlocked: () => gizmoTransforming || Boolean(coordinateQuery?.dragging),
   });
 
-  let finalText = '';
-  let inverseText = '';
-  let fileFinalText = '';
-  let fileInverseText = '';
-  const copyMatrix = async (button: HTMLButtonElement, text: string, defaultLabel: string) => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      button.textContent = '已复制';
-    } catch {
-      button.textContent = '复制失败';
-    }
-    window.setTimeout(() => { button.textContent = defaultLabel; }, 1500);
-  };
-  const copyResultButton = root.querySelector<HTMLButtonElement>('#copy-result')!;
-  const copyInverseButton = root.querySelector<HTMLButtonElement>('#copy-inverse')!;
-  const copyFileResultButton = root.querySelector<HTMLButtonElement>('#copy-file-result')!;
-  const copyFileInverseButton = root.querySelector<HTMLButtonElement>('#copy-file-inverse')!;
-  copyResultButton.addEventListener('click', () => copyMatrix(copyResultButton, finalText, '复制业务场景转换矩阵'));
-  copyInverseButton.addEventListener('click', () => copyMatrix(copyInverseButton, inverseText, '复制反向业务场景矩阵'));
-  copyFileResultButton.addEventListener('click', () => copyMatrix(copyFileResultButton, fileFinalText, '复制原始模型坐标转换矩阵'));
-  copyFileInverseButton.addEventListener('click', () => copyMatrix(copyFileInverseButton, fileInverseText, '复制反向原始模型矩阵'));
+  const resultState = shallowReactive<{ result: RegistrationResult | null; direction: string }>({
+    result: null, direction: 'a_to_b',
+  });
+  const resultApp = createApp({ render: () => h(RegistrationResultPanel, resultState) });
+  resultApp.mount(root.querySelector<HTMLElement>('#result')!);
   const registerButton = root.querySelector<HTMLButtonElement>('#register')!;
   const cancelButton = root.querySelector<HTMLButtonElement>('#cancel-registration')!;
   const progressCheckbox = root.querySelector<HTMLInputElement>('#show-registration-progress')!;
@@ -735,27 +716,9 @@ export async function renderGenericRegistration(
     display.setMovingLocalToFixedLocal(result.moving_local_to_fixed_local);
     coordinateQuery?.setResult(result, jobId);
     resultSignature = display.signature();
-    const aToB = outputDirection.value === 'a_to_b';
-    const source = aToB ? 'A' : 'B'; const target = aToB ? 'B' : 'A';
-    const sourceKey = source.toLowerCase(); const targetKey = target.toLowerCase();
-    finalText = matrixText(aToB ? result.a_to_b : result.b_to_a);
-    inverseText = matrixText(aToB ? result.b_to_a : result.a_to_b);
-    const fileMatrix = aToB ? result.file_a_to_b : result.file_b_to_a;
-    const fileInverse = aToB ? result.file_b_to_a : result.file_a_to_b;
-    fileFinalText = fileMatrix ? matrixText(fileMatrix) : '';
-    fileInverseText = fileInverse ? matrixText(fileInverse) : '';
+    resultState.direction = outputDirection.value;
+    resultState.result = result;
     root.querySelector<HTMLElement>('#result')!.hidden = false;
-    root.querySelector<HTMLElement>('#result-title')!.textContent = `业务场景转换矩阵：模型 ${source} → 模型 ${target}（含预设）`;
-    root.querySelector<HTMLElement>('#result-formula')!.textContent = `p_business_${targetKey} = M_business_${sourceKey}_to_${targetKey} × p_business_${sourceKey}`;
-    root.querySelector<HTMLElement>('#result-matrix')!.textContent = finalText;
-    root.querySelector<HTMLElement>('#inverse-matrix')!.textContent = inverseText;
-    const fileResult = root.querySelector<HTMLElement>('#file-result')!;
-    fileResult.hidden = !fileMatrix || !fileInverse;
-    root.querySelector<HTMLElement>('#file-result-title')!.textContent = `原始模型坐标转换矩阵：模型 ${source} → 模型 ${target}`;
-    root.querySelector<HTMLElement>('#file-result-formula')!.textContent = `p_file_${targetKey} = M_file_${sourceKey}_to_${targetKey} × p_file_${sourceKey}`;
-    root.querySelector<HTMLElement>('#file-result-matrix')!.textContent = fileFinalText;
-    root.querySelector<HTMLElement>('#file-inverse-matrix')!.textContent = fileInverseText;
-    root.querySelector<HTMLElement>('#result-metrics')!.textContent = `RMS：${result.metrics.final_rms.toFixed(6)} m　点数：${result.metrics.final_point_count}　耗时：${result.metrics.elapsed_seconds.toFixed(2)} s`;
   };
   const log = root.querySelector<HTMLElement>('#job-status')!;
   const jobController = new RegistrationJobController({
@@ -853,6 +816,7 @@ export async function renderGenericRegistration(
   return () => {
     if (destroyed) return;
     destroyed = true;
+    resultApp.unmount();
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
