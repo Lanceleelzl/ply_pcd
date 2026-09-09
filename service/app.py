@@ -12,6 +12,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from service.background_tasks import BackgroundTasks
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
     MAX_CONCURRENT_JOBS,
@@ -64,7 +65,7 @@ STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 _manual_submission_lock = asyncio.Lock()
-_background_tasks: set[asyncio.Task[None]] = set()
+_background_tasks = BackgroundTasks()
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
 
 
@@ -352,9 +353,7 @@ async def _cleanup_loop() -> None:
 
 @app.on_event("startup")
 async def start_cleanup() -> None:
-    task = asyncio.create_task(_cleanup_loop())
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_cleanup_loop())
 
 
 @app.post("/api/v1/manual-registration-sessions", status_code=202)
@@ -399,9 +398,7 @@ async def create_manual_registration_session(
         "--ply-limit", "300000",
         "--pcd-limit", "300000",
     ]
-    task = asyncio.create_task(_run_preview(session_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_preview(session_id, command))
     return {
         "session_id": session_id,
         "status": "queued",
@@ -480,9 +477,7 @@ async def create_model_registration_session(
         "--output-dir", str(preview_directory),
         "--model-a-limit", "300000", "--model-b-limit", "300000",
     ]
-    task = asyncio.create_task(_run_model_preview(session_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_model_preview(session_id, command))
     return {
         "session_id": session_id, "workspace_id": workspace_id, "status": "queued",
         "status_url": f"/api/v2/registration-sessions/{session_id}",
@@ -516,9 +511,7 @@ async def resume_model_registration_session(session_id: str, request: WorkspaceR
         "--output-dir", str(preview_directory),
         "--model-a-limit", "300000", "--model-b-limit", "300000",
     ]
-    task = asyncio.create_task(_run_model_preview(session_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_model_preview(session_id, command))
     return {"session_id": session_id, "status": "queued", "editor_url": status["editor_url"]}
 
 
@@ -633,9 +626,7 @@ async def register_model_session(session_id: str, request: ModelRegistrationRequ
                                       for row in _transform_matrix(transforms[model])) + "\n", encoding="utf-8")
             command.extend([f"--model-{model}-to-business", str(path)])
     command.append("--progress-jsonl")
-    task = asyncio.create_task(_run_worker(job_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_worker(job_id, command))
     return {
         "job_id": job_id,
         "status": "queued",
@@ -741,9 +732,7 @@ async def register_manual_session(
         "--random-seed", str(request.random_seed),
         "--precision-mode", request.precision_mode,
     ]
-    task = asyncio.create_task(_run_worker(job_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_worker(job_id, command))
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/registrations/{job_id}"}
 
 
@@ -798,7 +787,5 @@ async def create_registration(
         "--random-seed", str(random_seed),
         "--precision-mode", precision_mode,
     ]
-    task = asyncio.create_task(_run_worker(job_id, command))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _background_tasks.start(_run_worker(job_id, command))
     return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/registrations/{job_id}"}
