@@ -14,6 +14,7 @@ import { ToolManager } from '../engine/core/ToolManager';
 import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
 import { GaussianDisplayController } from '../engine/modules/GaussianDisplayController';
 import { ClippingStateController } from '../engine/modules/ClippingStateController';
+import { ClippingSceneController } from '../engine/modules/ClippingSceneController';
 import type {
   Matrix4,
   ModelId,
@@ -211,6 +212,7 @@ export async function renderGenericRegistration(
   clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
   clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
   const clippingState = new ClippingStateController();
+  let clippingScene: ClippingSceneController | null = null;
   let clippingInteractionActive = false;
   let running = false;
   let queryActive = false;
@@ -338,7 +340,7 @@ export async function renderGenericRegistration(
     bytes: { a: session.inputs?.model_a_bytes, b: session.inputs?.model_b_bytes },
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
     clippingEnabled: () => clippingState.enabled(),
-    clipStateChanged: () => syncClipState(true),
+    clipStateChanged: () => clippingScene?.sync(true),
     presentationChanged: attach,
   });
 
@@ -418,47 +420,7 @@ export async function renderGenericRegistration(
     } catch (error) { if (!signal.aborted) message.textContent = `应用失败：${String(error)}`; }
   });
 
-  const clipMinState = new pc.Vec3(); const clipMaxState = new pc.Vec3(); const worldToClipBox = new pc.Mat4();
-  const independentClipMin = { a: new pc.Vec3(), b: new pc.Vec3() };
-  const independentClipMax = { a: new pc.Vec3(), b: new pc.Vec3() };
-  const independentWorldToBox = { a: new pc.Mat4(), b: new pc.Mat4() };
-  const clipCornerLocal: pc.Vec3[] = []; const clipCornerWorld: pc.Vec3[] = [];
-  for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.5, 0.5]) {
-    clipCornerLocal.push(new pc.Vec3(x, y, z)); clipCornerWorld.push(new pc.Vec3());
-  }
-  const clipEdgeColor = new pc.Color(0.15, 1.0, 0.78);
-  const independentClipEdgeColors = { a: new pc.Color(0.45, 0.65, 0.9), b: new pc.Color(1.0, 0.72, 0.08) };
   let clippingHandles: ClippingHandles | null = null;
-  const syncClipState = (forceGaussian = false) => {
-    (['a', 'b'] as ModelId[]).forEach(model => {
-      const independent = clippingState.controlMode === 'independent';
-      const mode = clippingState.mode(model);
-      const inputs = independent ? independentAxisInputs[model] : axisInputs;
-      const min = independent ? independentClipMin[model] : clipMinState;
-      const max = independent ? independentClipMax[model] : clipMaxState;
-      min.set(-1e30, -1e30, -1e30); max.set(1e30, 1e30, 1e30);
-      if (mode === 'axis') ['x', 'y', 'z'].forEach(axis => {
-        const component = axis as 'x' | 'y' | 'z';
-        if (inputs[`${axis}MinEnabled`].checked) min[component] = Number(inputs[`${axis}Min`].value);
-        if (inputs[`${axis}MaxEnabled`].checked) max[component] = Number(inputs[`${axis}Max`].value);
-      });
-      const box = independent ? independentClipBoxes[model] : clipBox;
-      const scale = box.getLocalScale();
-      if (Math.abs(scale.x) < 0.001 || Math.abs(scale.y) < 0.001 || Math.abs(scale.z) < 0.001) box.setLocalScale(
-        Math.max(Math.abs(scale.x), 0.001), Math.max(Math.abs(scale.y), 0.001), Math.max(Math.abs(scale.z), 0.001));
-      const boxMatrix = independent ? independentWorldToBox[model] : worldToClipBox;
-      boxMatrix.copy(box.getWorldTransform()).invert();
-      const inScope = independent || clippingScope.value === 'both' || clippingScope.value === model;
-      const enabled = mode !== 'off' && inScope;
-      const boxEnabled = mode === 'box';
-      const originSides = originPlanes.clipSides(model);
-      const worldToOrigin = originPlanes.getWorldToOrigin(model);
-      pointMaterials[model].setClipState(enabled, min, max, boxEnabled, boxMatrix, originSides, worldToOrigin);
-      gaussianController.setClipState(model,
-        enabled, min, max, boxEnabled, boxMatrix, originSides, worldToOrigin, forceGaussian,
-      );
-    });
-  };
   application.on('update', () => {
     if (resultSignature && resultSignature !== display.signature()) {
       root.querySelector<HTMLElement>('#result')!.hidden = true;
@@ -468,18 +430,8 @@ export async function renderGenericRegistration(
     const values = [...pose.position, ...pose.rotation];
     ['px', 'py', 'pz', 'rx', 'ry', 'rz'].forEach((key, index) => { if (document.activeElement !== inputs[key]) inputs[key].value = values[index].toFixed(3); });
     root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(display.getMovingLocalToFixedLocal());
-    syncClipState();
-    const drawBoxEdges = (box: pc.Entity, color: pc.Color) => {
-      const transform = box.getWorldTransform();
-      clipCornerLocal.forEach((corner, index) => transform.transformPoint(corner, clipCornerWorld[index]));
-      for (let index = 0; index < clipCornerWorld.length; index++) for (const bit of [1, 2, 4]) {
-        const other = index ^ bit; if (index < other) application.drawLine(clipCornerWorld[index], clipCornerWorld[other], color, false);
-      }
-    };
-    if (clippingState.controlMode === 'joint' && clippingState.jointMode === 'box' && clippingState.jointHelperVisible) drawBoxEdges(clipBox, clipEdgeColor);
-    if (clippingState.controlMode === 'independent') for (const model of ['a', 'b'] as ModelId[]) {
-      if (clippingState.independentModes[model] === 'box' && clippingState.independentHelpers[model]) drawBoxEdges(independentClipBoxes[model], independentClipEdgeColors[model]);
-    }
+    clippingScene?.sync();
+    clippingScene?.drawHelpers();
     clippingHandles?.update();
   });
 
@@ -564,6 +516,17 @@ export async function renderGenericRegistration(
       setAxisBoundaryIn(independentAxisInputs[model], axis, side, Number((event.currentTarget as HTMLInputElement).value));
     });
   }
+  clippingScene = new ClippingSceneController({
+    app: application,
+    state: clippingState,
+    jointBox: clipBox,
+    independentBoxes: independentClipBoxes,
+    pointMaterials,
+    gaussian: gaussianController,
+    scope: () => clippingScope.value as 'both' | ModelId,
+    axisState: model => axisClipState(clippingState.controlMode === 'joint' ? axisInputs : independentAxisInputs[model]),
+    originState: model => ({ sides: originPlanes.clipSides(model), worldToOrigin: originPlanes.getWorldToOrigin(model) }),
+  });
   clippingHandles = new ClippingHandles(
     application, camera, canvas, () => clippingState.controlMode === 'joint' ? clipBox : independentClipBoxes[clippingState.editor], originalBounds.min, originalBounds.max,
     () => queryActive && !clippingInteractionActive ? 'off' : clippingState.editedMode(),
@@ -671,7 +634,7 @@ export async function renderGenericRegistration(
     },
     pointerUp: event => {
       clippingHandles?.pointerUp(event);
-      syncClipState(true);
+      clippingScene?.sync(true);
     },
     navigationBlocked: event => {
       const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
@@ -759,16 +722,7 @@ export async function renderGenericRegistration(
     },
     visiblePoint: (model, point) => {
       if (!originPlanes.visiblePoint(model, point)) return false;
-      const independent = clippingState.controlMode === 'independent';
-      const mode = clippingState.mode(model);
-      if (mode === 'off' || (!independent && clippingScope.value !== 'both' && clippingScope.value !== model)) return true;
-      if (mode === 'box') {
-        const local = (independent ? independentWorldToBox[model] : worldToClipBox).transformPoint(point);
-        return Math.max(Math.abs(local.x), Math.abs(local.y), Math.abs(local.z)) <= 0.5;
-      }
-      const min = independent ? independentClipMin[model] : clipMinState;
-      const max = independent ? independentClipMax[model] : clipMaxState;
-      return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y && point.z >= min.z && point.z <= max.z;
+      return clippingScene?.visiblePoint(model, point) ?? true;
     },
   });
   root.querySelector('#origin-planes-toggle')!.addEventListener('click', () => {

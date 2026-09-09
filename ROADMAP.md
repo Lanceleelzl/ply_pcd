@@ -10,9 +10,11 @@
 ## 进行中
 
 - 2026-09-08：在 `codex/refactor-registration-workbench` 分支重建项目结构。目标为 Vue 3 界面层、纯 TypeScript PlayCanvas 内核、类型化工作台状态、停靠式工具检查器与结果抽屉，并拆分 FastAPI 服务和 C++ Worker 外壳。重构期间保持 `main` 为已验证版本，现有 API、矩阵、ICP、历史档案和运行目录兼容。
-- 下一步：继续将剖切场景对象和坐标查询迁入独立引擎模块，拆分 FastAPI 路由／任务执行与存储服务，并分离 C++ Worker 各命令执行与结果输出层。
+- 下一步：继续将坐标查询迁入引擎模块，拆分 FastAPI 路由／任务执行与存储服务，并分离 C++ Worker 各命令执行与结果输出层。
 
 ## 已完成
+
+- 2026-09-09：剖切场景计算迁入 `ClippingSceneController`，统一维护联合／独立轴向边界、剖切盒世界逆矩阵、中心点与 Gaussian GPU 参数、坐标取点可见性和辅助盒边线；页面只提供界面输入与控制命令。Vue 类型检查及 Web 生产构建通过，真实历史会话验证联合 X 最小边界、Gaussian 加载／同步／释放，浏览器控制台 0 错误、0 警告。
 
 - 2026-09-09：C++ Worker 的参数结构、用法文本和四类命令解析从 `main.cpp` 迁入 `worker_arguments.hpp／cpp`，共用缺失参数读取逻辑并保持原参数、默认值、校验和错误文案。`main.cpp` 由约 776 行降至 565 行；Windows Release Worker 重建并刷新预编译文件与源码指纹，CTest 1／1 通过，空参数用法及缺失参数退出码冒烟检查通过。
 
@@ -243,6 +245,7 @@
 Pinia 草稿：浏览器设置 B→A 和移动 A 后进入真实历史工作台，再通过「新建」执行 SPA 返回，设置保持且控制台 0 错误、0 警告。
 服务拆分：`python -m compileall -q service` 通过，服务端单元测试 9／9 通过。
 C++ 外壳：Windows Release Worker 重建完成，CTest 1／1（27.30 秒）通过；无参数返回用法及退出码 10，缺失 `--ply` 参数返回原错误文案及退出码 50。
+剖切场景：真实会话启用联合坐标轴剖切与 X 最小边界后加载 A Gaussian，状态显示与当前剖切同步；释放资源后恢复中心点，控制台 0 错误、0 警告。
 结果：Windows CTest 1／1、服务端 9／9、坐标数学及显示回归通过。已知对应关系合成点云在 A 非等比缩放及复合旋转下，移动 A／B 两轮业务 ICP RMS 分别为 7.41627e-7 m、5.04159e-7 m；业务矩阵接近单位矩阵，反算文件矩阵接近 `P_a`，正反向、四种下载和历史档案一致。
 真实数据：3777901 点 PLY／149317 点 PCD 在 `A Rx=-90°`、B 单位预设下完成业务 ICP，RMS 为 0.457745013019 m。浏览器输入 A 业务坐标 `(3,4,5)` 得到 B 业务坐标 `(3.031071691123,8.727348067593,-1.561734026339)`；原始／配准显示切换不改变坐标值，控制台无错误。
 所见即所得：同一真实会话和相机下，A 的 `Rx=0°` 与 `Rx=-90°` 初始截图明显不同；显示回归进一步断言修改 A 不改变 B。证据为 `output/playwright/business-initial-a-rx0.png`、`output/playwright/business-initial-a-rx-90.png` 及 `runtime/business-verification/{synthetic,real}-summary.json`。
