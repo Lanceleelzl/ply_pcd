@@ -27,7 +27,6 @@ from service.schemas import (
     ManualRegistrationRequest,
     ModelRegistrationRequest,
     TransformParameters,
-    WorkspaceRequest,
 )
 from service.routes.history import create_history_router
 from service.routes.jobs import create_job_router
@@ -226,6 +225,8 @@ app.include_router(create_session_router(
     _write_v2_history,
     _release_v2_source_data,
     SOURCE_RETENTION_HOURS,
+    WORKER_PATH,
+    lambda session_id, command: _background_tasks.start(_run_model_preview(session_id, command)),
 ))
 
 
@@ -483,61 +484,6 @@ async def create_model_registration_session(
         "status_url": f"/api/v2/registration-sessions/{session_id}",
         "editor_url": status["editor_url"],
     }
-
-
-@app.post("/api/v2/registration-sessions/{session_id}/resume", status_code=202)
-async def resume_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2" or status.get("workspace_id") != _workspace_id(request.workspace_id):
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    if not _v2_source_available(session_directory, status):
-        raise HTTPException(status_code=409, detail="Source model files have been cleaned")
-    preview_directory = session_directory / "preview"
-    preview_ready = all((preview_directory / name).is_file() for name in ("model-a-points.bin", "model-b-points.bin"))
-    if preview_ready and status.get("status") == "ready":
-        return {"session_id": session_id, "status": "ready", "editor_url": status["editor_url"]}
-    if status.get("status") in {"queued", "preparing"}:
-        return {"session_id": session_id, "status": status["status"], "editor_url": status["editor_url"]}
-    preview_directory.mkdir(parents=True, exist_ok=True)
-    status["status"] = "queued"
-    status.pop("error", None)
-    status.pop("error_code", None)
-    _write_status(session_directory, status)
-    command = [
-        WORKER_PATH, "prepare-model-preview",
-        "--model-a", str(session_directory / "input" / status["model_a_filename"]),
-        "--model-b", str(session_directory / "input" / status["model_b_filename"]),
-        "--output-dir", str(preview_directory),
-        "--model-a-limit", "300000", "--model-b-limit", "300000",
-    ]
-    _background_tasks.start(_run_model_preview(session_id, command))
-    return {"session_id": session_id, "status": "queued", "editor_url": status["editor_url"]}
-
-
-@app.get("/api/v2/registration-sessions/{session_id}/preview/{model}")
-async def get_model_registration_preview(session_id: str, model: str) -> FileResponse:
-    session_directory = _manual_session_directory(session_id)
-    status = _read_status(session_directory)
-    if status.get("api_version") != "v2":
-        raise HTTPException(status_code=404, detail="V2 registration session not found")
-    if model == "model-a":
-        path = session_directory / "preview" / "model-a-points.bin"
-        filename = "model-a-points.bin"
-    elif model == "model-b":
-        path = session_directory / "preview" / "model-b-points.bin"
-        filename = "model-b-points.bin"
-    elif model == "gaussian-a" and status.get("metadata", {}).get("gaussian_a_available"):
-        path = session_directory / "input" / status["model_a_filename"]
-        filename = status["model_a_filename"]
-    elif model == "gaussian-b" and status.get("metadata", {}).get("gaussian_b_available"):
-        path = session_directory / "input" / status["model_b_filename"]
-        filename = status["model_b_filename"]
-    else:
-        raise HTTPException(status_code=404, detail="Preview not found")
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Preview not found")
-    return FileResponse(path, media_type="application/octet-stream", filename=filename)
 
 
 @app.post("/api/v2/registration-sessions/{session_id}/register", status_code=202)
