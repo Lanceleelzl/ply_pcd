@@ -1,4 +1,39 @@
-import type { CreateSessionInput, HistoryItem } from './contracts';
+import type { CreateSessionInput, HistoryItem, RegistrationSession } from './contracts';
+
+function waitForPoll(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, 1000);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+export async function waitForSession(
+  sessionId: string,
+  signal: AbortSignal,
+  onStatus: (status: string) => void,
+): Promise<RegistrationSession> {
+  while (true) {
+    signal.throwIfAborted();
+    const response = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}`, { signal });
+    const body = await responseBody(response);
+    signal.throwIfAborted();
+    if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+    if (typeof body.status !== 'string') throw new Error('会话响应缺少预览状态');
+    const session = body as unknown as RegistrationSession;
+    onStatus(session.status);
+    if (session.status === 'ready') return session;
+    if (session.status === 'failed') throw new Error(session.error ?? '预览生成失败');
+    await waitForPoll(signal);
+  }
+}
 
 async function responseBody(response: Response): Promise<Record<string, unknown>> {
   try {

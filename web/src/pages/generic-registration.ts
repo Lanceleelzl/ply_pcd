@@ -1,3 +1,4 @@
+import { waitForSession } from '../api/registration-api';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
@@ -34,11 +35,9 @@ import type {
   RegistrationIteration,
   RegistrationRequest,
   RegistrationResult,
-  RegistrationSession,
 } from '../api/contracts';
 import { mountWorkbenchLayout } from '../views/workbench/mount-workbench-layout';
 
-const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
 const formatBytes = (bytes?: number) => bytes
   ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
@@ -54,32 +53,35 @@ function cloudDiagonal(cloud: PreviewCloud): number {
   return cloud.max.clone().sub(cloud.min).length();
 }
 
-async function waitForSession(sessionId: string, statusElement: HTMLElement, signal: AbortSignal): Promise<RegistrationSession> {
-  while (true) {
-    const response = await fetch(`/api/v2/registration-sessions/${sessionId}`, { signal });
-    const status = await response.json() as RegistrationSession;
-    statusElement.textContent = `预览状态：${status.status}`;
-    if (status.status === 'ready') return status;
-    if (status.status === 'failed') throw new Error(status.error ?? '预览生成失败');
-    await sleep(1000);
-  }
-}
-
 export async function renderGenericRegistration(
   root: HTMLElement,
   sessionId: string,
   externalSignal?: AbortSignal,
   navigateHome?: () => void,
 ): Promise<() => void> {
+  externalSignal?.throwIfAborted();
   const lifecycle = new AbortController();
   const abortLifecycle = () => lifecycle.abort();
   externalSignal?.addEventListener('abort', abortLifecycle, { once: true });
   const { signal } = lifecycle;
   root.innerHTML = '<main class="loading"><h2>正在生成双模型预览</h2><pre id="loading-status">queued</pre></main>';
-  const session = await waitForSession(sessionId, root.querySelector('#loading-status')!, signal);
-  const [cloudA, cloudB] = await Promise.all([
-    loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
-  ]);
+  const statusElement = root.querySelector('#loading-status')!;
+  const { session, clouds: [cloudA, cloudB] } = await (async () => {
+    try {
+      const session = await waitForSession(sessionId, signal, status => {
+        statusElement.textContent = `预览状态：${status}`;
+      });
+      const clouds = await Promise.all([
+        loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
+      ]);
+      signal.throwIfAborted();
+      return { session, clouds };
+    } catch (error) {
+      lifecycle.abort();
+      externalSignal?.removeEventListener('abort', abortLifecycle);
+      throw error;
+    }
+  })();
   const infoA = session.metadata!.models.a;
   const infoB = session.metadata!.models.b;
   const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
