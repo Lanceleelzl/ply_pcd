@@ -8,6 +8,7 @@ type Model = 'a' | 'b';
 const models: Model[] = ['a', 'b'];
 interface Result { a_to_b: Matrix; b_to_a: Matrix; moving_model: Model }
 interface Options {
+  toolbar: { setAvailable: (available: boolean, title: string) => void; setActive: (active: boolean) => void };
   root: HTMLElement; app: pc.Application; camera: pc.Entity; canvas: HTMLCanvasElement;
   entities: Record<Model, pc.Entity>; clouds: Record<Model, PreviewCloud>;
   origins: Record<Model, XYZ>; diagonal: number; sessionId: string;
@@ -34,7 +35,6 @@ export class CoordinateQuery {
   private signature = '';
   private fields: ReturnType<typeof mountCoordinatePanel>;
   private panel: HTMLElement;
-  private toggle: HTMLButtonElement;
   private gizmo: pc.TranslateGizmo;
   private anchor = new pc.Entity('Coordinate query handle');
   private markers: Record<Model, pc.Entity>;
@@ -44,29 +44,8 @@ export class CoordinateQuery {
 
   constructor(private options: Options) {
     const { root, app, camera } = options;
-    const toolbar = root.querySelector('.viewport-toolbar')!;
-    toolbar.insertAdjacentHTML('beforeend', '<button id="coordinate-query" disabled title="完成 ICP 后可查询坐标对">坐标查询</button><button id="origin-a" aria-pressed="false">A 原点／轴</button><button id="origin-b" aria-pressed="false">B 原点／轴</button>');
-    toolbar.querySelector('strong')?.remove();
-    const groups = [
-      ['配准与视图', ['reset', 'fit', 'clipping-toggle']],
-      ['模型显隐', ['toggle-model-a', 'toggle-model-b']],
-      ['高斯显示', ['gaussian-model-a', 'gaussian-model-b']],
-      ['平面工具', ['origin-planes-toggle']],
-      ['坐标工具', ['coordinate-query', 'origin-a', 'origin-b']],
-    ] as const;
-    for (const [label, ids] of groups) {
-      const group = document.createElement('div');
-      group.className = 'viewport-tool-group';
-      group.setAttribute('role', 'group');
-      group.setAttribute('aria-label', label);
-      group.innerHTML = `<span class="tool-group-label">${label}</span>`;
-      ids.forEach(id => group.append(root.querySelector(`#${id}`)!));
-      toolbar.append(group);
-    }
-    toolbar.querySelector('.model-visibility')?.remove();
     root.querySelector('.viewport')!.insertAdjacentHTML('beforeend', '<section class="coordinate-panel" hidden></section>');
     this.panel = root.querySelector('.coordinate-panel')!;
-    this.toggle = root.querySelector('#coordinate-query')!;
     this.markers = { a: this.makeMarker('a', new pc.Color(1, 0.15, 0.12)), b: this.makeMarker('b', new pc.Color(0.12, 0.5, 1)) };
     const label = (text: string) => {
       const element = document.createElement('span'); element.className = 'coordinate-label'; element.textContent = text;
@@ -89,7 +68,6 @@ export class CoordinateQuery {
       this.setPoint(transformXYZ(options.businessMatrices[this.source], filePoint), false);
     });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => { this.dragging = false; this.refresh(); });
-    this.toggle.addEventListener('click', () => this.active ? this.close() : this.open());
     this.fields = mountCoordinatePanel(this.panel, {
       onSource: model => { this.source = model; this.picking = false; this.refresh(); },
       onChange: values => { this.picking = false; this.setPoint(values); },
@@ -104,11 +82,6 @@ export class CoordinateQuery {
         else if (action.startsWith('copy-')) void this.copyCoordinates(action.slice(5));
       },
     });
-    models.forEach(model => root.querySelector(`#origin-${model}`)!.addEventListener('click', event => {
-      this.axesVisible[model] = !this.axesVisible[model];
-      (event.currentTarget as HTMLElement).classList.toggle('active', this.axesVisible[model]);
-      (event.currentTarget as HTMLElement).setAttribute('aria-pressed', String(this.axesVisible[model]));
-    }));
     app.on('update', this.update, this);
   }
 
@@ -133,25 +106,30 @@ export class CoordinateQuery {
   }
 
   setResult(result: Result, jobId: string): void {
-    this.result = result; this.jobId = jobId; this.signature = this.currentSignature(); this.toggle.disabled = false;
-    this.toggle.title = '使用本轮 ICP 矩阵查询 A／B 业务坐标对';
+    this.result = result; this.jobId = jobId; this.signature = this.currentSignature(); this.options.toolbar.setAvailable(true, '使用本轮 ICP 矩阵查询 A／B 业务坐标对');
     if (this.points) this.setPoint(this.points[this.source]);
   }
 
   invalidate(): void {
-    if (this.active) this.close(); this.result = null; this.toggle.disabled = true;
-    this.toggle.title = '模型关系已改变，请重新完成 ICP';
+    if (this.active) this.close(); this.result = null; this.options.toolbar.setAvailable(false, '模型关系已改变，请重新完成 ICP');
+  }
+
+  toggleQuery(): void { this.active ? this.close() : this.open(); }
+
+  toggleOrigin(model: Model): boolean {
+    this.axesVisible[model] = !this.axesVisible[model];
+    return this.axesVisible[model];
   }
 
   private open(): void {
     if (!this.result || this.signature !== this.currentSignature()) { this.invalidate(); return; }
-    this.active = true; this.panel.hidden = false; this.toggle.classList.add('active'); this.options.lock(true);
+    this.active = true; this.panel.hidden = false; this.options.toolbar.setActive(true); this.options.lock(true);
     this.refresh();
   }
 
   close(): void {
     this.original = false; this.applyPresentation(); this.active = false; this.picking = false;
-    this.panel.hidden = true; this.toggle.classList.remove('active'); this.gizmo.detach(); this.hovered = false;
+    this.panel.hidden = true; this.options.toolbar.setActive(false); this.gizmo.detach(); this.hovered = false;
     this.options.lock(false); this.refresh();
   }
 

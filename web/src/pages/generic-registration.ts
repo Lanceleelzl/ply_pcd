@@ -1,3 +1,4 @@
+import { mountViewportToolbar } from '../views/workbench/viewport-toolbar';
 import BusinessTransformForm from '../views/workbench/BusinessTransformForm.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
@@ -674,7 +675,12 @@ export async function renderGenericRegistration(
     actionState.locked = queryActive;
     attach();
   };
+  const queryToolbar = mountViewportToolbar(root, {
+    query: () => coordinateQuery?.toggleQuery(),
+    toggleOrigin: model => coordinateQuery?.toggleOrigin(model) ?? false,
+  });
   coordinateQuery = new CoordinateQuery({
+    toolbar: queryToolbar,
     root, app: application, camera, canvas, entities, clouds, sessionId,
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: bounds.diagonal,
     localToDisplay: model => display.localToDisplay(model),
@@ -823,6 +829,7 @@ export async function renderGenericRegistration(
     jobController.destroy();
     progressResize.disconnect();
     coordinateQuery?.destroy();
+    queryToolbar.destroy();
     originPlanes.destroy();
     originPlaneUI.destroy();
     clippingHandles?.destroy();
