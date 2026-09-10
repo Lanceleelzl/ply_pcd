@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-10：坐标查询按钮、XYZ 输入、复制及提示统一迁入 `CoordinatePanel.vue`，控制器通过面板状态和事件连接查询逻辑，移除面板内部 DOM 查询与按钮监听。类型检查和生产构建通过；独立 8866 验证服务上的 Playwright 检查覆盖空点禁用、位置切换、剪贴板坐标对内容、切换编辑方、清除、取点提示和返回编辑。三维实际取点、拖动及控制器外层工具栏解耦仍待完成。
+
 - 2026-09-10：坐标查询 A／B 的 XYZ 输入迁入 `CoordinateFields.vue`，界面装配集中在 `coordinate-fields.ts`，通过数值事件调用现有坐标换算，移除查询控制器对输入值和只读属性的直接操作；销毁时卸载组件。类型检查、Web 构建及 Playwright 验证通过：A 输入 12.5 后 B 显示换算值、非编辑方只读且不禁用、切换编辑方、空值提示和清除点归零。查询按钮、提示及完整面板装配仍待迁移；本轮未验证三维拖动和场景取点。
 
 - 2026-09-10：新增 `web/src/origin-planes.test.ts`，使用 PlayCanvas NullGraphicsDevice、真实实体和 RenderComponent 验证六个正负半空间、原点边界保留、A／B 隔离、平移旋转及非均匀缩放后的多平面交集、模型显隐恢复、清空状态和销毁监听／实体清理。`node --experimental-transform-types web/src/origin-planes.test.ts` 与 Vue 类型检查通过。本轮仅添加回归测试，未修改运行逻辑；该测试不渲染 GPU 画面，真实点云及 Gaussian 剖切视觉验收仍待完成。
