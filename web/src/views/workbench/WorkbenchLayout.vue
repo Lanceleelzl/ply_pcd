@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import type { RegistrationSession } from '../../api/contracts';
+import type { ModelId, RegistrationSession } from '../../api/contracts';
+import GaussianControls from './GaussianControls.vue';
+import type { GaussianViewState } from './gaussian-view-state';
 
-const props = defineProps<{ session: RegistrationSession }>();
+defineProps<{ session: RegistrationSession; gaussian: GaussianViewState }>();
+const emit = defineEmits<{ gaussian: [model: ModelId] }>();
 const models = ['a', 'b'] as const;
 const faces = [
   { axis: 'x', direction: '1,0,0', label: 'X', title: '沿 +X 查看' },
@@ -16,14 +19,6 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
   style: { '--cx': x, '--cy': y, '--cz': z },
   title: `等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z`,
 }))));
-const gaussianUrl = (model: 'a' | 'b') => props.session[`gaussian_${model}_url`];
-const gaussianTitle = (model: 'a' | 'b') => {
-  const bytes = props.session.inputs?.[`model_${model}_bytes`];
-  const size = bytes ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB` : '大小未知';
-  return gaussianUrl(model)
-    ? `加载模型 ${model.toUpperCase()} 原始 Gaussian（${size}）`
-    : `模型 ${model.toUpperCase()} 不包含完整 Gaussian 属性`;
-};
 </script>
 
 <template>
@@ -43,7 +38,7 @@ const gaussianTitle = (model: 'a' | 'b') => {
           <p>A：{{ session.metadata!.models.a.source_point_count.toLocaleString() }} 点<br>B：{{ session.metadata!.models.b.source_point_count.toLocaleString() }} 点</p>
           <p id="badge" class="model-role-summary"></p>
           <div id="business-transform-panel"></div>
-          <p id="gaussian-status" class="gaussian-status" hidden></p>
+          <p id="gaussian-status" class="gaussian-status" :class="{ error: gaussian.error }" :hidden="!gaussian.message">{{ gaussian.message }}</p>
         </section>
       </aside>
       <section class="viewport">
@@ -59,10 +54,7 @@ const gaussianTitle = (model: 'a' | 'b') => {
             <span class="tool-group-label">模型显隐</span>
             <button v-for="model in models" :id="`toggle-model-${model}`" :key="model" class="active">{{ model.toUpperCase() }}：显示</button>
           </div>
-          <div class="viewport-tool-group" role="group" aria-label="高斯显示">
-            <span class="tool-group-label">高斯显示</span>
-            <button v-for="model in models" :id="`gaussian-model-${model}`" :key="model" class="gaussian-toggle" :class="{ available: gaussianUrl(model) }" :disabled="!gaussianUrl(model)" :title="gaussianTitle(model)">{{ model.toUpperCase() }}：高斯</button>
-          </div>
+          <GaussianControls :session="session" :state="gaussian" @toggle="emit('gaussian', $event)" />
           <div class="viewport-tool-group" role="group" aria-label="平面工具">
             <span class="tool-group-label">平面工具</span><button id="origin-planes-toggle" aria-pressed="false">原点平面</button>
           </div>

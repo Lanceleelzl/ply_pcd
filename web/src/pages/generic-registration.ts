@@ -1,5 +1,6 @@
 import { waitForSession } from '../api/registration-api';
 import { ResourceScope } from '../app/resource-scope';
+import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
@@ -97,7 +98,11 @@ async function initializeWorkbench(
   const infoB = session.metadata!.models.b;
   const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
   const businessTransforms: Record<ModelId, TransformParameters> = session.business_transforms ?? { a: defaultTransform(), b: defaultTransform() };
-  resources.add(mountWorkbenchLayout(root, session));
+  const gaussianState = reactive<GaussianViewState>({
+    models: { a: { active: false, loading: false }, b: { active: false, loading: false } },
+    message: '', error: false,
+  });
+  resources.add(mountWorkbenchLayout(root, session, gaussianState, model => { void gaussianController.toggle(model); }));
 
   const roleState = reactive({ moving: session.moving_model, direction: session.output_direction, disabled: false });
   const effectiveMoving = (): ModelId => roleState.moving === 'auto'
@@ -310,14 +315,14 @@ async function initializeWorkbench(
 
   const gaussianController = new GaussianDisplayController({
     app: application,
-    root,
     entities,
     urls: { a: session.gaussian_a_url, b: session.gaussian_b_url },
-    bytes: { a: session.inputs?.model_a_bytes, b: session.inputs?.model_b_bytes },
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
     clippingEnabled: () => clippingState.enabled(),
     clipStateChanged: () => clippingScene?.sync(true),
     presentationChanged: attach,
+    displayChanged: (model, state) => { gaussianState.models[model] = state; },
+    statusChanged: (message, error) => { gaussianState.message = message; gaussianState.error = error; },
   });
   resources.add(() => gaussianController.destroy());
 
