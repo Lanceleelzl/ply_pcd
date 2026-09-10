@@ -1,3 +1,4 @@
+import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
@@ -89,11 +90,7 @@ export async function renderGenericRegistration(
         <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
         <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><details class="business-transform-editor"><summary>业务场景矩阵</summary><p class="business-transform-note">文件坐标 → 业务坐标；应用后需重新配准。</p><div id="business-form-a"></div><div id="business-form-b"></div><div class="business-transform-actions"><button id="save-business-transforms">应用场景矩阵</button><button id="reset-business-transforms">恢复默认</button></div><p id="business-transform-status" class="business-transform-note"></p></details><p id="gaussian-status" class="gaussian-status" hidden></p></section>
         <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
-          <div class="role-grid">
-            <label class="parameter-label">转换方向<select id="output-direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
-            <label class="parameter-label">ICP 移动模型<select id="moving-model"><option value="auto">自动推荐（${session.metadata!.recommended_moving_model.toUpperCase()}）</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>
-          </div>
-          <p id="role-hint" class="step-hint"></p><p id="range-risk" class="range-risk" hidden></p>
+          <div id="registration-roles"></div>
           <div id="coarse-pose-form"></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
@@ -109,12 +106,10 @@ export async function renderGenericRegistration(
     </div></main>`;
   mountWorkbenchLayout(root);
 
-  const outputDirection = root.querySelector<HTMLSelectElement>('#output-direction')!;
-  const movingSelect = root.querySelector<HTMLSelectElement>('#moving-model')!;
-  outputDirection.value = session.output_direction;
-  movingSelect.value = session.moving_model;
-  const effectiveMoving = (): ModelId => movingSelect.value === 'auto'
-    ? session.metadata!.recommended_moving_model : movingSelect.value as ModelId;
+  const roleState = reactive({ moving: session.moving_model, direction: session.output_direction, disabled: false });
+  const effectiveMoving = (): ModelId => roleState.moving === 'auto'
+    ? session.metadata!.recommended_moving_model : roleState.moving;
+
 
   const canvas = root.querySelector<HTMLCanvasElement>('#viewport')!;
   const viewportElement = canvas.parentElement!;
@@ -340,19 +335,15 @@ export async function renderGenericRegistration(
     });
     recolor(entities[moving], new pc.Color(1.0, 0.72, 0.08));
     recolor(entities[fixed], new pc.Color(0.68, 0.72, 0.78));
-    root.querySelector<HTMLElement>('#role-hint')!.textContent = `ICP：移动 ${moving.toUpperCase()}，固定 ${fixed.toUpperCase()}。预览与粗配准均使用业务坐标；数值为移动模型业务局部坐标 → 固定模型业务局部坐标。`;
-    const rangeRisk = root.querySelector<HTMLElement>('#range-risk')!;
-    const rangeRatio = modelDiagonals[fixed] > 0 ? modelDiagonals[moving] / modelDiagonals[fixed] : Number.POSITIVE_INFINITY;
-    const movingLarger = rangeRatio >= 1.25;
-    rangeRisk.hidden = !movingLarger;
-    rangeRisk.textContent = movingLarger
-      ? `范围风险：移动模型 ${moving.toUpperCase()} 的包围盒对角线约为固定模型 ${fixed.toUpperCase()} 的 ${rangeRatio.toFixed(1)} 倍。大范围点云匹配小范围点云容易落入错误位置；建议改为移动 ${fixed.toUpperCase()} 匹配 ${moving.toUpperCase()}。最终业务方向无需改变，系统返回的反向矩阵就是所需转换矩阵。`
-      : '';
     root.querySelector<HTMLElement>('#badge')!.textContent = `移动 ${moving.toUpperCase()}（黄色）　固定 ${fixed.toUpperCase()}（灰色）`;
     attach();
   };
-  movingSelect.addEventListener('change', () => { coordinateQuery?.invalidate(); refreshRoles(true); });
-  outputDirection.addEventListener('change', () => { root.querySelector<HTMLElement>('#result')!.hidden = true; });
+  const rolesApp = createApp({ render: () => h(RegistrationRoles, {
+    ...roleState, recommended: session.metadata!.recommended_moving_model, diagonals: modelDiagonals,
+    onMoving: (value: RegistrationRequest['moving_model']) => { roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },
+    onDirection: (value: RegistrationRequest['output_direction']) => { roleState.direction = value; root.querySelector<HTMLElement>('#result')!.hidden = true; },
+  }) });
+  rolesApp.mount(root.querySelector<HTMLElement>('#registration-roles')!);
   refreshRoles();
 
   const toDraft = (value: TransformParameters) => ({
@@ -588,7 +579,7 @@ export async function renderGenericRegistration(
   progressResize.observe(progressToolbar);
   progressResize.observe(iterationProgress);
   positionProgress();
-  const registrationControls = [outputDirection, movingSelect, resetButton,
+  const registrationControls = [resetButton,
     root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
@@ -596,6 +587,7 @@ export async function renderGenericRegistration(
     icpState.disabled = value || queryActive;
     poseState.disabled = value || queryActive;
     businessState.disabled = value || queryActive;
+    roleState.disabled = value || queryActive;
     actionState.running = value;
     actionState.cancelling = false;
     registrationControls.forEach(control => { control.disabled = value || queryActive; });
@@ -627,6 +619,7 @@ export async function renderGenericRegistration(
       icpState.disabled = active || running;
       poseState.disabled = active || running;
       businessState.disabled = active || running;
+      roleState.disabled = active || running;
       registrationControls.forEach(control => { control.disabled = active || running; });
       actionState.locked = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
@@ -649,7 +642,7 @@ export async function renderGenericRegistration(
     display.setMovingLocalToFixedLocal(result.moving_local_to_fixed_local);
     coordinateQuery?.setResult(result, jobId);
     resultSignature = display.signature();
-    resultState.direction = outputDirection.value;
+    resultState.direction = roleState.direction;
     resultState.result = result;
     root.querySelector<HTMLElement>('#result')!.hidden = false;
   };
@@ -710,8 +703,8 @@ export async function renderGenericRegistration(
     try {
       const request: RegistrationRequest = {
         initial_moving_local_to_fixed_local: display.getMovingLocalToFixedLocal(),
-        output_direction: outputDirection.value as RegistrationRequest['output_direction'],
-        moving_model: movingSelect.value as RegistrationRequest['moving_model'],
+        output_direction: roleState.direction as RegistrationRequest['output_direction'],
+        moving_model: roleState.moving as RegistrationRequest['moving_model'],
         min_rms_decrease: Number(icpValues.min_rms_decrease),
         sampling_limit: Number(icpValues.sampling_limit),
         overlap: Number(icpValues.overlap),
@@ -739,8 +732,8 @@ export async function renderGenericRegistration(
         return matrix.flat().every((value, index) => Math.abs(value-display.businessMatrices[model].flat()[index]) < 1e-12);
       });
       if (matching && signature === display.signature() && !running) {
-        movingSelect.value = result.moving_model;
-        outputDirection.value = latest.output_direction;
+        roleState.moving = result.moving_model;
+        roleState.direction = latest.output_direction;
         refreshRoles(true);
         Object.keys(icpValues).forEach(name => {
           if (latest.parameters[name] !== undefined) icpValues[name] = String(latest.parameters[name]);
@@ -759,6 +752,7 @@ export async function renderGenericRegistration(
     icpApp.unmount();
     actionsApp.unmount();
     poseApp.unmount();
+    rolesApp.unmount();
     businessApps.forEach(component => component.unmount());
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
