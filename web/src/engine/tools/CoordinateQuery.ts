@@ -1,3 +1,4 @@
+import { mountCoordinateFields } from '../../views/workbench/coordinate-fields';
 import * as pc from 'playcanvas';
 import type { PreviewCloud } from '../../point-cloud';
 import { invertAffine, offsetXYZ, transformXYZ, type Matrix, type XYZ } from '../../coordinate-math';
@@ -31,6 +32,7 @@ export class CoordinateQuery {
   private source: Model = 'a';
   private points: Record<Model, XYZ> | null = null;
   private signature = '';
+  private fields: ReturnType<typeof mountCoordinateFields>;
   private panel: HTMLElement;
   private toggle: HTMLButtonElement;
   private stateButton: HTMLButtonElement;
@@ -68,7 +70,7 @@ export class CoordinateQuery {
       <div class="coordinate-title"><strong>坐标查询</strong><button data-query="close">返回配准编辑</button></div>
       <button data-query="state">当前位置：配准位置｜切换原始位置</button>
       <div class="coordinate-actions coordinate-point-tools" role="group" aria-label="选择编辑点与取点"><button data-move-point="a">移动 A 点</button><button data-move-point="b">移动 B 点</button><button data-query="pick">场景取点</button><button data-query="clear">清除点</button></div>
-      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 业务坐标（${model === 'a' ? '红色' : '蓝色'}）</legend>${['X', 'Y', 'Z'].map((axis, index) => `<label class="axis-input"><input aria-label="模型 ${model.toUpperCase()} 业务坐标 ${axis}" data-model="${model}" data-index="${index}" type="number" step="0.001" value="0"><span>${axis}</span></label>`).join('')}<button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
+      <div class="coordinate-fields">${models.map(model => `<fieldset><legend>${model.toUpperCase()} 业务坐标（${model === 'a' ? '红色' : '蓝色'}）</legend><div data-coordinate-fields="${model}"></div><button data-query="copy-${model}">复制 ${model.toUpperCase()} 坐标</button></fieldset>`).join('')}</div>
       <button data-query="copy-pair">复制坐标对</button><p class="coordinate-message"></p>
       <small>坐标属于各模型业务坐标系；切换位置仅改变显示。取点使用轻量中心点预览，Gaussian 视觉表面可能与中心点不同。</small>
     </section>`);
@@ -111,11 +113,8 @@ export class CoordinateQuery {
       this.picking = true; this.gizmo.detach(); this.message.textContent = `请点击模型 ${this.source.toUpperCase()} 的可见中心点。`;
     });
     this.panel.querySelector('[data-query="clear"]')!.addEventListener('click', () => { this.points = null; this.picking = false; this.refresh(); });
-    this.panel.querySelectorAll<HTMLInputElement>('input').forEach(input => input.addEventListener('change', () => {
-      const values = Array.from(this.panel.querySelectorAll<HTMLInputElement>(`input[data-model="${this.source}"]`)).map(field => Number(field.value));
-      if (values.every(Number.isFinite) && Array.from(this.panel.querySelectorAll<HTMLInputElement>(`input[data-model="${this.source}"]`)).every(field => field.value !== '')) { this.picking = false; this.setPoint(values as XYZ); }
-      else this.message.textContent = '请输入三个有效的有限坐标值。';
-    }));
+    this.fields = mountCoordinateFields(this.panel, values => { this.picking = false; this.setPoint(values); },
+      () => { this.message.textContent = '请输入三个有效的有限坐标值。'; });
     for (const action of ['a', 'b', 'pair']) this.panel.querySelector(`[data-query="copy-${action}"]`)!.addEventListener('click', async () => {
       if (!this.points) return;
       const data = action === 'pair' ? JSON.stringify({ session_id: options.sessionId, job_id: this.jobId, model_a: this.points.a, model_b: this.points.b }, null, 2) : this.points[action as Model].join(' ');
@@ -195,12 +194,8 @@ export class CoordinateQuery {
     });
     (this.panel.querySelector('[data-query="pick"]') as HTMLButtonElement).disabled = this.clippingActive;
     this.stateButton.textContent = this.original ? '当前位置：原始位置｜切换配准位置' : '当前位置：配准位置｜切换原始位置';
-    this.panel.querySelectorAll<HTMLInputElement>('input').forEach(input => {
-      const model = input.dataset.model as Model;
-      input.readOnly = model !== this.source;
-      input.setAttribute('aria-readonly', String(input.readOnly));
-      if (document.activeElement !== input) input.value = this.points ? String(this.points[model][Number(input.dataset.index)]) : '0';
-    });
+    this.fields.state.source = this.source;
+    this.fields.state.points = this.points;
     this.message.title = `转换依据：ICP ${this.jobId}`;
     this.message.textContent = this.points ? '已按 ICP 矩阵换算，坐标不随显示状态变化。' : '使用 ICP 结果，可场景取点或直接输入 XYZ。';
     if (attach) {
@@ -266,6 +261,7 @@ export class CoordinateQuery {
       this.labels[model].remove();
       this.axisLabels[model].forEach(label => label.remove());
     });
+    this.fields.destroy();
     this.panel.remove();
   }
 
