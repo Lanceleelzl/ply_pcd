@@ -618,7 +618,6 @@ export async function renderGenericRegistration(
     pointerLeave: () => clippingHandles?.pointerLeave(),
     pointerDown: event => {
       if (coordinateQuery?.pointerDown(event)) return true;
-      if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) return true;
       return clippingHandles?.pointerDown(event) ?? false;
     },
     pointerUp: event => {
@@ -626,6 +625,7 @@ export async function renderGenericRegistration(
       clippingScene?.sync(true);
     },
     navigationBlocked: event => {
+      if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) return true;
       const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
       const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
       return event.button === 2 || gizmoTransforming || (event.button === 0 && gizmoHovered);
