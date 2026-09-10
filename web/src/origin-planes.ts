@@ -1,4 +1,6 @@
 import * as pc from 'playcanvas';
+import { createApp, h, reactive, type App } from 'vue';
+import OriginPlaneForm, { type OriginPlaneState } from './views/workbench/OriginPlaneForm.vue';
 import type { XYZ } from './coordinate-math';
 
 type Model = 'a' | 'b';
@@ -17,6 +19,12 @@ export class OriginPlaneController {
   private readonly frames: Record<Model, pc.Entity>;
   private readonly visuals: Record<Model, Record<Plane, pc.Entity>>;
   private readonly worldToOrigin = { a: new pc.Mat4(), b: new pc.Mat4() };
+  private readonly form: App;
+  private readonly state = reactive<OriginPlaneState>({
+    a: { xoy: { visible: false, side: 0 }, xoz: { visible: false, side: 0 }, yoz: { visible: false, side: 0 } },
+    b: { xoy: { visible: false, side: 0 }, xoz: { visible: false, side: 0 }, yoz: { visible: false, side: 0 } },
+  });
+  private readonly togglePanel = () => { this.panel.hidden = !this.panel.hidden; };
 
   constructor(
     root: HTMLElement,
@@ -27,15 +35,7 @@ export class OriginPlaneController {
     private readonly modelVisible: Record<Model, boolean>,
   ) {
     this.toggle = root.querySelector('#origin-planes-toggle')!;
-    root.querySelector('.viewport')!.insertAdjacentHTML('beforeend', `<section class="origin-planes-panel" hidden>
-      <div class="origin-planes-title"><strong>模型原点平面</strong><button data-origin-plane-close title="关闭面板">×</button></div>
-      <p>平面经过各自模型原点并跟随模型姿态。剖切只作用于对应模型。</p>
-      ${models.map(model => `<fieldset><legend>模型 ${model.toUpperCase()}</legend>${planes.map(plane => `<div class="origin-plane-row">
-        <label><input type="checkbox" data-origin-plane-visible="${model}-${plane.id}">显示 ${plane.label}</label>
-        <select aria-label="模型 ${model.toUpperCase()} ${plane.label} 剖切" data-origin-plane-clip="${model}-${plane.id}"><option value="0">不剖切</option><option value="1">保留 +${plane.normal.toUpperCase()}</option><option value="-1">保留 −${plane.normal.toUpperCase()}</option></select>
-      </div>`).join('')}</fieldset>`).join('')}
-      <button class="full-width" data-origin-plane-clear>全部关闭</button>
-    </section>`);
+    root.querySelector('.viewport')!.insertAdjacentHTML('beforeend', '<section class="origin-planes-panel" hidden></section>');
     this.panel = root.querySelector('.origin-planes-panel')!;
     this.frames = { a: new pc.Entity('A origin frame'), b: new pc.Entity('B origin frame') };
     this.visuals = { a: {} as Record<Plane, pc.Entity>, b: {} as Record<Plane, pc.Entity> };
@@ -58,24 +58,25 @@ export class OriginPlaneController {
         frame.addChild(visual); visual.enabled = false; this.visuals[model][plane.id] = visual;
       });
     });
-    this.toggle.addEventListener('click', () => { this.panel.hidden = !this.panel.hidden; });
-    this.panel.querySelector('[data-origin-plane-close]')!.addEventListener('click', () => { this.panel.hidden = true; });
-    this.panel.querySelectorAll('input,select').forEach(control => control.addEventListener('change', () => this.refresh()));
-    this.panel.querySelector('[data-origin-plane-clear]')!.addEventListener('click', () => {
-      this.panel.querySelectorAll<HTMLInputElement>('input').forEach(input => { input.checked = false; });
-      this.panel.querySelectorAll<HTMLSelectElement>('select').forEach(select => { select.value = '0'; });
-      this.refresh();
-    });
+    this.form = createApp({ render: () => h(OriginPlaneForm, {
+      state: this.state,
+      onVisible: (model: Model, plane: Plane, value: boolean) => { this.state[model][plane].visible = value; this.refresh(); },
+      onSide: (model: Model, plane: Plane, value: number) => { this.state[model][plane].side = value; this.refresh(); },
+      onClose: () => { this.panel.hidden = true; },
+      onClear: () => {
+        models.forEach(model => planes.forEach(plane => { Object.assign(this.state[model][plane.id], { visible: false, side: 0 }); }));
+        this.refresh();
+      },
+    }) });
+    this.form.mount(this.panel);
+    this.toggle.addEventListener('click', this.togglePanel);
     this.app.on('update', this.refreshVisuals, this);
     this.refresh();
   }
 
-  private key(model: Model, plane: Plane): string { return `${model}-${plane}`; }
-
   private refresh(): void {
     const active = models.some(model => planes.some(plane =>
-      this.panel.querySelector<HTMLInputElement>(`[data-origin-plane-visible="${this.key(model, plane.id)}"]`)!.checked
-      || this.panel.querySelector<HTMLSelectElement>(`[data-origin-plane-clip="${this.key(model, plane.id)}"]`)!.value !== '0'));
+      this.state[model][plane.id].visible || this.state[model][plane.id].side !== 0));
     this.toggle.classList.toggle('active', active);
     this.toggle.setAttribute('aria-pressed', String(active));
     this.refreshVisuals();
@@ -84,12 +85,12 @@ export class OriginPlaneController {
   private refreshVisuals(): void {
     models.forEach(model => planes.forEach(plane => {
       this.visuals[model][plane.id].enabled = this.modelVisible[model]
-        && this.panel.querySelector<HTMLInputElement>(`[data-origin-plane-visible="${this.key(model, plane.id)}"]`)!.checked;
+        && this.state[model][plane.id].visible;
     }));
   }
 
   clipSides(model: Model): pc.Vec3 {
-    const value = (plane: Plane) => Number(this.panel.querySelector<HTMLSelectElement>(`[data-origin-plane-clip="${this.key(model, plane)}"]`)!.value);
+    const value = (plane: Plane) => this.state[model][plane].side;
     return new pc.Vec3(value('yoz'), value('xoz'), value('xoy'));
   }
 
@@ -105,6 +106,8 @@ export class OriginPlaneController {
   }
 
   destroy(): void {
+    this.toggle.removeEventListener('click', this.togglePanel);
+    this.form.unmount();
     this.app.off('update', this.refreshVisuals, this);
     models.forEach(model => this.frames[model].destroy());
     this.panel.remove();
