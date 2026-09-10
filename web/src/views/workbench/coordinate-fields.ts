@@ -3,22 +3,25 @@ import type { ModelId } from '../../api/contracts';
 import type { XYZ } from '../../coordinate-math';
 import CoordinatePanel from './CoordinatePanel.vue';
 
-export interface CoordinatePanelState {
-  source: ModelId;
-  points: Record<ModelId, XYZ> | null;
-  original: boolean;
-  clippingActive: boolean;
-  jobId: string;
-  message: string;
-}
-export function mountCoordinatePanel(panel: HTMLElement, handlers: {
+import type { CoordinatePanelState } from '../../engine/tools/coordinate-query-state';
+import '../../coordinate-query.css';
+
+export function mountCoordinatePanel(root: HTMLElement, handlers: {
   onAction: (action: string) => void;
   onSource: (model: ModelId) => void;
   onChange: (values: XYZ) => void;
   onInvalid: () => void;
 }) {
+  const panel = document.createElement('section');
+  panel.className = 'coordinate-panel';
+  panel.hidden = true;
+  root.querySelector('.viewport')!.append(panel);
   const state = shallowReactive<CoordinatePanelState>({ source: 'a', points: null, original: false, clippingActive: false, jobId: '', message: '' });
   const app = createApp({ render: () => h(CoordinatePanel, { state, ...handlers }) });
   app.mount(panel);
-  return { state, destroy: () => app.unmount() };
+  return {
+    state,
+    setVisible(visible: boolean) { panel.hidden = !visible; },
+    destroy() { app.unmount(); panel.remove(); },
+  };
 }

@@ -1,3 +1,4 @@
+import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
 import { mountViewportToolbar } from '../views/workbench/viewport-toolbar';
 import BusinessTransformForm from '../views/workbench/BusinessTransformForm.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
@@ -679,7 +680,14 @@ export async function renderGenericRegistration(
     query: () => coordinateQuery?.toggleQuery(),
     toggleOrigin: model => coordinateQuery?.toggleOrigin(model) ?? false,
   });
+  const queryPanel = mountCoordinatePanel(root, {
+    onSource: model => coordinateQuery?.setSource(model),
+    onChange: values => coordinateQuery?.setCoordinates(values),
+    onInvalid: () => coordinateQuery?.handlePanelAction('invalid'),
+    onAction: action => coordinateQuery?.handlePanelAction(action),
+  });
   coordinateQuery = new CoordinateQuery({
+    panel: queryPanel,
     toolbar: queryToolbar,
     root, app: application, camera, canvas, entities, clouds, sessionId,
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: bounds.diagonal,
@@ -830,6 +838,7 @@ export async function renderGenericRegistration(
     progressResize.disconnect();
     coordinateQuery?.destroy();
     queryToolbar.destroy();
+    queryPanel.destroy();
     originPlanes.destroy();
     originPlaneUI.destroy();
     clippingHandles?.destroy();

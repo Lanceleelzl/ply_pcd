@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import CoordinateFields from './CoordinateFields.vue';
-import type { CoordinatePanelState } from './coordinate-fields';
+import type { CoordinatePanelState } from '../../engine/tools/coordinate-query-state';
 import type { ModelId } from '../../api/contracts';
 import type { XYZ } from '../../coordinate-math';
 defineProps<{ state: CoordinatePanelState }>();

@@ -1,13 +1,13 @@
-import { mountCoordinatePanel } from '../../views/workbench/coordinate-fields';
+import type { CoordinatePanelView } from './coordinate-query-state';
 import * as pc from 'playcanvas';
 import type { PreviewCloud } from '../../point-cloud';
 import { invertAffine, offsetXYZ, transformXYZ, type Matrix, type XYZ } from '../../coordinate-math';
-import '../../coordinate-query.css';
 
 type Model = 'a' | 'b';
 const models: Model[] = ['a', 'b'];
 interface Result { a_to_b: Matrix; b_to_a: Matrix; moving_model: Model }
 interface Options {
+  panel: CoordinatePanelView;
   toolbar: { setAvailable: (available: boolean, title: string) => void; setActive: (active: boolean) => void };
   root: HTMLElement; app: pc.Application; camera: pc.Entity; canvas: HTMLCanvasElement;
   entities: Record<Model, pc.Entity>; clouds: Record<Model, PreviewCloud>;
@@ -33,8 +33,6 @@ export class CoordinateQuery {
   private source: Model = 'a';
   private points: Record<Model, XYZ> | null = null;
   private signature = '';
-  private fields: ReturnType<typeof mountCoordinatePanel>;
-  private panel: HTMLElement;
   private gizmo: pc.TranslateGizmo;
   private anchor = new pc.Entity('Coordinate query handle');
   private markers: Record<Model, pc.Entity>;
@@ -44,8 +42,6 @@ export class CoordinateQuery {
 
   constructor(private options: Options) {
     const { root, app, camera } = options;
-    root.querySelector('.viewport')!.insertAdjacentHTML('beforeend', '<section class="coordinate-panel" hidden></section>');
-    this.panel = root.querySelector('.coordinate-panel')!;
     this.markers = { a: this.makeMarker('a', new pc.Color(1, 0.15, 0.12)), b: this.makeMarker('b', new pc.Color(0.12, 0.5, 1)) };
     const label = (text: string) => {
       const element = document.createElement('span'); element.className = 'coordinate-label'; element.textContent = text;
@@ -68,29 +64,30 @@ export class CoordinateQuery {
       this.setPoint(transformXYZ(options.businessMatrices[this.source], filePoint), false);
     });
     this.gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => { this.dragging = false; this.refresh(); });
-    this.fields = mountCoordinatePanel(this.panel, {
-      onSource: model => { this.source = model; this.picking = false; this.refresh(); },
-      onChange: values => { this.picking = false; this.setPoint(values); },
-      onInvalid: () => { this.fields.state.message = '请输入三个有效的有限坐标值。'; },
-      onAction: action => {
-        if (action === 'close') this.close();
-        else if (action === 'state') { this.original = !this.original; this.applyPresentation(); this.refresh(); }
-        else if (action === 'pick') {
-          this.picking = true; this.gizmo.detach();
-          this.fields.state.message = `请点击模型 ${this.source.toUpperCase()} 的可见中心点。`;
-        } else if (action === 'clear') { this.points = null; this.picking = false; this.refresh(); }
-        else if (action.startsWith('copy-')) void this.copyCoordinates(action.slice(5));
-      },
-    });
     app.on('update', this.update, this);
+  }
+
+  setSource(model: Model): void { this.source = model; this.picking = false; this.refresh(); }
+
+  setCoordinates(values: XYZ): void { this.picking = false; this.setPoint(values); }
+
+  handlePanelAction(action: string): void {
+    if (action === 'close') this.close();
+    else if (action === 'invalid') this.options.panel.state.message = '请输入三个有效的有限坐标值。';
+    else if (action === 'state') { this.original = !this.original; this.applyPresentation(); this.refresh(); }
+    else if (action === 'pick') {
+      this.picking = true; this.gizmo.detach();
+      this.options.panel.state.message = `请点击模型 ${this.source.toUpperCase()} 的可见中心点。`;
+    } else if (action === 'clear') { this.points = null; this.picking = false; this.refresh(); }
+    else if (action.startsWith('copy-')) void this.copyCoordinates(action.slice(5));
   }
 
   private async copyCoordinates(action: string): Promise<void> {
     if (!this.points || !['a', 'b', 'pair'].includes(action)) return;
     const data = action === 'pair' ? JSON.stringify({ session_id: this.options.sessionId, job_id: this.jobId,
       model_a: this.points.a, model_b: this.points.b }, null, 2) : this.points[action as Model].join(' ');
-    try { await navigator.clipboard.writeText(data); this.fields.state.message = '已复制。'; }
-    catch { this.fields.state.message = '剪贴板不可用，请从坐标框复制。'; }
+    try { await navigator.clipboard.writeText(data); this.options.panel.state.message = '已复制。'; }
+    catch { this.options.panel.state.message = '剪贴板不可用，请从坐标框复制。'; }
   }
 
   private makeMarker(model: Model, color: pc.Color): pc.Entity {
@@ -123,13 +120,13 @@ export class CoordinateQuery {
 
   private open(): void {
     if (!this.result || this.signature !== this.currentSignature()) { this.invalidate(); return; }
-    this.active = true; this.panel.hidden = false; this.options.toolbar.setActive(true); this.options.lock(true);
+    this.active = true; this.options.panel.setVisible(true); this.options.toolbar.setActive(true); this.options.lock(true);
     this.refresh();
   }
 
   close(): void {
     this.original = false; this.applyPresentation(); this.active = false; this.picking = false;
-    this.panel.hidden = true; this.options.toolbar.setActive(false); this.gizmo.detach(); this.hovered = false;
+    this.options.panel.setVisible(false); this.options.toolbar.setActive(false); this.gizmo.detach(); this.hovered = false;
     this.options.lock(false); this.refresh();
   }
 
@@ -154,9 +151,9 @@ export class CoordinateQuery {
   }
 
   private refresh(attach = true): void {
-    Object.assign(this.fields.state, { source: this.source, points: this.points, original: this.original,
+    Object.assign(this.options.panel.state, { source: this.source, points: this.points, original: this.original,
       clippingActive: this.clippingActive, jobId: this.jobId });
-    this.fields.state.message = this.points ? '已按 ICP 矩阵换算，坐标不随显示状态变化。' : '使用 ICP 结果，可场景取点或直接输入 XYZ。';
+    this.options.panel.state.message = this.points ? '已按 ICP 矩阵换算，坐标不随显示状态变化。' : '使用 ICP 结果，可场景取点或直接输入 XYZ。';
     if (attach) {
       this.gizmo.detach(); this.hovered = false;
       if (this.points && this.active && !this.picking && !this.clippingActive) {
@@ -188,7 +185,7 @@ export class CoordinateQuery {
       this.picking = false;
       const filePoint = offsetXYZ([cloud.positions[best * 3], cloud.positions[best * 3 + 1], cloud.positions[best * 3 + 2]], origins[this.source]);
       this.setPoint(transformXYZ(this.options.businessMatrices[this.source], filePoint));
-    } else this.fields.state.message = '未命中可见点，请重新点击或输入坐标。';
+    } else this.options.panel.state.message = '未命中可见点，请重新点击或输入坐标。';
     return true;
   }
 
@@ -207,7 +204,7 @@ export class CoordinateQuery {
     this.clippingActive = active;
     if (active) this.picking = false;
     this.refresh();
-    if (active) this.fields.state.message = '正在编辑剖切；关闭剖切面板后恢复点移动手柄，剖切效果仍保留。';
+    if (active) this.options.panel.state.message = '正在编辑剖切；关闭剖切面板后恢复点移动手柄，剖切效果仍保留。';
   }
 
   destroy(): void {
@@ -220,8 +217,6 @@ export class CoordinateQuery {
       this.labels[model].remove();
       this.axisLabels[model].forEach(label => label.remove());
     });
-    this.fields.destroy();
-    this.panel.remove();
   }
 
   private update(): void {
