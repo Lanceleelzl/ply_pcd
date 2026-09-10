@@ -1,3 +1,4 @@
+import ClippingSettings from '../views/workbench/ClippingSettings.vue';
 import ClippingControls from '../views/workbench/ClippingControls.vue';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
 import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
@@ -105,19 +106,16 @@ export async function renderGenericRegistration(
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
           <div id="clipping-controls"></div>
           <div id="joint-clipping">
-            <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
-            <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
+            <div id="joint-clipping-settings"></div>
             <div id="axis-clipping" hidden><div class="axis-clipping-grid">${['x', 'y', 'z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="clip-${axis}-min-enabled" type="checkbox">最小</label><input id="clip-${axis}-min" type="number" step="0.01"><label><input id="clip-${axis}-max-enabled" type="checkbox">最大</label><input id="clip-${axis}-max" type="number" step="0.01">`).join('')}</div><button id="axis-reset">重置轴向范围</button></div>
             <div id="box-clipping" hidden><p class="clip-mode-hint">中心手柄可轴向／平面平移；仅拖动圆环时旋转。六个贴面箭头用于单独调整对应剖切面。</p><div class="clip-tool-row"><button id="clip-fit-a">适配 A</button><button id="clip-fit-b">适配 B</button><button id="clip-fit-all">适配全部</button></div></div>
-            <label class="clip-helper-option"><input id="clip-helper-visible" type="checkbox" checked>显示剖切辅助体与手柄</label>
             <button id="clipping-clear" class="full-width">清除联合剖切</button>
           </div>
           <div id="independent-clipping" hidden>
             ${(['a','b'] as const).map(model => `<fieldset class="independent-clip-model" data-independent-model="${model}"><legend>模型 ${model.toUpperCase()}</legend>
-              <label>剖切方式<select id="ind-${model}-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
+              <div id="ind-${model}-settings"></div>
               <div data-independent-axis="${model}" hidden><div class="axis-clipping-grid">${['x','y','z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="ind-${model}-${axis}-min-enabled" type="checkbox">最小</label><input id="ind-${model}-${axis}-min" type="number" step="0.01"><label><input id="ind-${model}-${axis}-max-enabled" type="checkbox">最大</label><input id="ind-${model}-${axis}-max" type="number" step="0.01">`).join('')}</div><button data-independent-axis-reset="${model}">重置 ${model.toUpperCase()} 范围</button></div>
               <div data-independent-box="${model}" hidden><p class="clip-mode-hint">选择「编辑 ${model.toUpperCase()}」后可使用中心和六面手柄。</p><button data-independent-fit="${model}">适配模型 ${model.toUpperCase()}</button></div>
-              <label class="clip-helper-option"><input id="ind-${model}-helper-visible" type="checkbox" checked>显示 ${model.toUpperCase()} 辅助体</label>
               <button data-independent-clear="${model}" class="full-width">清除模型 ${model.toUpperCase()} 剖切</button>
             </fieldset>`).join('')}
           </div>
@@ -208,7 +206,7 @@ export async function renderGenericRegistration(
   rotate.mouseButtons[1] = rotate.mouseButtons[2] = false;
   clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
   clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
-  const clippingState = shallowReactive(new ClippingStateController());
+  const clippingState = reactive(new ClippingStateController());
   let clippingScene: ClippingSceneController | null = null;
   let clippingInteractionActive = false;
   let running = false;
@@ -428,19 +426,11 @@ export async function renderGenericRegistration(
   const clippingToggle = root.querySelector<HTMLButtonElement>('#clipping-toggle')!;
   const clippingPanel = root.querySelector<HTMLElement>('#clipping-panel')!;
   const originPlanePanel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
-  const clippingMode = root.querySelector<HTMLSelectElement>('#clipping-mode')!;
-  const clippingScope = root.querySelector<HTMLSelectElement>('#clipping-scope')!;
   const axisClipping = root.querySelector<HTMLElement>('#axis-clipping')!;
   const boxClipping = root.querySelector<HTMLElement>('#box-clipping')!;
-  const clipHelperVisible = root.querySelector<HTMLInputElement>('#clip-helper-visible')!;
   const jointClipping = root.querySelector<HTMLElement>('#joint-clipping')!;
   const independentClipping = root.querySelector<HTMLElement>('#independent-clipping')!;
-  const independentModes: Record<ModelId, HTMLSelectElement> = {
-    a: root.querySelector<HTMLSelectElement>('#ind-a-mode')!, b: root.querySelector<HTMLSelectElement>('#ind-b-mode')!,
-  };
-  const independentHelperInputs: Record<ModelId, HTMLInputElement> = {
-    a: root.querySelector<HTMLInputElement>('#ind-a-helper-visible')!, b: root.querySelector<HTMLInputElement>('#ind-b-helper-visible')!,
-  };
+  const clippingSettings = reactive<{ scope: 'both' | ModelId }>({ scope: 'both' });
   resetButton.addEventListener('click', () => { if (!running) display.reset(effectiveMoving()); });
   root.querySelector('#fit')!.addEventListener('click', () => cameraController.fit());
   clippingToggle.addEventListener('click', () => {
@@ -510,7 +500,7 @@ export async function renderGenericRegistration(
     independentBoxes: independentClipBoxes,
     pointMaterials,
     gaussian: gaussianController,
-    scope: () => clippingScope.value as 'both' | ModelId,
+    scope: () => clippingSettings.scope,
     axisState: model => axisClipState(clippingState.controlMode === 'joint' ? axisInputs : independentAxisInputs[model]),
     originState: model => ({ sides: originPlanes.clipSides(model), worldToOrigin: originPlanes.getWorldToOrigin(model) }),
   });
@@ -547,11 +537,7 @@ export async function renderGenericRegistration(
   root.querySelector('#clip-fit-all')!.addEventListener('click', () => fitClipBox(['a', 'b']));
   (['a', 'b'] as ModelId[]).forEach(model => root.querySelector(`[data-independent-fit="${model}"]`)!.addEventListener('click', () => fitClipBox([model], independentClipBoxes[model])));
   const refreshClippingMode = () => {
-    clippingState.jointMode = clippingMode.value as typeof clippingState.jointMode;
-    clippingState.jointHelperVisible = clipHelperVisible.checked;
     (['a', 'b'] as ModelId[]).forEach(model => {
-      clippingState.independentModes[model] = independentModes[model].value as typeof clippingState.independentModes[ModelId];
-      clippingState.independentHelpers[model] = independentHelperInputs[model].checked;
       root.querySelector<HTMLElement>(`[data-independent-axis="${model}"]`)!.hidden = clippingState.independentModes[model] !== 'axis';
       root.querySelector<HTMLElement>(`[data-independent-box="${model}"]`)!.hidden = clippingState.independentModes[model] !== 'box';
       independentClipBoxes[model].enabled = clippingState.controlMode === 'independent'
@@ -573,13 +559,26 @@ export async function renderGenericRegistration(
       ? '左键空白：旋转　中键：平移　滚轮：缩放　左键手柄：调整剖切长方体'
       : '左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型';
   };
-  clippingMode.addEventListener('change', refreshClippingMode);
-  clipHelperVisible.addEventListener('change', () => {
-    clipBox.enabled = clippingMode.value === 'box' && clipHelperVisible.checked;
-    attach();
-  });
   root.querySelector('#clipping-clear')!.addEventListener('click', () => {
-    clippingMode.value = 'off'; resetAxisInputs(); fitClipBox(['a', 'b']); refreshClippingMode();
+    clippingState.jointMode = 'off'; resetAxisInputs(); fitClipBox(['a', 'b']); refreshClippingMode();
+  });
+  const clippingSettingsApps = (['joint', 'a', 'b'] as const).map(model => {
+    const app = createApp({ render: () => h(ClippingSettings, {
+      model, mode: model === 'joint' ? clippingState.jointMode : clippingState.independentModes[model],
+      helper: model === 'joint' ? clippingState.jointHelperVisible : clippingState.independentHelpers[model],
+      scope: clippingSettings.scope,
+      onMode: (mode: typeof clippingState.jointMode) => {
+        if (model === 'joint') clippingState.jointMode = mode; else clippingState.independentModes[model] = mode;
+        refreshClippingMode();
+      },
+      onHelper: (visible: boolean) => {
+        if (model === 'joint') clippingState.jointHelperVisible = visible; else clippingState.independentHelpers[model] = visible;
+        refreshClippingMode();
+      },
+      onScope: (scope: 'both' | ModelId) => { clippingSettings.scope = scope; refreshClippingMode(); },
+    }) });
+    app.mount(root.querySelector<HTMLElement>(model === 'joint' ? '#joint-clipping-settings' : `#ind-${model}-settings`)!);
+    return app;
   });
   const clippingControlsApp = createApp({ render: () => h(ClippingControls, {
     controlMode: clippingState.controlMode, editor: clippingState.editor,
@@ -588,11 +587,9 @@ export async function renderGenericRegistration(
   }) });
   clippingControlsApp.mount(root.querySelector<HTMLElement>('#clipping-controls')!);
   (['a', 'b'] as ModelId[]).forEach(model => {
-    independentModes[model].addEventListener('change', refreshClippingMode);
-    independentHelperInputs[model].addEventListener('change', refreshClippingMode);
     root.querySelector(`[data-independent-axis-reset="${model}"]`)!.addEventListener('click', () => resetAxisInputSet(independentAxisInputs[model], originalBounds));
     root.querySelector(`[data-independent-clear="${model}"]`)!.addEventListener('click', () => {
-      independentModes[model].value = 'off'; resetAxisInputSet(independentAxisInputs[model], originalBounds);
+      clippingState.independentModes[model] = 'off'; resetAxisInputSet(independentAxisInputs[model], originalBounds);
       fitClipBox([model], independentClipBoxes[model]); refreshClippingMode();
     });
   });
@@ -839,6 +836,7 @@ export async function renderGenericRegistration(
     queryToolbar.destroy();
     queryPanel.destroy();
     clippingControlsApp.unmount();
+    clippingSettingsApps.forEach(app => app.unmount());
     queryLabels.destroy();
     originPlanes.destroy();
     originPlaneUI.destroy();
