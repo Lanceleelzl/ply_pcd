@@ -13,4 +13,9 @@ export interface CoordinatePanelState {
 export interface CoordinatePanelView {
   state: CoordinatePanelState;
   setVisible: (visible: boolean) => void;
+  copyText: (text: string) => Promise<void>;
+}
+
+export interface CoordinateLabelsView {
+  set: (model: ModelId, index: number, position: { x: number; y: number } | null) => void;
 }

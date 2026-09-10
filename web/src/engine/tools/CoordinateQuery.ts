@@ -1,4 +1,4 @@
-import type { CoordinatePanelView } from './coordinate-query-state';
+import type { CoordinatePanelView, CoordinateLabelsView } from './coordinate-query-state';
 import * as pc from 'playcanvas';
 import type { PreviewCloud } from '../../point-cloud';
 import { invertAffine, offsetXYZ, transformXYZ, type Matrix, type XYZ } from '../../coordinate-math';
@@ -8,8 +8,9 @@ const models: Model[] = ['a', 'b'];
 interface Result { a_to_b: Matrix; b_to_a: Matrix; moving_model: Model }
 interface Options {
   panel: CoordinatePanelView;
+  labels: CoordinateLabelsView;
   toolbar: { setAvailable: (available: boolean, title: string) => void; setActive: (active: boolean) => void };
-  root: HTMLElement; app: pc.Application; camera: pc.Entity; canvas: HTMLCanvasElement;
+  app: pc.Application; camera: pc.Entity; canvas: HTMLCanvasElement;
   entities: Record<Model, pc.Entity>; clouds: Record<Model, PreviewCloud>;
   origins: Record<Model, XYZ>; diagonal: number; sessionId: string;
   businessMatrices: Record<Model, Matrix>;
@@ -36,19 +37,11 @@ export class CoordinateQuery {
   private gizmo: pc.TranslateGizmo;
   private anchor = new pc.Entity('Coordinate query handle');
   private markers: Record<Model, pc.Entity>;
-  private labels: Record<Model, HTMLElement>;
   private axesVisible: Record<Model, boolean> = { a: false, b: false };
-  private axisLabels: Record<Model, HTMLElement[]>;
 
   constructor(private options: Options) {
-    const { root, app, camera } = options;
+    const { app, camera } = options;
     this.markers = { a: this.makeMarker('a', new pc.Color(1, 0.15, 0.12)), b: this.makeMarker('b', new pc.Color(0.12, 0.5, 1)) };
-    const label = (text: string) => {
-      const element = document.createElement('span'); element.className = 'coordinate-label'; element.textContent = text;
-      root.querySelector('.viewport')!.append(element); element.hidden = true; return element;
-    };
-    this.labels = { a: label('A 点'), b: label('B 点') };
-    this.axisLabels = { a: ['0', 'X', 'Y', 'Z'].map(axis => label(`A-${axis}`)), b: ['0', 'X', 'Y', 'Z'].map(axis => label(`B-${axis}`)) };
     app.root.addChild(this.anchor);
     this.gizmo = new pc.TranslateGizmo(camera.camera!, pc.TranslateGizmo.createLayer(app, 'Coordinate point translation'));
     this.gizmo.mouseButtons[1] = this.gizmo.mouseButtons[2] = false;
@@ -86,7 +79,7 @@ export class CoordinateQuery {
     if (!this.points || !['a', 'b', 'pair'].includes(action)) return;
     const data = action === 'pair' ? JSON.stringify({ session_id: this.options.sessionId, job_id: this.jobId,
       model_a: this.points.a, model_b: this.points.b }, null, 2) : this.points[action as Model].join(' ');
-    try { await navigator.clipboard.writeText(data); this.options.panel.state.message = '已复制。'; }
+    try { await this.options.panel.copyText(data); this.options.panel.state.message = '已复制。'; }
     catch { this.options.panel.state.message = '剪贴板不可用，请从坐标框复制。'; }
   }
 
@@ -189,14 +182,12 @@ export class CoordinateQuery {
     return true;
   }
 
-  private placeLabel(element: HTMLElement, world: pc.Vec3, offset: number): void {
-    const { camera, canvas } = this.options;
+  private placeLabel(model: Model, index: number, world: pc.Vec3, offset: number): void {
+    const { camera, canvas, labels } = this.options;
     const screen = camera.camera!.worldToScreen(world);
-    element.hidden = world.clone().sub(camera.getPosition()).dot(camera.forward) <= 0;
-    const x = screen.x;
-    const y = screen.y;
-    element.hidden ||= x < 0 || x > canvas.clientWidth || y < 0 || y > canvas.clientHeight;
-    element.style.left = `${x + 10}px`; element.style.top = `${y + offset}px`;
+    const visible = world.clone().sub(camera.getPosition()).dot(camera.forward) > 0
+      && screen.x >= 0 && screen.x <= canvas.clientWidth && screen.y >= 0 && screen.y <= canvas.clientHeight;
+    labels.set(model, index, visible ? { x: screen.x + 10, y: screen.y + offset } : null);
   }
 
   setClippingActive(active: boolean): void {
@@ -214,8 +205,6 @@ export class CoordinateQuery {
     this.anchor.destroy();
     models.forEach(model => {
       this.markers[model].destroy();
-      this.labels[model].remove();
-      this.axisLabels[model].forEach(label => label.remove());
     });
   }
 
@@ -223,7 +212,7 @@ export class CoordinateQuery {
     if (!this.active && this.result && this.signature !== this.currentSignature()) this.invalidate();
     for (const model of models) {
       const marker = this.markers[model]; marker.enabled = this.active && Boolean(this.points);
-      this.labels[model].hidden = !marker.enabled;
+      if (!marker.enabled) this.options.labels.set(model, 0, null);
       if (marker.enabled && this.points) {
         const position = this.displayPoint(model, this.points[model]); marker.setPosition(position);
         const camera = this.options.camera.camera!;
@@ -231,18 +220,18 @@ export class CoordinateQuery {
         const size = (camera.projection === pc.PROJECTION_ORTHOGRAPHIC ? camera.orthoHeight * 2 : 2 * depth * Math.tan(camera.fov * Math.PI / 360)) / Math.max(1, this.options.canvas.clientHeight) * 11;
         const diameter = model === 'b' ? size * 1.6 : size;
         marker.setLocalScale(diameter, diameter, diameter);
-        this.placeLabel(this.labels[model], position, model === 'a' ? -19 : 3);
+        this.placeLabel(model, 0, position, model === 'a' ? -19 : 3);
       }
-      this.axisLabels[model].forEach(label => { label.hidden = true; });
+      if (!this.axesVisible[model]) for (let index = 1; index <= 4; index++) this.options.labels.set(model, index, null);
       if (this.axesVisible[model]) {
         const zero: XYZ = [0, 0, 0]; const start = this.displayFilePoint(model, zero);
-        this.placeLabel(this.axisLabels[model][0], start, model === 'a' ? -20 : 3);
+        this.placeLabel(model, 1, start, model === 'a' ? -20 : 3);
         const colors = [pc.Color.RED, pc.Color.GREEN, pc.Color.BLUE];
         for (let axis = 0; axis < 3; axis++) {
           const end: XYZ = [0, 0, 0]; end[axis] = Math.max(0.1, this.options.diagonal * 0.12);
           const world = this.displayFilePoint(model, end);
           this.options.app.drawLine(start, world, colors[axis], false);
-          this.placeLabel(this.axisLabels[model][axis + 1], world, model === 'a' ? -20 : 3);
+          this.placeLabel(model, axis + 2, world, model === 'a' ? -20 : 3);
         }
       }
     }

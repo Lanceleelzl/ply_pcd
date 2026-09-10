@@ -22,6 +22,7 @@ export function mountCoordinatePanel(root: HTMLElement, handlers: {
   return {
     state,
     setVisible(visible: boolean) { panel.hidden = !visible; },
+    copyText(text: string) { return navigator.clipboard.writeText(text); },
     destroy() { app.unmount(); panel.remove(); },
   };
 }
