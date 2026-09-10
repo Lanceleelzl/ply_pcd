@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-10：新增 `web/src/origin-planes.test.ts`，使用 PlayCanvas NullGraphicsDevice、真实实体和 RenderComponent 验证六个正负半空间、原点边界保留、A／B 隔离、平移旋转及非均匀缩放后的多平面交集、模型显隐恢复、清空状态和销毁监听／实体清理。`node --experimental-transform-types web/src/origin-planes.test.ts` 与 Vue 类型检查通过。本轮仅添加回归测试，未修改运行逻辑；该测试不渲染 GPU 画面，真实点云及 Gaussian 剖切视觉验收仍待完成。
+
 - 2026-09-10：进一步分离原点平面界面与渲染控制器：状态契约移入纯 TypeScript 文件，Vue 装配、工具栏激活态和面板生命周期移入界面层，`OriginPlaneController` 不再依赖 Vue 或 DOM，仅消费状态并管理平面及坐标剖切。类型检查与生产构建通过；Playwright 验证 A／B 独立状态、关闭保留设置、全部关闭、返回首页卸载及重新进入仅挂载一个面板，页面异常为零。实际点云与 Gaussian 剖切视觉专项回归仍待完成。
 
 - 2026-09-10：原点平面面板迁入 `OriginPlaneForm.vue`，通过类型化事件更新 A／B 显示与半空间剖切状态；控制器渲染和剖切查询改为直接读取状态，移除每帧 DOM 表单查询，销毁时卸载组件并移除按钮监听。Vue 类型检查、Web 构建及 Playwright 的模型独立编辑、关闭再打开保留设置、全部关闭和工具栏激活态验证通过。控制器暂时负责组件装配；点云及 Gaussian 实际剖切视觉效果仍待专项回归。
