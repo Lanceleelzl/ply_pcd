@@ -40,9 +40,6 @@ import type {
 import { mountWorkbenchLayout } from '../views/workbench/mount-workbench-layout';
 
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
-const formatBytes = (bytes?: number) => bytes
-  ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`
-  : '大小未知';
 
 function boundsOf(a: PreviewCloud, b: PreviewCloud): { center: pc.Vec3; diagonal: number } {
   const min = new pc.Vec3(Math.min(a.min.x, b.min.x), Math.min(a.min.y, b.min.y), Math.min(a.min.z, b.min.z));
@@ -100,27 +97,7 @@ async function initializeWorkbench(
   const infoB = session.metadata!.models.b;
   const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
   const businessTransforms: Record<ModelId, TransformParameters> = session.business_transforms ?? { a: defaultTransform(), b: defaultTransform() };
-  root.innerHTML = `
-    <main class="editor integrated-editor"><div class="workspace integrated-workspace">
-      <aside class="panel workflow-panel">
-        <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
-        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><div id="business-transform-panel"></div><p id="gaussian-status" class="gaussian-status" hidden></p></section>
-        <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
-          <div id="registration-roles"></div>
-          <div id="coarse-pose-form"></div>
-          <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
-        </section>
-        <section class="workflow-step"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
-        <section class="workflow-step"><h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">尚未提交</pre>
-          <section id="result" class="result" hidden></section>
-        </section>
-      </aside>
-      <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button><button id="origin-planes-toggle" aria-pressed="false">原点平面</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
-        <section id="clipping-panel" class="clipping-panel" hidden></section>
-        <div class="view-gizmo" aria-label="快速视角"><div class="view-cube-scene"><div class="view-cube"><button class="cube-face face-x" data-direction="1,0,0" title="沿 +X 查看">X</button><button class="cube-face face-nx" data-direction="-1,0,0" title="沿 -X 查看">−X</button><button class="cube-face face-y" data-direction="0,1,0" title="沿 +Y 查看">Y</button><button class="cube-face face-ny" data-direction="0,-1,0" title="沿 -Y 查看">−Y</button><button class="cube-face face-z" data-direction="0,0,1" title="顶视图（沿 +Z 查看）">Z</button><button class="cube-face face-nz" data-direction="0,0,-1" title="底视图（沿 -Z 查看）">−Z</button>${[-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => `<button class="cube-corner" data-direction="${x},${y},${z}" style="--cx:${x};--cy:${y};--cz:${z}" title="等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z"></button>`))).join('')}</div></div><div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div></div>
-        <div id="viewport-help" class="viewport-help">左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型</div></section>
-    </div></main>`;
-  mountWorkbenchLayout(root);
+  resources.add(mountWorkbenchLayout(root, session));
 
   const roleState = reactive({ moving: session.moving_model, direction: session.output_direction, disabled: false });
   const effectiveMoving = (): ModelId => roleState.moving === 'auto'
