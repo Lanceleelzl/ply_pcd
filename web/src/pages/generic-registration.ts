@@ -4,7 +4,7 @@ import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../e
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
 import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
 import { mountViewportToolbar } from '../views/workbench/viewport-toolbar';
-import BusinessTransformForm from '../views/workbench/BusinessTransformForm.vue';
+import BusinessTransformPanel from '../views/workbench/BusinessTransformPanel.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
@@ -88,7 +88,7 @@ export async function renderGenericRegistration(
     <main class="editor integrated-editor"><div class="workspace integrated-workspace">
       <aside class="panel workflow-panel">
         <div class="workflow-title"><div><h1>通用点云双向配准</h1><small>A：${infoA.format.toUpperCase()}　B：${infoB.format.toUpperCase()}</small></div><button id="new-task">新建</button></div>
-        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><details class="business-transform-editor"><summary>业务场景矩阵</summary><p class="business-transform-note">文件坐标 → 业务坐标；应用后需重新配准。</p><div id="business-form-a"></div><div id="business-form-b"></div><div class="business-transform-actions"><button id="save-business-transforms">应用场景矩阵</button><button id="reset-business-transforms">恢复默认</button></div><p id="business-transform-status" class="business-transform-note"></p></details><p id="gaussian-status" class="gaussian-status" hidden></p></section>
+        <section class="workflow-step completed"><h2><span>1</span> 模型</h2><p>A：${infoA.source_point_count.toLocaleString()} 点<br>B：${infoB.source_point_count.toLocaleString()} 点</p><p id="badge" class="model-role-summary"></p><div id="business-transform-panel"></div><p id="gaussian-status" class="gaussian-status" hidden></p></section>
         <section class="workflow-step"><h2><span>2</span> 方向与粗配准</h2>
           <div id="registration-roles"></div>
           <div id="coarse-pose-form"></div>
@@ -350,24 +350,16 @@ export async function renderGenericRegistration(
     translation: value.translation.map(String), rotation_degrees: value.rotation_degrees.map(String), scale: value.scale.map(String),
   });
   const businessDraft = reactive({ a: toDraft(businessTransforms.a), b: toDraft(businessTransforms.b) });
-  const businessState = shallowReactive({ disabled: false });
-  const businessApps = (['a', 'b'] as ModelId[]).map(model => {
-    const component = createApp({ render: () => h(BusinessTransformForm, {
-      model, values: businessDraft[model], disabled: businessState.disabled,
-      onChange: (kind: keyof TransformParameters, index: number, value: string) => { businessDraft[model][kind][index] = value; },
-    }) });
-    component.mount(root.querySelector<HTMLElement>(`#business-form-${model}`)!);
-    return component;
-  });
+  const businessState = shallowReactive({ disabled: false, saving: false, message: '' });
   const readBusinessTransform = (model: ModelId): TransformParameters => {
     const values = (kind: keyof TransformParameters) => businessDraft[model][kind].map(value =>
       value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(value)) as XYZ;
     return { translation: values('translation'), rotation_degrees: values('rotation_degrees'), scale: values('scale') };
   };
   const setBusinessInputs = (model: ModelId, value: TransformParameters) => { businessDraft[model] = toDraft(value); };
-  root.querySelector('#reset-business-transforms')!.addEventListener('click', () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); });
-  root.querySelector('#save-business-transforms')!.addEventListener('click', async () => {
-    const message = root.querySelector<HTMLElement>('#business-transform-status')!;
+  const applyBusinessTransforms = async () => {
+    if (businessState.disabled || businessState.saving) return;
+    businessState.saving = true;
     try {
       const next = { a: readBusinessTransform('a'), b: readBusinessTransform('b') };
       for (const value of Object.values(next)) {
@@ -378,9 +370,17 @@ export async function renderGenericRegistration(
       const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
       businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
       coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
-      message.textContent = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
-    } catch (error) { if (!signal.aborted) message.textContent = `应用失败：${String(error)}`; }
-  });
+      businessState.message = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
+    } catch (error) { if (!signal.aborted) businessState.message = `应用失败：${String(error)}`; }
+    finally { businessState.saving = false; }
+  };
+  const businessPanelApp = createApp({ render: () => h(BusinessTransformPanel, {
+    drafts: businessDraft, ...businessState,
+    onChange: (model: ModelId, kind: keyof TransformParameters, index: number, value: string) => { businessDraft[model][kind][index] = value; },
+    onReset: () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); },
+    onApply: applyBusinessTransforms,
+  }) });
+  businessPanelApp.mount(root.querySelector<HTMLElement>('#business-transform-panel')!);
 
   let clippingHandles: ClippingHandles | null = null;
   application.on('update', () => {
@@ -579,8 +579,7 @@ export async function renderGenericRegistration(
   progressResize.observe(progressToolbar);
   progressResize.observe(iterationProgress);
   positionProgress();
-  const registrationControls = [resetButton,
-    root.querySelector<HTMLButtonElement>('#save-business-transforms')!, root.querySelector<HTMLButtonElement>('#reset-business-transforms')!];
+  const registrationControls = [resetButton];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
     running = value;
@@ -753,7 +752,7 @@ export async function renderGenericRegistration(
     actionsApp.unmount();
     poseApp.unmount();
     rolesApp.unmount();
-    businessApps.forEach(component => component.unmount());
+    businessPanelApp.unmount();
     lifecycle.abort();
     externalSignal?.removeEventListener('abort', abortLifecycle);
     jobController.destroy();
