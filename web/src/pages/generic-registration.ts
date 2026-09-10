@@ -1,4 +1,5 @@
 import { waitForSession } from '../api/registration-api';
+import { ResourceScope } from '../app/resource-scope';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
@@ -61,27 +62,40 @@ export async function renderGenericRegistration(
 ): Promise<() => void> {
   externalSignal?.throwIfAborted();
   const lifecycle = new AbortController();
-  const abortLifecycle = () => lifecycle.abort();
-  externalSignal?.addEventListener('abort', abortLifecycle, { once: true });
+  const resources = new ResourceScope();
+  const dispose = () => {
+    lifecycle.abort();
+    externalSignal?.removeEventListener('abort', dispose);
+    try { resources.dispose(); } catch (error) { console.error(error); }
+  };
+  externalSignal?.addEventListener('abort', dispose, { once: true });
   const { signal } = lifecycle;
+  try {
+    await initializeWorkbench(root, sessionId, signal, resources, navigateHome);
+    signal.throwIfAborted();
+    return dispose;
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+}
+
+async function initializeWorkbench(
+  root: HTMLElement,
+  sessionId: string,
+  signal: AbortSignal,
+  resources: ResourceScope,
+  navigateHome?: () => void,
+): Promise<void> {
   root.innerHTML = '<main class="loading"><h2>正在生成双模型预览</h2><pre id="loading-status">queued</pre></main>';
   const statusElement = root.querySelector('#loading-status')!;
-  const { session, clouds: [cloudA, cloudB] } = await (async () => {
-    try {
-      const session = await waitForSession(sessionId, signal, status => {
-        statusElement.textContent = `预览状态：${status}`;
-      });
-      const clouds = await Promise.all([
-        loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
-      ]);
-      signal.throwIfAborted();
-      return { session, clouds };
-    } catch (error) {
-      lifecycle.abort();
-      externalSignal?.removeEventListener('abort', abortLifecycle);
-      throw error;
-    }
-  })();
+  const session = await waitForSession(sessionId, signal, status => {
+    statusElement.textContent = `预览状态：${status}`;
+  });
+  const [cloudA, cloudB] = await Promise.all([
+    loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
+  ]);
+  signal.throwIfAborted();
   const infoA = session.metadata!.models.a;
   const infoB = session.metadata!.models.b;
   const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
@@ -118,6 +132,7 @@ export async function renderGenericRegistration(
   viewportElement.style.minHeight = '0';
   viewportElement.style.overflow = 'hidden';
   const engine = new RegistrationApplication({ canvas, viewport: viewportElement });
+  resources.add(() => engine.destroy());
   const application = engine.app;
   const camera = engine.camera;
   const entityA = createPointCloudEntity(application, cloudA, new pc.Color(0.68, 0.72, 0.78), 'Model A');
@@ -149,8 +164,10 @@ export async function renderGenericRegistration(
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const originPlaneUI = mountOriginPlanePanel(root);
+  resources.add(() => originPlaneUI.destroy());
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
+  resources.add(() => originPlanes.destroy());
   const displayBounds = () => {
     const min = new pc.Vec3(Infinity, Infinity, Infinity);
     const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
@@ -170,15 +187,20 @@ export async function renderGenericRegistration(
     baseDiagonal: bounds.diagonal,
     getBounds: displayBounds,
   });
+  resources.add(() => cameraController.destroy());
 
   const movingTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Moving Model Translation');
   const movingRotateLayer = pc.RotateGizmo.createLayer(application, 'Moving Model Rotation');
   const clipTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Clipping Box Translation');
   const clipRotateLayer = pc.RotateGizmo.createLayer(application, 'Clipping Box Rotation');
   const translate = new pc.TranslateGizmo(camera.camera!, movingTranslateLayer);
+  resources.add(() => translate.destroy());
   const rotate = new pc.RotateGizmo(camera.camera!, movingRotateLayer);
+  resources.add(() => rotate.destroy());
   const clipTranslate = new pc.TranslateGizmo(camera.camera!, clipTranslateLayer);
+  resources.add(() => clipTranslate.destroy());
   const clipRotate = new pc.RotateGizmo(camera.camera!, clipRotateLayer);
+  resources.add(() => clipRotate.destroy());
   [translate, clipTranslate].forEach(gizmo => {
     gizmo.axisGap = 0.08; gizmo.axisLineLength = 0.72; gizmo.axisPlaneSize = 0.14; gizmo.axisPlaneGap = 0.22;
   });
@@ -252,6 +274,7 @@ export async function renderGenericRegistration(
   [translate, rotate].forEach(gizmo => gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => display.applyHandle()));
   type EditingToolId = 'idle' | 'model-transform' | 'clipping' | 'coordinate-query';
   const toolManager = new ToolManager<EditingToolId>();
+  resources.add(() => toolManager.destroy());
   toolManager.register({
     id: 'idle',
     activate: () => {},
@@ -319,6 +342,7 @@ export async function renderGenericRegistration(
     clipStateChanged: () => clippingScene?.sync(true),
     presentationChanged: attach,
   });
+  resources.add(() => gaussianController.destroy());
 
   const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0], disabled: false });
   const poseApp = createApp({ render: () => h(CoarsePoseForm, {
@@ -328,6 +352,7 @@ export async function renderGenericRegistration(
     },
   }) });
   poseApp.mount(root.querySelector<HTMLElement>('#coarse-pose-form')!);
+  resources.add(() => poseApp.unmount());
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
@@ -346,6 +371,7 @@ export async function renderGenericRegistration(
     onDirection: (value: RegistrationRequest['output_direction']) => { roleState.direction = value; root.querySelector<HTMLElement>('#result')!.hidden = true; },
   }) });
   rolesApp.mount(root.querySelector<HTMLElement>('#registration-roles')!);
+  resources.add(() => rolesApp.unmount());
   refreshRoles();
 
   const toDraft = (value: TransformParameters) => ({
@@ -383,6 +409,7 @@ export async function renderGenericRegistration(
     onApply: applyBusinessTransforms,
   }) });
   businessPanelApp.mount(root.querySelector<HTMLElement>('#business-transform-panel')!);
+  resources.add(() => businessPanelApp.unmount());
 
   let clippingHandles: ClippingHandles | null = null;
   application.on('update', () => {
@@ -450,6 +477,7 @@ export async function renderGenericRegistration(
     () => clippingState.helperVisible(),
     active => { gizmoTransforming = active; },
   );
+  resources.add(() => clippingHandles?.destroy());
 
   const worldBounds = (models: ModelId[]) => {
     const min = new pc.Vec3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
@@ -517,6 +545,7 @@ export async function renderGenericRegistration(
     },
   }) });
   clippingPanelApp.mount(clippingPanel);
+  resources.add(() => clippingPanelApp.unmount());
 
   refreshClippingMode();
   root.querySelector('#new-task')!.addEventListener('click', () => {
@@ -550,12 +579,14 @@ export async function renderGenericRegistration(
     },
     dragBlocked: () => gizmoTransforming || Boolean(coordinateQuery?.dragging),
   });
+  resources.add(() => inputController.destroy());
 
   const resultState = shallowReactive<{ result: RegistrationResult | null; direction: string }>({
     result: null, direction: 'a_to_b',
   });
   const resultApp = createApp({ render: () => h(RegistrationResultPanel, resultState) });
   resultApp.mount(root.querySelector<HTMLElement>('#result')!);
+  resources.add(() => resultApp.unmount());
   const icpValues = reactive<Record<string, string>>({
     min_rms_decrease: '0.00001', sampling_limit: '50000', overlap: '1', random_seed: '42',
   });
@@ -565,6 +596,7 @@ export async function renderGenericRegistration(
     onChange: (key: string, value: string) => { icpValues[key] = value; },
   }) });
   icpApp.mount(root.querySelector<HTMLElement>('#icp-parameters')!);
+  resources.add(() => icpApp.unmount());
   const actionState = shallowReactive({ running: false, locked: false, cancelling: false, progress: false });
   const iterationProgress = root.querySelector<HTMLElement>('#iteration-progress')!;
   const progressToolbar = root.querySelector<HTMLElement>('.viewport-toolbar')!;
@@ -578,6 +610,7 @@ export async function renderGenericRegistration(
     originPlanePanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
   };
   const progressResize = new ResizeObserver(positionProgress);
+  resources.add(() => progressResize.disconnect());
   progressResize.observe(progressToolbar);
   progressResize.observe(iterationProgress);
   positionProgress();
@@ -599,13 +632,16 @@ export async function renderGenericRegistration(
     query: () => coordinateQuery?.toggleQuery(),
     toggleOrigin: model => coordinateQuery?.toggleOrigin(model) ?? false,
   });
+  resources.add(() => queryToolbar.destroy());
   const queryPanel = mountCoordinatePanel(root, {
     onSource: model => coordinateQuery?.setSource(model),
     onChange: values => coordinateQuery?.setCoordinates(values),
     onInvalid: () => coordinateQuery?.handlePanelAction('invalid'),
     onAction: action => coordinateQuery?.handlePanelAction(action),
   });
+  resources.add(() => queryPanel.destroy());
   const queryLabels = mountCoordinateLabels(root);
+  resources.add(() => queryLabels.destroy());
   coordinateQuery = new CoordinateQuery({
     labels: queryLabels,
     panel: queryPanel,
@@ -633,6 +669,7 @@ export async function renderGenericRegistration(
       return clippingScene?.visiblePoint(model, point) ?? true;
     },
   });
+  resources.add(() => coordinateQuery?.destroy());
   root.querySelector('#origin-planes-toggle')!.addEventListener('click', () => {
     if (originPlanePanel.hidden) return;
     clippingPanel.hidden = true; clippingInteractionActive = false;
@@ -673,6 +710,7 @@ export async function renderGenericRegistration(
         : '任务已终止，可调整参数或粗配准后重新执行。';
     },
   }, signal);
+  resources.add(() => jobController.destroy());
   const setProgress = (visible: boolean) => {
     actionState.progress = visible;
     jobController.setProgressVisible(actionState.progress);
@@ -720,6 +758,7 @@ export async function renderGenericRegistration(
     ...actionState, onRun: runRegistration, onCancel: cancelRegistration, onProgress: setProgress,
   }) });
   actionsApp.mount(root.querySelector<HTMLElement>('#registration-actions-host')!);
+  resources.add(() => actionsApp.unmount());
 
   const latest = session.registrations?.at(-1);
   if (latest?.status === 'succeeded' && latest.result_url) {
@@ -728,6 +767,7 @@ export async function renderGenericRegistration(
       const response = await fetch(latest.result_url, { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json() as RegistrationResult;
+      signal.throwIfAborted();
       const matching = result.coordinate_space === 'business' && (['a', 'b'] as ModelId[]).every(model => {
         const matrix = result.business_transforms?.[model].matrix ?? transformParametersMatrix(defaultTransform());
         return matrix.flat().every((value, index) => Math.abs(value-display.businessMatrices[model].flat()[index]) < 1e-12);
@@ -745,36 +785,4 @@ export async function renderGenericRegistration(
       }
     } catch { if (!signal.aborted) root.querySelector<HTMLElement>('#job-status')!.textContent = '历史结果暂时无法加载，可重新配准。'; }
   }
-  let destroyed = false;
-  return () => {
-    if (destroyed) return;
-    destroyed = true;
-    resultApp.unmount();
-    icpApp.unmount();
-    actionsApp.unmount();
-    poseApp.unmount();
-    rolesApp.unmount();
-    businessPanelApp.unmount();
-    lifecycle.abort();
-    externalSignal?.removeEventListener('abort', abortLifecycle);
-    jobController.destroy();
-    progressResize.disconnect();
-    coordinateQuery?.destroy();
-    queryToolbar.destroy();
-    queryPanel.destroy();
-    clippingPanelApp.unmount();
-    queryLabels.destroy();
-    originPlanes.destroy();
-    originPlaneUI.destroy();
-    clippingHandles?.destroy();
-    gaussianController.destroy();
-    toolManager.destroy();
-    translate.destroy();
-    rotate.destroy();
-    clipTranslate.destroy();
-    clipRotate.destroy();
-    inputController.destroy();
-    cameraController.destroy();
-    engine.destroy();
-  };
 }
