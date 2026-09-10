@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-10：真实数据查询点 X／Y／Z 三轴拖动分别通过，三次 A／B 坐标均更新且模型初始矩阵不变；最终坐标对使用服务正反矩阵校验的最大绝对误差为 5.80e-12。中键相机平移后标签随点移动，六项坐标及模型矩阵不变。证据补入 `docs/coordinate-query-browser-regression.md`；本轮未修改运行逻辑，相机旋转／缩放和剖切边界仍待专项验证。
+
 - 2026-09-10：新增 `InputController.test.ts` 自动回归，验证手柄事件传播与取点消费的区别、相机旋转／平移、拖动抑制、释放结束导航、滚轮和销毁监听清理。`node --experimental-transform-types web/src/engine/core/InputController.test.ts` 与 Vue 类型检查通过。本轮仅添加测试和验证说明，未修改运行逻辑；Node EventTarget 验证不替代浏览器捕获／冒泡及 PlayCanvas 集成检查。
 
 - 2026-09-10：真实数据 B 场景取点成功；手柄回归发现查询悬停事件被输入层吞掉，已将拦截条件从消费 pointerdown 改为只阻止相机导航。类型检查、Web 构建通过；1920×1080 浏览器平面手柄拖动后 A／B 坐标同步更新，粗配准初始矩阵保持不变。证据见 `docs/coordinate-query-browser-regression.md`，多轴拖动与标签运动视觉仍待验证。
