@@ -1,3 +1,5 @@
+import AxisRangeForm from '../views/workbench/AxisRangeForm.vue';
+import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
 import ClippingSettings from '../views/workbench/ClippingSettings.vue';
 import ClippingControls from '../views/workbench/ClippingControls.vue';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
@@ -107,14 +109,14 @@ export async function renderGenericRegistration(
           <div id="clipping-controls"></div>
           <div id="joint-clipping">
             <div id="joint-clipping-settings"></div>
-            <div id="axis-clipping" hidden><div class="axis-clipping-grid">${['x', 'y', 'z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="clip-${axis}-min-enabled" type="checkbox">最小</label><input id="clip-${axis}-min" type="number" step="0.01"><label><input id="clip-${axis}-max-enabled" type="checkbox">最大</label><input id="clip-${axis}-max" type="number" step="0.01">`).join('')}</div><button id="axis-reset">重置轴向范围</button></div>
+            <div id="axis-clipping" hidden><div id="joint-axis-range"></div><button id="axis-reset">重置轴向范围</button></div>
             <div id="box-clipping" hidden><p class="clip-mode-hint">中心手柄可轴向／平面平移；仅拖动圆环时旋转。六个贴面箭头用于单独调整对应剖切面。</p><div class="clip-tool-row"><button id="clip-fit-a">适配 A</button><button id="clip-fit-b">适配 B</button><button id="clip-fit-all">适配全部</button></div></div>
             <button id="clipping-clear" class="full-width">清除联合剖切</button>
           </div>
           <div id="independent-clipping" hidden>
             ${(['a','b'] as const).map(model => `<fieldset class="independent-clip-model" data-independent-model="${model}"><legend>模型 ${model.toUpperCase()}</legend>
               <div id="ind-${model}-settings"></div>
-              <div data-independent-axis="${model}" hidden><div class="axis-clipping-grid">${['x','y','z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="ind-${model}-${axis}-min-enabled" type="checkbox">最小</label><input id="ind-${model}-${axis}-min" type="number" step="0.01"><label><input id="ind-${model}-${axis}-max-enabled" type="checkbox">最大</label><input id="ind-${model}-${axis}-max" type="number" step="0.01">`).join('')}</div><button data-independent-axis-reset="${model}">重置 ${model.toUpperCase()} 范围</button></div>
+              <div data-independent-axis="${model}" hidden><div id="ind-${model}-axis-range"></div><button data-independent-axis-reset="${model}">重置 ${model.toUpperCase()} 范围</button></div>
               <div data-independent-box="${model}" hidden><p class="clip-mode-hint">选择「编辑 ${model.toUpperCase()}」后可使用中心和六面手柄。</p><button data-independent-fit="${model}">适配模型 ${model.toUpperCase()}</button></div>
               <button data-independent-clear="${model}" class="full-width">清除模型 ${model.toUpperCase()} 剖切</button>
             </fieldset>`).join('')}
@@ -440,59 +442,37 @@ export async function renderGenericRegistration(
   });
   root.querySelector('#clipping-close')!.addEventListener('click', () => { clippingPanel.hidden = true; clippingInteractionActive = false; attach(); });
 
-  const axisInputs = Object.fromEntries(['x', 'y', 'z'].flatMap(axis => [
-    [`${axis}MinEnabled`, root.querySelector<HTMLInputElement>(`#clip-${axis}-min-enabled`)!],
-    [`${axis}Min`, root.querySelector<HTMLInputElement>(`#clip-${axis}-min`)!],
-    [`${axis}MaxEnabled`, root.querySelector<HTMLInputElement>(`#clip-${axis}-max-enabled`)!],
-    [`${axis}Max`, root.querySelector<HTMLInputElement>(`#clip-${axis}-max`)!],
-  ])) as Record<string, HTMLInputElement>;
-  const independentAxisInputs = Object.fromEntries((['a', 'b'] as ModelId[]).map(model => [model, Object.fromEntries(['x', 'y', 'z'].flatMap(axis => [
-    [`${axis}MinEnabled`, root.querySelector<HTMLInputElement>(`#ind-${model}-${axis}-min-enabled`)!],
-    [`${axis}Min`, root.querySelector<HTMLInputElement>(`#ind-${model}-${axis}-min`)!],
-    [`${axis}MaxEnabled`, root.querySelector<HTMLInputElement>(`#ind-${model}-${axis}-max-enabled`)!],
-    [`${axis}Max`, root.querySelector<HTMLInputElement>(`#ind-${model}-${axis}-max`)!],
-  ]))])) as Record<ModelId, Record<string, HTMLInputElement>>;
   const originalBounds = (() => {
     const min = new pc.Vec3(Math.min(cloudA.min.x, cloudB.min.x), Math.min(cloudA.min.y, cloudB.min.y), Math.min(cloudA.min.z, cloudB.min.z));
     const max = new pc.Vec3(Math.max(cloudA.max.x, cloudB.max.x), Math.max(cloudA.max.y, cloudB.max.y), Math.max(cloudA.max.z, cloudB.max.z));
     return { min, max };
   })();
-  const resetAxisInputSet = (target: Record<string, HTMLInputElement>, bounds: { min: pc.Vec3; max: pc.Vec3 }) => {
-    ['x', 'y', 'z'].forEach(axis => {
-      target[`${axis}MinEnabled`].checked = false;
-      target[`${axis}MaxEnabled`].checked = false;
-      target[`${axis}Min`].value = bounds.min[axis as 'x' | 'y' | 'z'].toFixed(3);
-      target[`${axis}Max`].value = bounds.max[axis as 'x' | 'y' | 'z'].toFixed(3);
-    });
+  const axisInputs = reactive(createAxisRange(originalBounds.min, originalBounds.max));
+  const independentAxisInputs = { a: reactive(createAxisRange(originalBounds.min, originalBounds.max)), b: reactive(createAxisRange(originalBounds.min, originalBounds.max)) };
+  const resetAxisInputSet = (target: AxisRangeState, bounds: { min: pc.Vec3; max: pc.Vec3 }) => {
+    Object.assign(target, createAxisRange(bounds.min, bounds.max));
   };
   const resetAxisInputs = () => resetAxisInputSet(axisInputs, originalBounds);
-  resetAxisInputs();
-  (['a', 'b'] as ModelId[]).forEach(model => resetAxisInputSet(independentAxisInputs[model], originalBounds));
   root.querySelector('#axis-reset')!.addEventListener('click', resetAxisInputs);
-  const axisClipState = (target: Record<string, HTMLInputElement>) => ({
-    min: new pc.Vec3(Number(target.xMin.value), Number(target.yMin.value), Number(target.zMin.value)),
-    max: new pc.Vec3(Number(target.xMax.value), Number(target.yMax.value), Number(target.zMax.value)),
-    minEnabled: Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, target[`${axis}MinEnabled`].checked])) as Record<ClipAxis, boolean>,
-    maxEnabled: Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, target[`${axis}MaxEnabled`].checked])) as Record<ClipAxis, boolean>,
+  const axisClipState = (target: AxisRangeState) => ({
+    min: new pc.Vec3(target.x.min, target.y.min, target.z.min),
+    max: new pc.Vec3(target.x.max, target.y.max, target.z.max),
+    minEnabled: { x: target.x.minEnabled, y: target.y.minEnabled, z: target.z.minEnabled },
+    maxEnabled: { x: target.x.maxEnabled, y: target.y.maxEnabled, z: target.z.maxEnabled },
   });
   const getAxisClipState = () => axisClipState(axisInputs);
-  const setAxisBoundaryIn = (target: Record<string, HTMLInputElement>, axis: ClipAxis, side: ClipSide, value: number) => {
-    const opposite = side === 'min' ? 'max' : 'min';
-    const oppositeEnabled = target[`${axis}${opposite === 'min' ? 'Min' : 'Max'}Enabled`].checked;
-    const oppositeValue = Number(target[`${axis}${opposite === 'min' ? 'Min' : 'Max'}`].value);
-    const bounded = oppositeEnabled ? (side === 'min' ? Math.min(value, oppositeValue) : Math.max(value, oppositeValue)) : value;
-    target[`${axis}${side === 'min' ? 'Min' : 'Max'}`].value = bounded.toFixed(3);
-    target[`${axis}${side === 'min' ? 'Min' : 'Max'}Enabled`].checked = true;
-  };
+  const setAxisBoundaryIn = setAxisRangeBoundary;
   const setAxisBoundary = (axis: ClipAxis, side: ClipSide, value: number) => setAxisBoundaryIn(axisInputs, axis, side, value);
-  for (const axis of ['x', 'y', 'z'] as ClipAxis[]) for (const side of ['min', 'max'] as ClipSide[]) {
-    axisInputs[`${axis}${side === 'min' ? 'Min' : 'Max'}`].addEventListener('change', event => {
-      setAxisBoundary(axis, side, Number((event.currentTarget as HTMLInputElement).value));
-    });
-    for (const model of ['a', 'b'] as ModelId[]) independentAxisInputs[model][`${axis}${side === 'min' ? 'Min' : 'Max'}`].addEventListener('change', event => {
-      setAxisBoundaryIn(independentAxisInputs[model], axis, side, Number((event.currentTarget as HTMLInputElement).value));
-    });
-  }
+  const axisRangeApps = (['joint', 'a', 'b'] as const).map(model => {
+    const state = model === 'joint' ? axisInputs : independentAxisInputs[model];
+    const app = createApp({ render: () => h(AxisRangeForm, {
+      prefix: model === 'joint' ? 'clip' : `ind-${model}`, state,
+      onBoundary: (axis: ClipAxis, side: ClipSide, value: number) => setAxisBoundaryIn(state, axis, side, value),
+      onEnabled: (axis: ClipAxis, side: ClipSide, value: boolean) => { state[axis][`${side}Enabled`] = value; },
+    }) });
+    app.mount(root.querySelector<HTMLElement>(model === 'joint' ? '#joint-axis-range' : `#ind-${model}-axis-range`)!);
+    return app;
+  });
   clippingScene = new ClippingSceneController({
     app: application,
     state: clippingState,
@@ -836,6 +816,7 @@ export async function renderGenericRegistration(
     queryToolbar.destroy();
     queryPanel.destroy();
     clippingControlsApp.unmount();
+    axisRangeApps.forEach(app => app.unmount());
     clippingSettingsApps.forEach(app => app.unmount());
     queryLabels.destroy();
     originPlanes.destroy();
