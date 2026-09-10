@@ -6,16 +6,16 @@ import OriginPlaneForm from './OriginPlaneForm.vue';
 export function mountOriginPlanePanel(root: HTMLElement) {
   const state = reactive(createOriginPlaneState());
   const toggle = root.querySelector<HTMLButtonElement>('#origin-planes-toggle')!;
-  const panel = document.createElement('section');
-  panel.className = 'origin-planes-panel';
-  panel.hidden = true;
-  root.querySelector('.viewport')!.append(panel);
+  const panel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
   const refresh = () => {
     const active = Object.values(state).some(model => Object.values(model).some(plane => plane.visible || plane.side !== 0));
     toggle.classList.toggle('active', active);
     toggle.setAttribute('aria-pressed', String(active));
   };
-  const togglePanel = () => { panel.hidden = !panel.hidden; };
+  const togglePanel = () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) panel.parentElement!.scrollTop = 0;
+  };
   const form = createApp({ render: () => h(OriginPlaneForm, {
     state,
     onVisible: (model: ModelId, plane: OriginPlane, value: boolean) => { state[model][plane].visible = value; refresh(); },
@@ -31,7 +31,6 @@ export function mountOriginPlanePanel(root: HTMLElement) {
     destroy() {
       toggle.removeEventListener('click', togglePanel);
       form.unmount();
-      panel.remove();
     },
   };
 }

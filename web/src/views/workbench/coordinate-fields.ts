@@ -12,17 +12,17 @@ export function mountCoordinatePanel(root: HTMLElement, handlers: {
   onChange: (values: XYZ) => void;
   onInvalid: () => void;
 }) {
-  const panel = document.createElement('section');
-  panel.className = 'coordinate-panel';
-  panel.hidden = true;
-  root.querySelector('.viewport')!.append(panel);
+  const panel = root.querySelector<HTMLElement>('.coordinate-panel')!;
   const state = shallowReactive<CoordinatePanelState>({ source: 'a', points: null, original: false, clippingActive: false, jobId: '', message: '' });
   const app = createApp({ render: () => h(CoordinatePanel, { state, ...handlers }) });
   app.mount(panel);
   return {
     state,
-    setVisible(visible: boolean) { panel.hidden = !visible; },
+    setVisible(visible: boolean) {
+      panel.hidden = !visible;
+      if (visible) panel.parentElement!.scrollTop = 0;
+    },
     copyText(text: string) { return navigator.clipboard.writeText(text); },
-    destroy() { app.unmount(); panel.remove(); },
+    destroy() { app.unmount(); },
   };
 }

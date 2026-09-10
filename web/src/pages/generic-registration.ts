@@ -412,7 +412,10 @@ async function initializeWorkbench(
   root.querySelector('#fit')!.addEventListener('click', () => cameraController.fit());
   clippingToggle.addEventListener('click', () => {
     clippingPanel.hidden = !clippingPanel.hidden;
-    if (!clippingPanel.hidden) originPlanePanel.hidden = true;
+    if (!clippingPanel.hidden) {
+      originPlanePanel.hidden = true;
+      clippingPanel.parentElement!.scrollTop = 0;
+    }
     refreshClippingMode();
   });
 
@@ -580,11 +583,6 @@ async function initializeWorkbench(
   const positionProgress = () => {
     const top = progressToolbar.offsetTop + progressToolbar.offsetHeight + 8;
     iterationProgress.style.top = `${top}px`;
-    const panelTop = top + (iterationProgress.hidden ? 0 : iterationProgress.offsetHeight + 8);
-    clippingPanel.style.top = `${panelTop}px`;
-    clippingPanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
-    originPlanePanel.style.top = `${panelTop}px`;
-    originPlanePanel.style.maxHeight = `calc(100% - ${panelTop + 12}px)`;
   };
   const progressResize = new ResizeObserver(positionProgress);
   resources.add(() => progressResize.disconnect());
