@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-10：新增 `InputController.test.ts` 自动回归，验证手柄事件传播与取点消费的区别、相机旋转／平移、拖动抑制、释放结束导航、滚轮和销毁监听清理。`node --experimental-transform-types web/src/engine/core/InputController.test.ts` 与 Vue 类型检查通过。本轮仅添加测试和验证说明，未修改运行逻辑；Node EventTarget 验证不替代浏览器捕获／冒泡及 PlayCanvas 集成检查。
+
 - 2026-09-10：真实数据 B 场景取点成功；手柄回归发现查询悬停事件被输入层吞掉，已将拦截条件从消费 pointerdown 改为只阻止相机导航。类型检查、Web 构建通过；1920×1080 浏览器平面手柄拖动后 A／B 坐标同步更新，粗配准初始矩阵保持不变。证据见 `docs/coordinate-query-browser-regression.md`，多轴拖动与标签运动视觉仍待验证。
 
 - 2026-09-10：完成保留真实 PLY／PCD 会话的模型 A 场景取点浏览器回归：可见点命中后生成 A／B 业务坐标并显示两侧标签；隐藏 A 后点击不改写已有坐标；启用坐标轴剖切编辑时取点禁用，关闭面板后恢复；清除点隐藏两侧标签。本轮只验证并记录结果，未修改运行逻辑。操作、观测值和未覆盖范围见 `docs/coordinate-query-browser-regression.md`；三维手柄拖动、B 取点及相机运动标签视觉仍待验证。
