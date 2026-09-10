@@ -14,6 +14,8 @@
 
 ## 已完成
 
+- 2026-09-10：联合／独立剖切切换及编辑 A／B 按钮迁入 `ClippingControls.vue`，使用响应式状态与类型化事件调用现有剖切控制器，并提供 aria-pressed 状态。类型检查、Web 构建与 Playwright 验证通过：联合／独立切换保留 A 轴向及 B 长方体配置和编辑 B 选择，关闭面板保留剖切激活态，返回首页卸载组件。具体剖切方式、范围和辅助体表单仍待迁移。
+
 - 2026-09-10：真实数据查询点 X／Y／Z 三轴拖动分别通过，三次 A／B 坐标均更新且模型初始矩阵不变；最终坐标对使用服务正反矩阵校验的最大绝对误差为 5.80e-12。中键相机平移后标签随点移动，六项坐标及模型矩阵不变。证据补入 `docs/coordinate-query-browser-regression.md`；本轮未修改运行逻辑，相机旋转／缩放和剖切边界仍待专项验证。
 
 - 2026-09-10：新增 `InputController.test.ts` 自动回归，验证手柄事件传播与取点消费的区别、相机旋转／平移、拖动抑制、释放结束导航、滚轮和销毁监听清理。`node --experimental-transform-types web/src/engine/core/InputController.test.ts` 与 Vue 类型检查通过。本轮仅添加测试和验证说明，未修改运行逻辑；Node EventTarget 验证不替代浏览器捕获／冒泡及 PlayCanvas 集成检查。

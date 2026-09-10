@@ -1,3 +1,4 @@
+import ClippingControls from '../views/workbench/ClippingControls.vue';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
 import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
 import { mountViewportToolbar } from '../views/workbench/viewport-toolbar';
@@ -102,7 +103,7 @@ export async function renderGenericRegistration(
       </aside>
       <section class="viewport"><canvas id="viewport"></canvas><div class="viewport-toolbar toolbar"><strong>粗配准</strong><button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button><button id="fit">适应全部</button><button id="clipping-toggle">剖切</button><div class="model-visibility" aria-label="模型显示控制"><button id="toggle-model-a" class="active">A：显示</button><button id="toggle-model-b" class="active">B：显示</button><button id="gaussian-model-a" class="gaussian-toggle${session.gaussian_a_url ? ' available' : ''}" ${session.gaussian_a_url ? '' : 'disabled'} title="${session.gaussian_a_url ? `加载模型 A 原始 Gaussian（${formatBytes(session.inputs?.model_a_bytes)}）` : '模型 A 不包含完整 Gaussian 属性'}">A：高斯</button><button id="gaussian-model-b" class="gaussian-toggle${session.gaussian_b_url ? ' available' : ''}" ${session.gaussian_b_url ? '' : 'disabled'} title="${session.gaussian_b_url ? `加载模型 B 原始 Gaussian（${formatBytes(session.inputs?.model_b_bytes)}）` : '模型 B 不包含完整 Gaussian 属性'}">B：高斯</button><button id="origin-planes-toggle" aria-pressed="false">原点平面</button></div></div><div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
         <section id="clipping-panel" class="clipping-panel" hidden><div class="clipping-title"><strong>显示剖切</strong><button id="clipping-close" title="关闭面板">×</button></div><p>仅影响三维预览，不改变 ICP 输入、RMS 或最终矩阵。</p>
-          <div class="clipping-control-switch" role="group" aria-label="剖切模式"><button data-clipping-control="joint" class="active">联合剖切</button><button data-clipping-control="independent">独立剖切</button></div>
+          <div id="clipping-controls"></div>
           <div id="joint-clipping">
             <label>剖切方式<select id="clipping-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
             <label>作用模型<select id="clipping-scope"><option value="both">模型 A 和 B</option><option value="a">仅模型 A</option><option value="b">仅模型 B</option></select></label>
@@ -112,7 +113,6 @@ export async function renderGenericRegistration(
             <button id="clipping-clear" class="full-width">清除联合剖切</button>
           </div>
           <div id="independent-clipping" hidden>
-            <div class="independent-editor-switch" role="group" aria-label="当前编辑模型"><button data-clip-editor="a" class="active">编辑 A</button><button data-clip-editor="b">编辑 B</button></div>
             ${(['a','b'] as const).map(model => `<fieldset class="independent-clip-model" data-independent-model="${model}"><legend>模型 ${model.toUpperCase()}</legend>
               <label>剖切方式<select id="ind-${model}-mode"><option value="off">关闭</option><option value="axis">坐标轴</option><option value="box">长方体</option></select></label>
               <div data-independent-axis="${model}" hidden><div class="axis-clipping-grid">${['x','y','z'].map(axis => `<strong>${axis.toUpperCase()}</strong><label><input id="ind-${model}-${axis}-min-enabled" type="checkbox">最小</label><input id="ind-${model}-${axis}-min" type="number" step="0.01"><label><input id="ind-${model}-${axis}-max-enabled" type="checkbox">最大</label><input id="ind-${model}-${axis}-max" type="number" step="0.01">`).join('')}</div><button data-independent-axis-reset="${model}">重置 ${model.toUpperCase()} 范围</button></div>
@@ -208,7 +208,7 @@ export async function renderGenericRegistration(
   rotate.mouseButtons[1] = rotate.mouseButtons[2] = false;
   clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
   clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
-  const clippingState = new ClippingStateController();
+  const clippingState = shallowReactive(new ClippingStateController());
   let clippingScene: ClippingSceneController | null = null;
   let clippingInteractionActive = false;
   let running = false;
@@ -435,8 +435,6 @@ export async function renderGenericRegistration(
   const clipHelperVisible = root.querySelector<HTMLInputElement>('#clip-helper-visible')!;
   const jointClipping = root.querySelector<HTMLElement>('#joint-clipping')!;
   const independentClipping = root.querySelector<HTMLElement>('#independent-clipping')!;
-  const controlButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-clipping-control]'));
-  const editorButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-clip-editor]'));
   const independentModes: Record<ModelId, HTMLSelectElement> = {
     a: root.querySelector<HTMLSelectElement>('#ind-a-mode')!, b: root.querySelector<HTMLSelectElement>('#ind-b-mode')!,
   };
@@ -560,8 +558,6 @@ export async function renderGenericRegistration(
         && clippingState.independentModes[model] === 'box' && clippingState.independentHelpers[model];
     });
     jointClipping.hidden = clippingState.controlMode !== 'joint'; independentClipping.hidden = clippingState.controlMode !== 'independent';
-    controlButtons.forEach(button => button.classList.toggle('active', button.dataset.clippingControl === clippingState.controlMode));
-    editorButtons.forEach(button => button.classList.toggle('active', button.dataset.clipEditor === clippingState.editor));
     root.querySelectorAll<HTMLElement>('[data-independent-model]').forEach(fieldset => fieldset.classList.toggle('active-editor', fieldset.dataset.independentModel === clippingState.editor));
     const clippingEnabled = clippingState.enabled();
     clippingToggle.classList.toggle('active', clippingEnabled);
@@ -585,12 +581,12 @@ export async function renderGenericRegistration(
   root.querySelector('#clipping-clear')!.addEventListener('click', () => {
     clippingMode.value = 'off'; resetAxisInputs(); fitClipBox(['a', 'b']); refreshClippingMode();
   });
-  controlButtons.forEach(button => button.addEventListener('click', () => {
-    clippingState.controlMode = button.dataset.clippingControl as typeof clippingState.controlMode; refreshClippingMode();
-  }));
-  editorButtons.forEach(button => button.addEventListener('click', () => {
-    clippingState.editor = button.dataset.clipEditor as ModelId; refreshClippingMode();
-  }));
+  const clippingControlsApp = createApp({ render: () => h(ClippingControls, {
+    controlMode: clippingState.controlMode, editor: clippingState.editor,
+    onControl: (mode: typeof clippingState.controlMode) => { clippingState.controlMode = mode; refreshClippingMode(); },
+    onEditor: (model: ModelId) => { clippingState.editor = model; refreshClippingMode(); },
+  }) });
+  clippingControlsApp.mount(root.querySelector<HTMLElement>('#clipping-controls')!);
   (['a', 'b'] as ModelId[]).forEach(model => {
     independentModes[model].addEventListener('change', refreshClippingMode);
     independentHelperInputs[model].addEventListener('change', refreshClippingMode);
@@ -842,6 +838,7 @@ export async function renderGenericRegistration(
     coordinateQuery?.destroy();
     queryToolbar.destroy();
     queryPanel.destroy();
+    clippingControlsApp.unmount();
     queryLabels.destroy();
     originPlanes.destroy();
     originPlaneUI.destroy();
