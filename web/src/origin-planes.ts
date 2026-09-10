@@ -1,6 +1,5 @@
 import * as pc from 'playcanvas';
-import { createApp, h, reactive, type App } from 'vue';
-import OriginPlaneForm, { type OriginPlaneState } from './views/workbench/OriginPlaneForm.vue';
+import type { OriginPlaneState } from './origin-plane-state';
 import type { XYZ } from './coordinate-math';
 
 type Model = 'a' | 'b';
@@ -14,29 +13,17 @@ const planes: Array<{ id: Plane; label: string; normal: 'x' | 'y' | 'z'; color: 
 ];
 
 export class OriginPlaneController {
-  private readonly panel: HTMLElement;
-  private readonly toggle: HTMLButtonElement;
   private readonly frames: Record<Model, pc.Entity>;
   private readonly visuals: Record<Model, Record<Plane, pc.Entity>>;
   private readonly worldToOrigin = { a: new pc.Mat4(), b: new pc.Mat4() };
-  private readonly form: App;
-  private readonly state = reactive<OriginPlaneState>({
-    a: { xoy: { visible: false, side: 0 }, xoz: { visible: false, side: 0 }, yoz: { visible: false, side: 0 } },
-    b: { xoy: { visible: false, side: 0 }, xoz: { visible: false, side: 0 }, yoz: { visible: false, side: 0 } },
-  });
-  private readonly togglePanel = () => { this.panel.hidden = !this.panel.hidden; };
-
   constructor(
-    root: HTMLElement,
     private readonly app: pc.Application,
     entities: Record<Model, pc.Entity>,
     origins: Record<Model, XYZ>,
     diagonals: Record<Model, number>,
     private readonly modelVisible: Record<Model, boolean>,
+    private readonly state: OriginPlaneState,
   ) {
-    this.toggle = root.querySelector('#origin-planes-toggle')!;
-    root.querySelector('.viewport')!.insertAdjacentHTML('beforeend', '<section class="origin-planes-panel" hidden></section>');
-    this.panel = root.querySelector('.origin-planes-panel')!;
     this.frames = { a: new pc.Entity('A origin frame'), b: new pc.Entity('B origin frame') };
     this.visuals = { a: {} as Record<Plane, pc.Entity>, b: {} as Record<Plane, pc.Entity> };
     models.forEach(model => {
@@ -58,27 +45,7 @@ export class OriginPlaneController {
         frame.addChild(visual); visual.enabled = false; this.visuals[model][plane.id] = visual;
       });
     });
-    this.form = createApp({ render: () => h(OriginPlaneForm, {
-      state: this.state,
-      onVisible: (model: Model, plane: Plane, value: boolean) => { this.state[model][plane].visible = value; this.refresh(); },
-      onSide: (model: Model, plane: Plane, value: number) => { this.state[model][plane].side = value; this.refresh(); },
-      onClose: () => { this.panel.hidden = true; },
-      onClear: () => {
-        models.forEach(model => planes.forEach(plane => { Object.assign(this.state[model][plane.id], { visible: false, side: 0 }); }));
-        this.refresh();
-      },
-    }) });
-    this.form.mount(this.panel);
-    this.toggle.addEventListener('click', this.togglePanel);
     this.app.on('update', this.refreshVisuals, this);
-    this.refresh();
-  }
-
-  private refresh(): void {
-    const active = models.some(model => planes.some(plane =>
-      this.state[model][plane.id].visible || this.state[model][plane.id].side !== 0));
-    this.toggle.classList.toggle('active', active);
-    this.toggle.setAttribute('aria-pressed', String(active));
     this.refreshVisuals();
   }
 
@@ -106,10 +73,7 @@ export class OriginPlaneController {
   }
 
   destroy(): void {
-    this.toggle.removeEventListener('click', this.togglePanel);
-    this.form.unmount();
     this.app.off('update', this.refreshVisuals, this);
     models.forEach(model => this.frames[model].destroy());
-    this.panel.remove();
   }
 }

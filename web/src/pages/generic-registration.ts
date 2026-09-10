@@ -10,6 +10,7 @@ import { transformParametersMatrix, transformXYZ, type TransformParameters, type
 import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { OriginPlaneController } from '../origin-planes';
+import { mountOriginPlanePanel } from '../views/workbench/origin-plane-panel';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
@@ -165,8 +166,9 @@ export async function renderGenericRegistration(
   display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
-  const originPlanes = new OriginPlaneController(root, application, entities,
-    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible);
+  const originPlaneUI = mountOriginPlanePanel(root);
+  const originPlanes = new OriginPlaneController(application, entities,
+    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
   const displayBounds = () => {
     const min = new pc.Vec3(Infinity, Infinity, Infinity);
     const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
@@ -822,6 +824,7 @@ export async function renderGenericRegistration(
     progressResize.disconnect();
     coordinateQuery?.destroy();
     originPlanes.destroy();
+    originPlaneUI.destroy();
     clippingHandles?.destroy();
     gaussianController.destroy();
     toolManager.destroy();

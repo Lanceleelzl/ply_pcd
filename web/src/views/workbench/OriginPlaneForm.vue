@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { ModelId } from '../../api/contracts';
-export type OriginPlane = 'xoy' | 'xoz' | 'yoz';
-export type OriginPlaneState = Record<ModelId, Record<OriginPlane, { visible: boolean; side: number }>>;
+import type { OriginPlane, OriginPlaneState } from '../../origin-plane-state';
 defineProps<{ state: OriginPlaneState }>();
 const emit = defineEmits<{
   visible: [model: ModelId, plane: OriginPlane, value: boolean];
