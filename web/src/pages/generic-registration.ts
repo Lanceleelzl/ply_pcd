@@ -14,7 +14,7 @@ import BusinessTransformPanel from '../views/workbench/BusinessTransformPanel.vu
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
-import { h, reactive, shallowReactive } from 'vue';
+import { h, reactive, shallowReactive, watch } from 'vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
@@ -238,13 +238,15 @@ async function initializeWorkbench(
     entities,
     urls: { a: session.gaussian_a_url, b: session.gaussian_b_url },
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
-    clippingEnabled: () => clippingState.enabled(),
+    clippingEnabled: () => clippingState.enabled()
+      || (['a', 'b'] as ModelId[]).some(model => originPlanes.clipSides(model).lengthSq() > 0),
     clipStateChanged: () => clippingScene?.sync(true),
     presentationChanged: attach,
     displayChanged: (model, state) => { gaussianState.models[model] = state; },
     statusChanged: (message, error) => { gaussianState.message = message; gaussianState.error = error; },
   });
   resources.add(() => gaussianController.destroy());
+  resources.add(watch(originPlaneUI.state, () => gaussianController.refreshStatus()));
 
   const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0], disabled: false });
   panels.pose = () => h(CoarsePoseForm, {

@@ -1,5 +1,14 @@
 # 剖切浏览器回归
 
+## 2026-09-11：Gaussian 长方体、原点与重复释放
+
+- 完整 A Gaussian 加载成功，隐藏 B，联合长方体适配 A 后向内拖动 +Z 面。截图确认上半部分被切去，关闭辅助体仍保留切面，模型初始矩阵未变。
+- 关闭联合剖切，分别选择 A 原点 YOZ 保留 +X、保留 −X，截图呈现相反半空间；B 的 YOZ 保持不剖切，模型矩阵未变。切回中心点时 −X 状态和切面保留。
+- 两轮完整加载后切回中心点，分别观测到 WebGL2 deleteTexture／deleteBuffer 调用 8／2 次和 5／2 次；重新加载期间没有清空原点剖切设置。这是资源删除调用证据，不是显存字节统计或长期泄漏证明。
+- 修复原点剖切生效时 Gaussian 状态文案未同步的问题；重新加载实际 Gaussian 后验证启用原点剖切显示同步提示、全部关闭恢复普通提示、退出画布归零。
+- 截图均在本地忽略目录：`runtime/gaussian-box-baseline.png`、`runtime/gaussian-box-clipped.png`、`runtime/gaussian-origin-positive-x.png`、`runtime/gaussian-origin-negative-x.png`、`runtime/gaussian-origin-back-to-points.png`。
+- 尚未覆盖旋转长方体与多原点平面的 Gaussian 交集、长时间循环显存统计。
+
 ## 2026-09-11：画布适配修复后的联合六向实拖
 
 1920×1080，真实会话恢复后，按当前标签投影位置定位并确认悬停，再执行拖动；每次先重置范围或重新适配长方体。
