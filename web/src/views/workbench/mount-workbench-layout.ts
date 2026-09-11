@@ -1,4 +1,4 @@
-import { createApp, h } from 'vue';
+import { h } from 'vue';
 import type { RegistrationSession } from '../../api/contracts';
 import type { GaussianViewState } from './gaussian-view-state';
 import type { ToolbarCommand, ToolbarState } from './toolbar-state';
@@ -7,7 +7,7 @@ import type { InspectorState } from './inspector-state';
 import WorkbenchLayout from './WorkbenchLayout.vue';
 import type { WorkbenchPanels } from './workbench-panels';
 
-export function mountWorkbenchLayout(root: HTMLElement, options: {
+export interface WorkbenchLayoutOptions {
   session: RegistrationSession;
   gaussian: GaussianViewState;
   toolbar: ToolbarState;
@@ -15,9 +15,9 @@ export function mountWorkbenchLayout(root: HTMLElement, options: {
   inspector: InspectorState;
   panels: WorkbenchPanels;
   onToolbar: (command: ToolbarCommand) => void;
-}): () => void {
+}
+
+export function WorkbenchContent({ options }: { options: WorkbenchLayoutOptions }) {
   const { panels, ...props } = options;
-  const app = createApp({ render: () => h(WorkbenchLayout, props, { ...panels }) });
-  app.mount(root);
-  return () => app.unmount();
+  return h(WorkbenchLayout, props, { ...panels });
 }

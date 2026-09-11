@@ -40,7 +40,7 @@ import type {
   RegistrationRequest,
   RegistrationResult,
 } from '../api/contracts';
-import { mountWorkbenchLayout } from '../views/workbench/mount-workbench-layout';
+import type { WorkbenchLayoutOptions } from '../views/workbench/mount-workbench-layout';
 
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
 
@@ -57,9 +57,14 @@ function cloudDiagonal(cloud: PreviewCloud): number {
 export async function renderGenericRegistration(
   root: HTMLElement,
   sessionId: string,
-  externalSignal?: AbortSignal,
-  navigateHome?: () => void,
+  host: {
+    signal: AbortSignal;
+    navigateHome: () => void;
+    onStatus: (status: string) => void;
+    mountLayout: (options: WorkbenchLayoutOptions) => Promise<void>;
+  },
 ): Promise<() => void> {
+  const externalSignal = host.signal;
   externalSignal?.throwIfAborted();
   const lifecycle = new AbortController();
   const resources = new ResourceScope();
@@ -71,7 +76,7 @@ export async function renderGenericRegistration(
   externalSignal?.addEventListener('abort', dispose, { once: true });
   const { signal } = lifecycle;
   try {
-    await initializeWorkbench(root, sessionId, signal, resources, navigateHome);
+    await initializeWorkbench(root, sessionId, signal, resources, host);
     signal.throwIfAborted();
     return dispose;
   } catch (error) {
@@ -85,13 +90,9 @@ async function initializeWorkbench(
   sessionId: string,
   signal: AbortSignal,
   resources: ResourceScope,
-  navigateHome?: () => void,
+  host: Parameters<typeof renderGenericRegistration>[2],
 ): Promise<void> {
-  root.innerHTML = '<main class="loading"><h2>正在生成双模型预览</h2><pre id="loading-status">queued</pre></main>';
-  const statusElement = root.querySelector('#loading-status')!;
-  const session = await waitForSession(sessionId, signal, status => {
-    statusElement.textContent = `预览状态：${status}`;
-  });
+  const session = await waitForSession(sessionId, signal, host.onStatus);
   const [cloudA, cloudB] = await Promise.all([
     loadPreview(session.model_a_preview_url!, signal), loadPreview(session.model_b_preview_url!, signal),
   ]);
@@ -112,7 +113,7 @@ async function initializeWorkbench(
     result: null, direction: 'a_to_b', visible: false, status: '尚未提交',
     progressVisible: false, progressCompleted: false, progressText: '', progressTop: 0,
   });
-  resources.add(mountWorkbenchLayout(root, {
+  await host.mountLayout({
     session, gaussian: gaussianState, toolbar: toolbarState, result: resultState, inspector: inspectorState, panels,
     onToolbar: command => {
       switch (command.type) {
@@ -126,7 +127,8 @@ async function initializeWorkbench(
         case 'gaussian': void gaussianController.toggle(command.model); break;
       }
     },
-  }));
+  });
+  signal.throwIfAborted();
 
   const roleState = reactive({ moving: session.moving_model, direction: session.output_direction, disabled: false });
   const effectiveMoving = (): ModelId => roleState.moving === 'auto'
@@ -533,8 +535,7 @@ async function initializeWorkbench(
 
   refreshClippingMode();
   root.querySelector('#new-task')!.addEventListener('click', () => {
-    if (navigateHome) navigateHome();
-    else location.href = '/';
+    host.navigateHome();
   });
 
   const inputController = new InputController(canvas, cameraController, {

@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
+import { WorkbenchContent, type WorkbenchLayoutOptions } from './workbench/mount-workbench-layout';
 
 const props = defineProps<{ sessionId: string; apiVersion: 'v2' }>();
 const router = useRouter();
 const host = ref<HTMLDivElement>();
 const loadError = ref('');
+const loadingStatus = ref('queued');
+const layout = shallowRef<WorkbenchLayoutOptions | null>(null);
 const lifecycle = new AbortController();
 let dispose: (() => void) | undefined;
 
@@ -17,14 +20,23 @@ onMounted(async () => {
     const cleanup = await module.renderGenericRegistration(
       host.value,
       props.sessionId,
-      lifecycle.signal,
-      () => { void router.push({ name: 'home' }); },
+      {
+        signal: lifecycle.signal,
+        navigateHome: () => { void router.push({ name: 'home' }); },
+        onStatus: status => { loadingStatus.value = status; },
+        mountLayout: async options => {
+          lifecycle.signal.throwIfAborted();
+          layout.value = options;
+          await nextTick();
+          lifecycle.signal.throwIfAborted();
+        },
+      },
     );
     if (lifecycle.signal.aborted) cleanup();
     else dispose = cleanup;
   } catch (error) {
     if (!lifecycle.signal.aborted && host.value) {
-      host.value.replaceChildren();
+      layout.value = null;
       loadError.value = error instanceof Error ? error.message : String(error);
     }
   }
@@ -33,7 +45,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   lifecycle.abort();
   dispose?.();
-  host.value?.replaceChildren();
 });
 </script>
 
@@ -43,5 +54,10 @@ onBeforeUnmount(() => {
     <p>{{ loadError }}</p>
     <button @click="router.push({ name: 'home' })">返回首页</button>
   </main>
-  <div ref="host" class="legacy-workbench-host" />
+  <main v-else-if="!layout" class="loading" role="status">
+    <h2>正在生成双模型预览</h2><pre>预览状态：{{ loadingStatus }}</pre>
+  </main>
+  <div v-show="layout !== null" ref="host" class="legacy-workbench-host">
+    <WorkbenchContent v-if="layout" :options="layout" />
+  </div>
 </template>

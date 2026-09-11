@@ -48,10 +48,8 @@ function transformEditor(model: 'a' | 'b'): string {
   return `<details class="upload-transform"><summary>模型 ${model.toUpperCase()} 业务坐标预变换（默认不转换）</summary>${row('translation', [0,0,0])}${row('rotation_degrees', [0,0,0])}${row('scale', [1,1,1])}<div class="upload-transform-matrix"><span>文件坐标 → 业务坐标矩阵</span><pre data-transform-matrix="${model}">${matrixText(transformParametersMatrix(defaultTransform()))}</pre></div></details>`;
 }
 
-async function openWorkspace(root: HTMLElement, sessionId: string): Promise<void> {
-  history.pushState({}, '', `/?session=${sessionId}&api=v2`);
-  const { renderGenericRegistration } = await import('./generic-registration');
-  await renderGenericRegistration(root, sessionId);
+async function openWorkspace(_root: HTMLElement, sessionId: string): Promise<void> {
+  location.assign(`/registration/${encodeURIComponent(sessionId)}`);
 }
 
 async function postSessionAction(sessionId: string, action: string, workspaceId: string): Promise<Response> {
