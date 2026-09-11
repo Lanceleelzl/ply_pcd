@@ -3,8 +3,10 @@ import type { RegistrationSession } from '../../api/contracts';
 import ViewportToolbar from './ViewportToolbar.vue';
 import type { ToolbarCommand, ToolbarState } from './toolbar-state';
 import type { GaussianViewState } from './gaussian-view-state';
+import type { ResultViewState } from './result-view-state';
+import RegistrationResultPanel from './RegistrationResultPanel.vue';
 
-defineProps<{ session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState }>();
+defineProps<{ session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState }>();
 const emit = defineEmits<{ toolbar: [command: ToolbarCommand] }>();
 const faces = [
   { axis: 'x', direction: '1,0,0', label: 'X', title: '沿 +X 查看' },
@@ -44,7 +46,8 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       <section class="viewport">
         <canvas id="viewport"></canvas>
         <ViewportToolbar :session="session" :gaussian="gaussian" :state="toolbar" @command="emit('toolbar', $event)" />
-        <div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
+        <div id="iteration-progress" class="viewport-progress" :class="{ completed: result.progressCompleted }" :style="{ top: `${result.progressTop}px` }"
+          role="status" aria-live="polite" :hidden="!result.progressVisible">{{ result.progressText }}</div>
         <div class="view-gizmo" aria-label="快速视角">
           <div class="view-cube-scene"><div class="view-cube">
             <button v-for="face in faces" :key="face.axis" class="cube-face" :class="`face-${face.axis}`" :data-direction="face.direction" :title="face.title">{{ face.label }}</button>
@@ -67,7 +70,12 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
         <section class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
       </aside>
       <section class="result-drawer">
-        <section class="workflow-step"><h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">尚未提交</pre><section id="result" class="result" hidden></section></section>
+        <section class="workflow-step">
+          <h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">{{ result.status }}</pre>
+          <section id="result" class="result" :hidden="!result.visible">
+            <RegistrationResultPanel :result="result.result" :direction="result.direction" />
+          </section>
+        </section>
       </section>
     </div>
   </main>

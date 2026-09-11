@@ -1,6 +1,7 @@
 import { waitForSession } from '../api/registration-api';
 import { ResourceScope } from '../app/resource-scope';
 import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
+import type { ResultViewState } from '../views/workbench/result-view-state';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
@@ -12,7 +13,6 @@ import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
 import { createApp, h, reactive, shallowReactive } from 'vue';
-import RegistrationResultPanel from '../views/workbench/RegistrationResultPanel.vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
@@ -104,8 +104,12 @@ async function initializeWorkbench(
   });
   const queryToolbar = createViewportToolbar();
   const toolbarState = queryToolbar.state;
+  const resultState = shallowReactive<ResultViewState>({
+    result: null, direction: 'a_to_b', visible: false, status: '尚未提交',
+    progressVisible: false, progressCompleted: false, progressText: '', progressTop: 0,
+  });
   resources.add(mountWorkbenchLayout(root, {
-    session, gaussian: gaussianState, toolbar: toolbarState,
+    session, gaussian: gaussianState, toolbar: toolbarState, result: resultState,
     onToolbar: command => {
       switch (command.type) {
         case 'reset': if (!toolbarState.locked) display.reset(effectiveMoving()); break;
@@ -355,7 +359,7 @@ async function initializeWorkbench(
   const rolesApp = createApp({ render: () => h(RegistrationRoles, {
     ...roleState, recommended: session.metadata!.recommended_moving_model, diagonals: modelDiagonals,
     onMoving: (value: RegistrationRequest['moving_model']) => { roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },
-    onDirection: (value: RegistrationRequest['output_direction']) => { roleState.direction = value; root.querySelector<HTMLElement>('#result')!.hidden = true; },
+    onDirection: (value: RegistrationRequest['output_direction']) => { roleState.direction = value; resultState.visible = false; },
   }) });
   rolesApp.mount(root.querySelector<HTMLElement>('#registration-roles')!);
   resources.add(() => rolesApp.unmount());
@@ -384,7 +388,7 @@ async function initializeWorkbench(
       const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }), signal });
       const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
       businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
-      coordinateQuery?.invalidate(); root.querySelector<HTMLElement>('#result')!.hidden = true;
+      coordinateQuery?.invalidate(); resultState.visible = false;
       businessState.message = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
     } catch (error) { if (!signal.aborted) businessState.message = `应用失败：${String(error)}`; }
     finally { businessState.saving = false; }
@@ -401,7 +405,7 @@ async function initializeWorkbench(
   let clippingHandles: ClippingHandles | null = null;
   application.on('update', () => {
     if (resultSignature && resultSignature !== display.signature()) {
-      root.querySelector<HTMLElement>('#result')!.hidden = true;
+      resultState.visible = false;
       resultSignature = '';
     }
     const pose = display.getPose();
@@ -566,12 +570,6 @@ async function initializeWorkbench(
   });
   resources.add(() => inputController.destroy());
 
-  const resultState = shallowReactive<{ result: RegistrationResult | null; direction: string }>({
-    result: null, direction: 'a_to_b',
-  });
-  const resultApp = createApp({ render: () => h(RegistrationResultPanel, resultState) });
-  resultApp.mount(root.querySelector<HTMLElement>('#result')!);
-  resources.add(() => resultApp.unmount());
   const icpValues = reactive<Record<string, string>>({
     min_rms_decrease: '0.00001', sampling_limit: '50000', overlap: '1', random_seed: '42',
   });
@@ -583,16 +581,14 @@ async function initializeWorkbench(
   icpApp.mount(root.querySelector<HTMLElement>('#icp-parameters')!);
   resources.add(() => icpApp.unmount());
   const actionState = shallowReactive({ running: false, locked: false, cancelling: false, progress: false });
-  const iterationProgress = root.querySelector<HTMLElement>('#iteration-progress')!;
   const progressToolbar = root.querySelector<HTMLElement>('.viewport-toolbar')!;
   const positionProgress = () => {
     const top = progressToolbar.offsetTop + progressToolbar.offsetHeight + 8;
-    iterationProgress.style.top = `${top}px`;
+    resultState.progressTop = top;
   };
   const progressResize = new ResizeObserver(positionProgress);
   resources.add(() => progressResize.disconnect());
   progressResize.observe(progressToolbar);
-  progressResize.observe(iterationProgress);
   positionProgress();
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
@@ -656,30 +652,29 @@ async function initializeWorkbench(
     resultSignature = display.signature();
     resultState.direction = roleState.direction;
     resultState.result = result;
-    root.querySelector<HTMLElement>('#result')!.hidden = false;
+    resultState.visible = true;
   };
-  const log = root.querySelector<HTMLElement>('#job-status')!;
   const jobController = new RegistrationJobController({
     runningChanged: setRunning,
-    statusChanged: status => { log.textContent = status; },
+    statusChanged: status => { resultState.status = status; },
     progressChanged: (progress: RegistrationIteration) => {
       latestProgressIteration = progress.iteration;
       display.setMovingLocalToFixedLocal(progress.moving_local_to_fixed_local);
-      iterationProgress.textContent = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
+      resultState.progressText = `第 ${progress.iteration} 轮　RMS ${progress.rms.toFixed(6)} m　${progress.point_count.toLocaleString()} 点　${progress.elapsed_seconds.toFixed(2)} s`;
     },
     succeeded: (result, jobId) => {
       showResult(result, jobId);
       if (actionState.progress) {
-        iterationProgress.hidden = false;
-        iterationProgress.classList.add('completed');
-        iterationProgress.textContent = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
+        resultState.progressVisible = true;
+        resultState.progressCompleted = true;
+        resultState.progressText = `本次匹配已完成　RMS ${result.metrics.final_rms.toFixed(6)} m　${result.metrics.final_point_count.toLocaleString()} 点　${result.metrics.elapsed_seconds.toFixed(2)} s`;
         positionProgress();
       }
-      log.textContent = '配准完成。';
+      resultState.status = '配准完成。';
     },
     cancelled: latestProgress => {
       if (latestProgress) display.setMovingLocalToFixedLocal(latestProgress.moving_local_to_fixed_local);
-      log.textContent = latestProgress
+      resultState.status = latestProgress
         ? '任务已终止。视口停留在未收敛的中间姿态，该姿态不是有效业务矩阵，可继续粗调后重新执行。'
         : '任务已终止，可调整参数或粗配准后重新执行。';
     },
@@ -689,10 +684,10 @@ async function initializeWorkbench(
     actionState.progress = visible;
     jobController.setProgressVisible(actionState.progress);
     if (actionState.progress) {
-      iterationProgress.hidden = false;
-      if (latestProgressIteration === 0) iterationProgress.textContent = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
+      resultState.progressVisible = true;
+      if (latestProgressIteration === 0) resultState.progressText = running ? '正在读取当前 ICP 进度……' : '已开启过程显示，等待执行 ICP。';
       positionProgress();
-    } else iterationProgress.hidden = true;
+    } else resultState.progressVisible = false;
   };
   const cancelRegistration = async () => {
     if (!running || actionState.cancelling) return;
@@ -701,17 +696,18 @@ async function initializeWorkbench(
       await jobController.cancel();
     } catch (error) {
       if (signal.aborted) return;
-      log.textContent = `终止失败：${String(error)}`;
+      resultState.status = `终止失败：${String(error)}`;
       actionState.cancelling = false;
     }
   };
   const runRegistration = async () => {
     if (running || queryActive) return;
     coordinateQuery?.invalidate();
+    resultState.visible = false;
     latestProgressIteration = 0;
-    iterationProgress.classList.remove('completed');
-    iterationProgress.hidden = !actionState.progress;
-    iterationProgress.textContent = actionState.progress ? '等待首轮 ICP 结果……' : '';
+    resultState.progressCompleted = false;
+    resultState.progressVisible = actionState.progress;
+    resultState.progressText = actionState.progress ? '等待首轮 ICP 结果……' : '';
     jobController.setProgressVisible(actionState.progress);
     try {
       const request: RegistrationRequest = {
@@ -726,7 +722,7 @@ async function initializeWorkbench(
         coordinate_space: 'business',
       };
       await jobController.run(sessionId, request);
-    } catch (error) { if (!signal.aborted) log.textContent = `失败：${String(error)}`; }
+    } catch (error) { if (!signal.aborted) resultState.status = `失败：${String(error)}`; }
   };
   const actionsApp = createApp({ render: () => h(RegistrationActions, {
     ...actionState, onRun: runRegistration, onCancel: cancelRegistration, onProgress: setProgress,
@@ -754,9 +750,9 @@ async function initializeWorkbench(
           if (latest.parameters[name] !== undefined) icpValues[name] = String(latest.parameters[name]);
         });
         showResult(result, latest.job_id);
-        root.querySelector<HTMLElement>('#job-status')!.textContent = '已恢复最近一次配准结果。';
+        resultState.status = '已恢复最近一次配准结果。';
         cameraController.fit();
       }
-    } catch { if (!signal.aborted) root.querySelector<HTMLElement>('#job-status')!.textContent = '历史结果暂时无法加载，可重新配准。'; }
+    } catch { if (!signal.aborted) resultState.status = '历史结果暂时无法加载，可重新配准。'; }
   }
 }
