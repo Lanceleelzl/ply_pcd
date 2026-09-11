@@ -3,6 +3,7 @@ import type { RegistrationSession } from '../../api/contracts';
 import type { GaussianViewState } from './gaussian-view-state';
 import type { ToolbarCommand, ToolbarState } from './toolbar-state';
 import type { ResultViewState } from './result-view-state';
+import type { InspectorState } from './inspector-state';
 import WorkbenchLayout from './WorkbenchLayout.vue';
 
 export function mountWorkbenchLayout(root: HTMLElement, options: {
@@ -10,6 +11,7 @@ export function mountWorkbenchLayout(root: HTMLElement, options: {
   gaussian: GaussianViewState;
   toolbar: ToolbarState;
   result: ResultViewState;
+  inspector: InspectorState;
   onToolbar: (command: ToolbarCommand) => void;
 }): () => void {
   const app = createApp(WorkbenchLayout, options);

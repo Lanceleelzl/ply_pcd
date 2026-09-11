@@ -5,8 +5,9 @@ import type { ToolbarCommand, ToolbarState } from './toolbar-state';
 import type { GaussianViewState } from './gaussian-view-state';
 import type { ResultViewState } from './result-view-state';
 import RegistrationResultPanel from './RegistrationResultPanel.vue';
+import type { InspectorState } from './inspector-state';
 
-defineProps<{ session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState }>();
+defineProps<{ session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState; inspector: InspectorState }>();
 const emit = defineEmits<{ toolbar: [command: ToolbarCommand] }>();
 const faces = [
   { axis: 'x', direction: '1,0,0', label: 'X', title: '沿 +X 查看' },
@@ -59,15 +60,15 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       </section>
       <aside class="inspector-panel">
         <header class="dock-heading"><span>02</span><div><strong>工具与配准</strong><small>视图工具、粗配准姿态与 ICP 参数</small></div></header>
-        <section id="clipping-panel" class="clipping-panel inspector-tool" hidden></section>
-        <section class="origin-planes-panel inspector-tool" hidden></section>
-        <section class="coordinate-panel inspector-tool" hidden></section>
-        <section class="workflow-step registration-inspector">
+        <section id="clipping-panel" class="clipping-panel inspector-tool" :hidden="!inspector.clipping"></section>
+        <section class="origin-planes-panel inspector-tool" :hidden="!inspector.originPlanes"></section>
+        <section class="coordinate-panel inspector-tool" :hidden="!inspector.query"></section>
+        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector">
           <h2><span>2</span> 方向与粗配准</h2>
           <div id="registration-roles"></div><div id="coarse-pose-form"></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
-        <section class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
+        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
       </aside>
       <section class="result-drawer">
         <section class="workflow-step">

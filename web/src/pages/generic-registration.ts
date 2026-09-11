@@ -2,6 +2,7 @@ import { waitForSession } from '../api/registration-api';
 import { ResourceScope } from '../app/resource-scope';
 import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
 import type { ResultViewState } from '../views/workbench/result-view-state';
+import type { InspectorState } from '../views/workbench/inspector-state';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
@@ -103,13 +104,14 @@ async function initializeWorkbench(
     message: '', error: false,
   });
   const queryToolbar = createViewportToolbar();
+  const inspectorState = reactive<InspectorState>({ clipping: false, originPlanes: false, query: false });
   const toolbarState = queryToolbar.state;
   const resultState = shallowReactive<ResultViewState>({
     result: null, direction: 'a_to_b', visible: false, status: '尚未提交',
     progressVisible: false, progressCompleted: false, progressText: '', progressTop: 0,
   });
   resources.add(mountWorkbenchLayout(root, {
-    session, gaussian: gaussianState, toolbar: toolbarState, result: resultState,
+    session, gaussian: gaussianState, toolbar: toolbarState, result: resultState, inspector: inspectorState,
     onToolbar: command => {
       switch (command.type) {
         case 'reset': if (!toolbarState.locked) display.reset(effectiveMoving()); break;
@@ -165,7 +167,7 @@ async function initializeWorkbench(
   display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
-  const originPlaneUI = mountOriginPlanePanel(root, active => { toolbarState.originPlanesActive = active; });
+  const originPlaneUI = mountOriginPlanePanel(root, inspectorState, active => { toolbarState.originPlanesActive = active; });
   resources.add(() => originPlaneUI.destroy());
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
@@ -418,12 +420,11 @@ async function initializeWorkbench(
   });
 
   const clippingPanel = root.querySelector<HTMLElement>('#clipping-panel')!;
-  const originPlanePanel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
   const clippingSettings = reactive<{ scope: 'both' | ModelId }>({ scope: 'both' });
   const toggleClippingPanel = () => {
-    clippingPanel.hidden = !clippingPanel.hidden;
-    if (!clippingPanel.hidden) {
-      originPlanePanel.hidden = true;
+    inspectorState.clipping = !inspectorState.clipping;
+    if (inspectorState.clipping) {
+      inspectorState.originPlanes = false;
       clippingPanel.parentElement!.scrollTop = 0;
     }
     refreshClippingMode();
@@ -498,7 +499,7 @@ async function initializeWorkbench(
     toolbarState.clippingTitle = `${clippingState.summary()}；点击打开或关闭剖切面板`;
     gaussianController.refreshStatus();
     const editedMode = clippingState.editedMode();
-    clippingInteractionActive = !clippingPanel.hidden && editedMode !== 'off';
+    clippingInteractionActive = inspectorState.clipping && editedMode !== 'off';
     clipBox.enabled = clippingState.controlMode === 'joint' && clippingState.jointMode === 'box' && clippingState.jointHelperVisible;
     attach();
     root.querySelector<HTMLElement>('#viewport-help')!.textContent = editedMode === 'box'
@@ -510,7 +511,7 @@ async function initializeWorkbench(
   const resetRange = (target: ClippingTarget) => resetAxisInputSet(ranges[target], originalBounds);
   const clippingPanelApp = createApp({ render: () => h(ClippingPanel, {
     state: clippingState, scope: clippingSettings.scope, ranges,
-    onClose: () => { clippingPanel.hidden = true; clippingInteractionActive = false; attach(); },
+    onClose: () => { inspectorState.clipping = false; clippingInteractionActive = false; attach(); },
     onControl: (mode: ClippingControlMode) => { clippingState.controlMode = mode; refreshClippingMode(); },
     onEditor: (model: ModelId) => { clippingState.editor = model; refreshClippingMode(); },
     onMode: (target: ClippingTarget, mode: ClippingMode) => {
@@ -603,7 +604,7 @@ async function initializeWorkbench(
     actionState.locked = queryActive;
     attach();
   };
-  const queryPanel = mountCoordinatePanel(root, {
+  const queryPanel = mountCoordinatePanel(root, inspectorState, {
     onSource: model => coordinateQuery?.setSource(model),
     onChange: values => coordinateQuery?.setCoordinates(values),
     onInvalid: () => coordinateQuery?.handlePanelAction('invalid'),
@@ -629,8 +630,8 @@ async function initializeWorkbench(
       roleState.disabled = active || running;
       toolbarState.locked = active || running;
       actionState.locked = active;
-      clippingPanel.hidden = true; clippingInteractionActive = false;
-      if (active) originPlanePanel.hidden = true;
+      inspectorState.clipping = false; clippingInteractionActive = false;
+      if (active) inspectorState.originPlanes = false;
       attach();
     },
     visiblePoint: (model, point) => {
@@ -641,8 +642,8 @@ async function initializeWorkbench(
   resources.add(() => coordinateQuery?.destroy());
   const toggleOriginPlanes = () => {
     originPlaneUI.toggle();
-    if (originPlanePanel.hidden) return;
-    clippingPanel.hidden = true; clippingInteractionActive = false;
+    if (!inspectorState.originPlanes) return;
+    inspectorState.clipping = false; clippingInteractionActive = false;
     if (coordinateQuery?.active) coordinateQuery.close();
     attach(); positionProgress();
   };

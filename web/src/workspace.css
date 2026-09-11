@@ -62,8 +62,12 @@
 
 .workbench-topbar .workflow-title button {
   min-width: 78px;
-  border-color: #40516a;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid #40516a;
+  border-radius: 6px;
   background: #172233;
+  color: #e8eef7;
 }
 
 .workflow-panel {
@@ -790,8 +794,12 @@
   box-shadow: none;
 }
 
-.inspector-panel:has(> .inspector-tool:not([hidden])) > .registration-inspector {
-  display: none;
+.inspector-panel .axis-clipping-grid {
+  grid-template-columns: 20px 60px minmax(0, 1fr);
+}
+
+.inspector-panel .axis-clipping-grid > strong {
+  grid-row: span 2;
 }
 
 @media (max-width: 600px) {

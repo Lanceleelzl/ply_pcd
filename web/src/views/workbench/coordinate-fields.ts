@@ -2,11 +2,12 @@ import { createApp, h, shallowReactive } from 'vue';
 import type { ModelId } from '../../api/contracts';
 import type { XYZ } from '../../coordinate-math';
 import CoordinatePanel from './CoordinatePanel.vue';
+import type { InspectorState } from './inspector-state';
 
 import type { CoordinatePanelState } from '../../engine/tools/coordinate-query-state';
 import '../../coordinate-query.css';
 
-export function mountCoordinatePanel(root: HTMLElement, handlers: {
+export function mountCoordinatePanel(root: HTMLElement, inspector: InspectorState, handlers: {
   onAction: (action: string) => void;
   onSource: (model: ModelId) => void;
   onChange: (values: XYZ) => void;
@@ -19,7 +20,7 @@ export function mountCoordinatePanel(root: HTMLElement, handlers: {
   return {
     state,
     setVisible(visible: boolean) {
-      panel.hidden = !visible;
+      inspector.query = visible;
       if (visible) panel.parentElement!.scrollTop = 0;
     },
     copyText(text: string) { return navigator.clipboard.writeText(text); },
