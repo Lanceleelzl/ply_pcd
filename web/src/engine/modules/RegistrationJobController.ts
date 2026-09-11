@@ -23,11 +23,12 @@ interface JobStatus {
 }
 
 const wait = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  signal.throwIfAborted();
   const aborted = () => {
-    window.clearTimeout(timer);
+    clearTimeout(timer);
     reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
   };
-  const timer = window.setTimeout(() => {
+  const timer = setTimeout(() => {
     signal.removeEventListener('abort', aborted);
     resolve();
   }, milliseconds);
@@ -42,7 +43,7 @@ async function jsonResponse<T>(response: Response): Promise<T> {
 
 export class RegistrationJobController {
   private readonly lifecycle = new AbortController();
-  private readonly abortFromParent = () => this.lifecycle.abort();
+  private readonly abortFromParent = () => { this.lifecycle.abort(); this.closeProgress(); };
   private progressSource: EventSource | null = null;
   private activeJobId = '';
   private activeProgressUrl = '';
@@ -72,6 +73,7 @@ export class RegistrationJobController {
   async run(sessionId: string, request: RegistrationRequest): Promise<void> {
     if (this.active) return;
     const { signal } = this.lifecycle;
+    signal.throwIfAborted();
     this.active = true;
     this.activeJobId = '';
     this.activeProgressUrl = '';
@@ -80,12 +82,13 @@ export class RegistrationJobController {
     this.events.runningChanged(true);
     this.events.statusChanged('正在提交……');
     try {
-      const created = await fetch(`/api/v2/registration-sessions/${sessionId}/register`, {
+      const created = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
         signal,
       }).then(response => jsonResponse<CreatedJob>(response));
+      signal.throwIfAborted();
       this.activeJobId = created.job_id;
       this.activeProgressUrl = created.progress_url;
       if (this.progressVisible) this.openProgress();
@@ -93,6 +96,8 @@ export class RegistrationJobController {
 
       while (!signal.aborted) {
         const status = await fetch(created.status_url, { signal }).then(response => jsonResponse<JobStatus>(response));
+        signal.throwIfAborted();
+        if (!['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(status.status)) throw new Error('任务响应包含无效状态');
         this.events.statusChanged(`任务状态：${status.status}`);
         if (status.status === 'cancelled') {
           this.events.cancelled(this.latestProgress);
@@ -102,6 +107,7 @@ export class RegistrationJobController {
         if (status.status === 'succeeded') {
           if (!status.result_url) throw new Error('任务成功但缺少结果地址');
           const result = await fetch(status.result_url, { signal }).then(response => jsonResponse<RegistrationResult>(response));
+          signal.throwIfAborted();
           this.closeProgress();
           this.events.succeeded(result, this.activeJobId);
           return;
@@ -142,6 +148,7 @@ export class RegistrationJobController {
     if (!this.activeProgressUrl || this.progressSource) return;
     this.progressSource = new EventSource(`${this.activeProgressUrl}?from_latest=true`);
     this.progressSource.addEventListener('iteration', event => {
+      if (this.lifecycle.signal.aborted) return;
       const progress = JSON.parse((event as MessageEvent<string>).data) as RegistrationIteration;
       if (progress.iteration <= (this.latestProgress?.iteration ?? 0)) return;
       this.latestProgress = progress;
