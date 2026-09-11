@@ -40,7 +40,7 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
           <h2><span>1</span> 模型</h2>
           <p>A：{{ session.metadata!.models.a.source_point_count.toLocaleString() }} 点<br>B：{{ session.metadata!.models.b.source_point_count.toLocaleString() }} 点</p>
           <p id="badge" class="model-role-summary"></p>
-          <div id="business-transform-panel"></div>
+          <div id="business-transform-panel"><slot name="business" /></div>
           <p id="gaussian-status" class="gaussian-status" :class="{ error: gaussian.error }" :hidden="!gaussian.message">{{ gaussian.message }}</p>
         </section>
       </aside>
@@ -60,15 +60,15 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       </section>
       <aside class="inspector-panel">
         <header class="dock-heading"><span>02</span><div><strong>工具与配准</strong><small>视图工具、粗配准姿态与 ICP 参数</small></div></header>
-        <section id="clipping-panel" class="clipping-panel inspector-tool" :hidden="!inspector.clipping"></section>
-        <section class="origin-planes-panel inspector-tool" :hidden="!inspector.originPlanes"></section>
-        <section class="coordinate-panel inspector-tool" :hidden="!inspector.query"></section>
+        <section id="clipping-panel" class="clipping-panel inspector-tool" :hidden="!inspector.clipping"><slot name="clipping" /></section>
+        <section class="origin-planes-panel inspector-tool" :hidden="!inspector.originPlanes"><slot name="originPlanes" /></section>
+        <section class="coordinate-panel inspector-tool" :hidden="!inspector.query"><slot name="query" /></section>
         <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector">
           <h2><span>2</span> 方向与粗配准</h2>
-          <div id="registration-roles"></div><div id="coarse-pose-form"></div>
+          <div id="registration-roles"><slot name="roles" /></div><div id="coarse-pose-form"><slot name="pose" /></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix"></pre></details>
         </section>
-        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"></div><div id="registration-actions-host"></div></section>
+        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"><slot name="icp" /></div><div id="registration-actions-host"><slot name="actions" /></div></section>
       </aside>
       <section class="result-drawer">
         <section class="workflow-step">

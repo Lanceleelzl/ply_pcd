@@ -3,24 +3,25 @@ import { ResourceScope } from '../app/resource-scope';
 import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
 import type { ResultViewState } from '../views/workbench/result-view-state';
 import type { InspectorState } from '../views/workbench/inspector-state';
+import type { WorkbenchPanels } from '../views/workbench/workbench-panels';
 import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
-import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
+import { createCoordinatePanel } from '../views/workbench/coordinate-fields';
 import { createViewportToolbar } from '../views/workbench/viewport-toolbar';
 import BusinessTransformPanel from '../views/workbench/BusinessTransformPanel.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
 import IcpParameters from '../views/workbench/IcpParameters.vue';
-import { createApp, h, reactive, shallowReactive } from 'vue';
+import { h, reactive, shallowReactive } from 'vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
 import { RegistrationDisplay } from '../registration-display';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { OriginPlaneController } from '../origin-planes';
-import { mountOriginPlanePanel } from '../views/workbench/origin-plane-panel';
+import { createOriginPlanePanel } from '../views/workbench/origin-plane-panel';
 import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
@@ -104,6 +105,7 @@ async function initializeWorkbench(
     message: '', error: false,
   });
   const queryToolbar = createViewportToolbar();
+  const panels = shallowReactive<WorkbenchPanels>({});
   const inspectorState = reactive<InspectorState>({ clipping: false, originPlanes: false, query: false });
   const toolbarState = queryToolbar.state;
   const resultState = shallowReactive<ResultViewState>({
@@ -111,7 +113,7 @@ async function initializeWorkbench(
     progressVisible: false, progressCompleted: false, progressText: '', progressTop: 0,
   });
   resources.add(mountWorkbenchLayout(root, {
-    session, gaussian: gaussianState, toolbar: toolbarState, result: resultState, inspector: inspectorState,
+    session, gaussian: gaussianState, toolbar: toolbarState, result: resultState, inspector: inspectorState, panels,
     onToolbar: command => {
       switch (command.type) {
         case 'reset': if (!toolbarState.locked) display.reset(effectiveMoving()); break;
@@ -167,8 +169,8 @@ async function initializeWorkbench(
   display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
-  const originPlaneUI = mountOriginPlanePanel(root, inspectorState, active => { toolbarState.originPlanesActive = active; });
-  resources.add(() => originPlaneUI.destroy());
+  const originPlaneUI = createOriginPlanePanel(root, inspectorState, active => { toolbarState.originPlanesActive = active; });
+  panels.originPlanes = originPlaneUI.render;
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
   resources.add(() => originPlanes.destroy());
@@ -338,14 +340,12 @@ async function initializeWorkbench(
   resources.add(() => gaussianController.destroy());
 
   const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0], disabled: false });
-  const poseApp = createApp({ render: () => h(CoarsePoseForm, {
+  panels.pose = () => h(CoarsePoseForm, {
     ...poseState,
     onChange: (values: number[]) => {
       display.setPose(values.slice(0, 3) as XYZ, values.slice(3) as XYZ);
     },
-  }) });
-  poseApp.mount(root.querySelector<HTMLElement>('#coarse-pose-form')!);
-  resources.add(() => poseApp.unmount());
+  });
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving(); const fixed = moving === 'a' ? 'b' : 'a';
@@ -358,13 +358,11 @@ async function initializeWorkbench(
     root.querySelector<HTMLElement>('#badge')!.textContent = `移动 ${moving.toUpperCase()}（黄色）　固定 ${fixed.toUpperCase()}（灰色）`;
     attach();
   };
-  const rolesApp = createApp({ render: () => h(RegistrationRoles, {
+  panels.roles = () => h(RegistrationRoles, {
     ...roleState, recommended: session.metadata!.recommended_moving_model, diagonals: modelDiagonals,
     onMoving: (value: RegistrationRequest['moving_model']) => { roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },
     onDirection: (value: RegistrationRequest['output_direction']) => { roleState.direction = value; resultState.visible = false; },
-  }) });
-  rolesApp.mount(root.querySelector<HTMLElement>('#registration-roles')!);
-  resources.add(() => rolesApp.unmount());
+  });
   refreshRoles();
 
   const toDraft = (value: TransformParameters) => ({
@@ -395,14 +393,12 @@ async function initializeWorkbench(
     } catch (error) { if (!signal.aborted) businessState.message = `应用失败：${String(error)}`; }
     finally { businessState.saving = false; }
   };
-  const businessPanelApp = createApp({ render: () => h(BusinessTransformPanel, {
+  panels.business = () => h(BusinessTransformPanel, {
     drafts: businessDraft, ...businessState,
     onChange: (model: ModelId, kind: keyof TransformParameters, index: number, value: string) => { businessDraft[model][kind][index] = value; },
     onReset: () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); },
     onApply: applyBusinessTransforms,
-  }) });
-  businessPanelApp.mount(root.querySelector<HTMLElement>('#business-transform-panel')!);
-  resources.add(() => businessPanelApp.unmount());
+  });
 
   let clippingHandles: ClippingHandles | null = null;
   application.on('update', () => {
@@ -509,7 +505,7 @@ async function initializeWorkbench(
   const ranges = { joint: axisInputs, ...independentAxisInputs };
   type ClippingTarget = keyof typeof ranges;
   const resetRange = (target: ClippingTarget) => resetAxisInputSet(ranges[target], originalBounds);
-  const clippingPanelApp = createApp({ render: () => h(ClippingPanel, {
+  panels.clipping = () => h(ClippingPanel, {
     state: clippingState, scope: clippingSettings.scope, ranges,
     onClose: () => { inspectorState.clipping = false; clippingInteractionActive = false; attach(); },
     onControl: (mode: ClippingControlMode) => { clippingState.controlMode = mode; refreshClippingMode(); },
@@ -533,9 +529,7 @@ async function initializeWorkbench(
       fitClipBox(target === 'joint' ? ['a', 'b'] : [target], target === 'joint' ? clipBox : independentClipBoxes[target]);
       refreshClippingMode();
     },
-  }) });
-  clippingPanelApp.mount(clippingPanel);
-  resources.add(() => clippingPanelApp.unmount());
+  });
 
   refreshClippingMode();
   root.querySelector('#new-task')!.addEventListener('click', () => {
@@ -575,12 +569,10 @@ async function initializeWorkbench(
     min_rms_decrease: '0.00001', sampling_limit: '50000', overlap: '1', random_seed: '42',
   });
   const icpState = shallowReactive({ disabled: false });
-  const icpApp = createApp({ render: () => h(IcpParameters, {
+  panels.icp = () => h(IcpParameters, {
     values: icpValues, disabled: icpState.disabled,
     onChange: (key: string, value: string) => { icpValues[key] = value; },
-  }) });
-  icpApp.mount(root.querySelector<HTMLElement>('#icp-parameters')!);
-  resources.add(() => icpApp.unmount());
+  });
   const actionState = shallowReactive({ running: false, locked: false, cancelling: false, progress: false });
   const progressToolbar = root.querySelector<HTMLElement>('.viewport-toolbar')!;
   const positionProgress = () => {
@@ -604,13 +596,13 @@ async function initializeWorkbench(
     actionState.locked = queryActive;
     attach();
   };
-  const queryPanel = mountCoordinatePanel(root, inspectorState, {
+  const queryPanel = createCoordinatePanel(root, inspectorState, {
     onSource: model => coordinateQuery?.setSource(model),
     onChange: values => coordinateQuery?.setCoordinates(values),
     onInvalid: () => coordinateQuery?.handlePanelAction('invalid'),
     onAction: action => coordinateQuery?.handlePanelAction(action),
   });
-  resources.add(() => queryPanel.destroy());
+  panels.query = queryPanel.render;
   const queryLabels = mountCoordinateLabels(root);
   resources.add(() => queryLabels.destroy());
   coordinateQuery = new CoordinateQuery({
@@ -725,11 +717,9 @@ async function initializeWorkbench(
       await jobController.run(sessionId, request);
     } catch (error) { if (!signal.aborted) resultState.status = `失败：${String(error)}`; }
   };
-  const actionsApp = createApp({ render: () => h(RegistrationActions, {
+  panels.actions = () => h(RegistrationActions, {
     ...actionState, onRun: runRegistration, onCancel: cancelRegistration, onProgress: setProgress,
-  }) });
-  actionsApp.mount(root.querySelector<HTMLElement>('#registration-actions-host')!);
-  resources.add(() => actionsApp.unmount());
+  });
 
   const latest = session.registrations?.at(-1);
   if (latest?.status === 'succeeded' && latest.result_url) {
