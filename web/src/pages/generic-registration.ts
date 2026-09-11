@@ -1,5 +1,6 @@
 import { waitForSession } from '../api/registration-api';
 import { createBusinessTransformState, defaultBusinessTransform } from '../stores/business-transform-state';
+import { restoreRegistrationHistory } from '../stores/registration-history';
 import { ResourceScope } from '../app/resource-scope';
 import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
 import type { ResultViewState } from '../views/workbench/result-view-state';
@@ -19,7 +20,7 @@ import IcpParameters from '../views/workbench/IcpParameters.vue';
 import { h, reactive, shallowReactive, watch } from 'vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
-import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
+import { transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { OriginPlaneController } from '../origin-planes';
 import { createOriginPlanePanel } from '../views/workbench/origin-plane-panel';
@@ -581,29 +582,19 @@ async function initializeWorkbench(
     ...actionState, onRun: runRegistration, onCancel: cancelRegistration, onProgress: setProgress,
   });
 
-  const latest = session.registrations?.at(-1);
-  if (latest?.status === 'succeeded' && latest.result_url) {
-    const signature = display.signature();
-    try {
-      const response = await fetch(latest.result_url, { signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json() as RegistrationResult;
-      signal.throwIfAborted();
-      const matching = result.coordinate_space === 'business' && (['a', 'b'] as ModelId[]).every(model => {
-        const matrix = result.business_transforms?.[model].matrix ?? transformParametersMatrix(defaultTransform());
-        return matrix.flat().every((value, index) => Math.abs(value-display.businessMatrices[model].flat()[index]) < 1e-12);
+  await restoreRegistrationHistory(session.registrations, signal, {
+    signature: () => display.signature(), running: () => running, businessMatrices: display.businessMatrices,
+    apply: (result, latest) => {
+      roleState.moving = result.moving_model;
+      roleState.direction = latest.output_direction;
+      refreshRoles(true);
+      Object.keys(icpValues).forEach(name => {
+        if (latest.parameters[name] !== undefined) icpValues[name] = String(latest.parameters[name]);
       });
-      if (matching && signature === display.signature() && !running) {
-        roleState.moving = result.moving_model;
-        roleState.direction = latest.output_direction;
-        refreshRoles(true);
-        Object.keys(icpValues).forEach(name => {
-          if (latest.parameters[name] !== undefined) icpValues[name] = String(latest.parameters[name]);
-        });
-        showResult(result, latest.job_id);
-        resultState.status = '已恢复最近一次配准结果。';
-        cameraController.fit();
-      }
-    } catch { if (!signal.aborted) resultState.status = '历史结果暂时无法加载，可重新配准。'; }
-  }
+      showResult(result, latest.job_id);
+      resultState.status = '已恢复最近一次配准结果。';
+      cameraController.fit();
+    },
+    unavailable: () => { resultState.status = '历史结果暂时无法加载，可重新配准。'; },
+  });
 }

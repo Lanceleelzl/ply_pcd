@@ -1,6 +1,15 @@
-import type { CreateSessionInput, HistoryItem, RegistrationSession } from './contracts';
+import type { CreateSessionInput, HistoryItem, RegistrationResult, RegistrationSession } from './contracts';
 import type { ModelId } from './contracts';
 import type { TransformParameters } from '../coordinate-math';
+
+export async function loadRegistrationResult(url: string, signal: AbortSignal): Promise<RegistrationResult> {
+  signal.throwIfAborted();
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const result = await response.json() as RegistrationResult;
+  signal.throwIfAborted();
+  return result;
+}
 
 export async function saveBusinessTransforms(
   sessionId: string,
