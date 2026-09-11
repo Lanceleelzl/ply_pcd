@@ -8,6 +8,7 @@ import RegistrationRoles from '../views/workbench/RegistrationRoles.vue';
 import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
+import { mountClippingLabels } from '../views/workbench/clipping-labels';
 import { createCoordinatePanel } from '../views/workbench/coordinate-fields';
 import { createViewportToolbar } from '../views/workbench/viewport-toolbar';
 import BusinessTransformPanel from '../views/workbench/BusinessTransformPanel.vue';
@@ -340,6 +341,8 @@ async function initializeWorkbench(
     axisState: model => axisClipState(clippingState.controlMode === 'joint' ? axisInputs : independentAxisInputs[model]),
     originState: model => ({ sides: originPlanes.clipSides(model), worldToOrigin: originPlanes.getWorldToOrigin(model) }),
   });
+  const clippingLabels = mountClippingLabels(viewportElement);
+  resources.add(() => clippingLabels.destroy());
   clippingHandles = new ClippingHandles(
     application, camera, canvas, () => clippingState.controlMode === 'joint' ? clipBox : independentClipBoxes[clippingState.editor], originalBounds.min, originalBounds.max,
     () => queryActive && !clippingInteractionActive ? 'off' : clippingState.editedMode(),
@@ -347,6 +350,7 @@ async function initializeWorkbench(
     (axis, side, value) => clippingState.controlMode === 'joint' ? setAxisBoundary(axis, side, value) : setAxisBoundaryIn(independentAxisInputs[clippingState.editor], axis, side, value),
     () => clippingState.helperVisible(),
     active => { gizmoTransforming = active; },
+    clippingLabels,
   );
   resources.add(() => clippingHandles?.destroy());
 

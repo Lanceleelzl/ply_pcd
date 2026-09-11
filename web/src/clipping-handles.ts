@@ -3,6 +3,10 @@ import * as pc from 'playcanvas';
 export type ClipAxis = 'x' | 'y' | 'z';
 export type ClipSide = 'min' | 'max';
 
+export interface ClippingLabelsView {
+  set(kind: 'axis' | 'box', axis: ClipAxis, side: ClipSide, position: { x: number; y: number; visible: boolean } | null): void;
+}
+
 export interface AxisClipState {
   min: pc.Vec3;
   max: pc.Vec3;
@@ -13,7 +17,6 @@ export interface AxisClipState {
 interface Handle {
   entity: pc.Entity;
   material: pc.StandardMaterial;
-  label: HTMLSpanElement;
   axis: ClipAxis;
   side: ClipSide;
   kind: 'axis' | 'box';
@@ -62,6 +65,7 @@ export class ClippingHandles {
     private readonly setAxisBoundary: (axis: ClipAxis, side: ClipSide, value: number) => void,
     private readonly helperVisible: () => boolean,
     private readonly onInteraction: (active: boolean) => void,
+    private readonly labels: ClippingLabelsView,
   ) {
     this.handleSize = Math.max(sceneMax.clone().sub(sceneMin).length() * 0.018, 0.08);
     this.axisPlanes = Object.fromEntries(axes.map(axis => {
@@ -91,9 +95,7 @@ export class ClippingHandles {
       head.render!.meshInstances.forEach(instance => { instance.material = material; });
       head.setLocalPosition(0, 0.62, 0); head.setLocalScale(0.42, 0.42, 0.42); entity.addChild(head);
       this.app.root.addChild(entity); entity.enabled = false;
-      const label = document.createElement('span'); label.className = `clip-handle-label axis-${axis}`; label.textContent = `${side === 'min' ? '−' : '+'}${axis.toUpperCase()}`;
-      this.canvas.parentElement!.appendChild(label);
-      this.handles.push({ entity, material, label, axis, side, kind, worldPosition: new pc.Vec3() });
+      this.handles.push({ entity, material, axis, side, kind, worldPosition: new pc.Vec3() });
     }
   }
 
@@ -117,8 +119,10 @@ export class ClippingHandles {
       handle.entity.enabled = show && handle.kind === mode && (handle.kind === 'box'
         ? true
         : handle === this.revealedHandle || handle === this.drag?.handle);
-      handle.label.hidden = !handle.entity.enabled;
-      if (!handle.entity.enabled) continue;
+      if (!handle.entity.enabled) {
+        this.labels.set(handle.kind, handle.axis, handle.side, null);
+        continue;
+      }
       handle.entity.setPosition(handle.worldPosition);
       const hovered = handle === this.hoveredHandle || this.drag?.handle === handle;
       const scale = hovered ? 1.12 : 1;
@@ -137,9 +141,11 @@ export class ClippingHandles {
       const opacity = handle.kind === 'box' ? (hovered ? 1 : 0.55) : (hovered ? 1 : 0.9);
       if (handle.material.opacity !== opacity) { handle.material.opacity = opacity; handle.material.update(); }
       const screen = this.camera.camera!.worldToScreen(handle.worldPosition); const rect = this.canvas.getBoundingClientRect();
-      handle.label.hidden = handle.kind === 'box' && !hovered;
-      handle.label.style.left = `${screen.x * rect.width / this.app.graphicsDevice.width}px`;
-      handle.label.style.top = `${screen.y * rect.height / this.app.graphicsDevice.height}px`;
+      this.labels.set(handle.kind, handle.axis, handle.side, {
+        x: screen.x * rect.width / this.app.graphicsDevice.width,
+        y: screen.y * rect.height / this.app.graphicsDevice.height,
+        visible: handle.kind !== 'box' || hovered,
+      });
     }
     this.updateAxisPlanes(show && mode === 'axis');
     if (!show) return;
@@ -230,7 +236,7 @@ export class ClippingHandles {
     Object.values(this.axisPlanes).forEach(entity => entity.destroy());
     this.handles.forEach(handle => {
       handle.entity.destroy();
-      handle.label.remove();
+      this.labels.set(handle.kind, handle.axis, handle.side, null);
     });
     this.handles.length = 0;
   }
