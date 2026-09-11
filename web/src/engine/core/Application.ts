@@ -23,6 +23,7 @@ export class RegistrationApplication {
       this.resources.add(() => touch.detach());
       this.app = new pc.Application(options.canvas, { mouse, touch, keyboard });
       this.resources.add(() => this.app.destroy());
+      this.app.setCanvasFillMode(pc.FILLMODE_NONE, options.viewport.clientWidth, options.viewport.clientHeight);
       this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
       this.app.scene.gsplat.alphaClip = 0.1;
 
