@@ -28,6 +28,7 @@ import '../view-gizmo.css';
 import { ViewportCameraController } from '../engine/core/ViewportCameraController';
 import { InputController } from '../engine/core/InputController';
 import { RegistrationApplication } from '../engine/core/Application';
+import { TransformGizmoInput } from '../engine/core/TransformGizmoInput';
 import { ToolManager } from '../engine/core/ToolManager';
 import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
 import { GaussianDisplayController } from '../engine/modules/GaussianDisplayController';
@@ -215,10 +216,6 @@ async function initializeWorkbench(
     gizmo.axisGap = 0.08; gizmo.axisLineLength = 0.72; gizmo.axisPlaneSize = 0.14; gizmo.axisPlaneGap = 0.22;
   });
   [rotate, clipRotate].forEach(gizmo => { gizmo.centerRadius = 0.001; gizmo.ringTolerance = 0.025; });
-  translate.mouseButtons[1] = translate.mouseButtons[2] = false;
-  rotate.mouseButtons[1] = rotate.mouseButtons[2] = false;
-  clipTranslate.mouseButtons[1] = clipTranslate.mouseButtons[2] = false;
-  clipRotate.mouseButtons[1] = clipRotate.mouseButtons[2] = false;
   const clippingState = reactive(new ClippingStateController());
   let clippingScene: ClippingSceneController | null = null;
   let clippingInteractionActive = false;
@@ -227,59 +224,10 @@ async function initializeWorkbench(
   let coordinateQuery: CoordinateQuery | null = null;
   let resultSignature = '';
   let gizmoTransforming = false;
-  let translateGizmoHovered = false; let rotateGizmoHovered = false;
-  let translateGizmoTransforming = false; let rotateGizmoTransforming = false;
-  const onTransformStart = () => { gizmoTransforming = true; };
-  const onTransformEnd = () => { gizmoTransforming = false; };
-  const refreshMovingGizmoInput = () => {
-    translate.mouseButtons[0] = translateGizmoTransforming || !rotateGizmoTransforming;
-    rotate.mouseButtons[0] = rotateGizmoTransforming
-      || (!translateGizmoTransforming && !translateGizmoHovered && rotateGizmoHovered);
-  };
-  translate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
-    translateGizmoHovered = Boolean(meshInstance); refreshMovingGizmoInput();
-  });
-  rotate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
-    rotateGizmoHovered = Boolean(meshInstance); refreshMovingGizmoInput();
-  });
-  translate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
-    translateGizmoTransforming = true; refreshMovingGizmoInput(); onTransformStart();
-  });
-  translate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
-    translateGizmoTransforming = false; refreshMovingGizmoInput(); onTransformEnd();
-  });
-  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
-    rotateGizmoTransforming = true; refreshMovingGizmoInput(); onTransformStart();
-  });
-  rotate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
-    rotateGizmoTransforming = false; refreshMovingGizmoInput(); onTransformEnd();
-  });
-  let clipTranslateHovered = false; let clipRotateHovered = false;
-  let clipTranslateTransforming = false; let clipRotateTransforming = false;
-  const refreshClipGizmoInput = () => {
-    clipTranslate.mouseButtons[0] = clipTranslateTransforming || !clipRotateTransforming;
-    clipRotate.mouseButtons[0] = clipRotateTransforming
-      || (!clipTranslateTransforming && !clipTranslateHovered && clipRotateHovered);
-  };
-  clipTranslate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
-    clipTranslateHovered = Boolean(meshInstance); refreshClipGizmoInput();
-  });
-  clipRotate.on(pc.Gizmo.EVENT_POINTERMOVE, (_x, _y, meshInstance) => {
-    clipRotateHovered = Boolean(meshInstance); refreshClipGizmoInput();
-  });
-  clipTranslate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
-    clipTranslateTransforming = true; refreshClipGizmoInput(); onTransformStart();
-  });
-  clipTranslate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
-    clipTranslateTransforming = false; refreshClipGizmoInput(); onTransformEnd();
-  });
-  clipRotate.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
-    clipRotateTransforming = true; refreshClipGizmoInput(); onTransformStart();
-  });
-  clipRotate.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
-    clipRotateTransforming = false; refreshClipGizmoInput(); onTransformEnd();
-  });
-  refreshMovingGizmoInput(); refreshClipGizmoInput();
+  const movingGizmoInput = new TransformGizmoInput(translate, rotate, active => { gizmoTransforming = active; });
+  resources.add(() => movingGizmoInput.destroy());
+  const clipGizmoInput = new TransformGizmoInput(clipTranslate, clipRotate, active => { gizmoTransforming = active; });
+  resources.add(() => clipGizmoInput.destroy());
   const movingEntity = () => entities[effectiveMoving()];
   [translate, rotate].forEach(gizmo => gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => display.applyHandle()));
   type EditingToolId = 'idle' | 'model-transform' | 'clipping' | 'coordinate-query';
@@ -557,8 +505,7 @@ async function initializeWorkbench(
     },
     navigationBlocked: event => {
       if (coordinateQuery?.active && (coordinateQuery.hovered || coordinateQuery.dragging) && event.button === 0) return true;
-      const clipGizmoHovered = clipTranslateHovered || clipRotateHovered;
-      const gizmoHovered = clippingInteractionActive ? clipGizmoHovered : (translateGizmoHovered || rotateGizmoHovered);
+      const gizmoHovered = clippingInteractionActive ? clipGizmoInput.hovered : movingGizmoInput.hovered;
       return event.button === 2 || gizmoTransforming || (event.button === 0 && gizmoHovered);
     },
     dragBlocked: () => gizmoTransforming || Boolean(coordinateQuery?.dragging),
