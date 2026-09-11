@@ -216,6 +216,18 @@
   line-height: 1.55;
 }
 
+.integrated-editor .registration-inspector .pose-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.integrated-editor .registration-inspector .axis-input input[type=number] {
+  padding-left: 5px;
+  padding-right: 18px;
+  font: 12px/20px Consolas, "SFMono-Regular", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .viewport-toolbar {
   position: absolute;
   z-index: 4;

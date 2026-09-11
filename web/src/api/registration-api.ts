@@ -1,4 +1,21 @@
 import type { CreateSessionInput, HistoryItem, RegistrationSession } from './contracts';
+import type { ModelId } from './contracts';
+import type { TransformParameters } from '../coordinate-math';
+
+export async function saveBusinessTransforms(
+  sessionId: string,
+  transforms: Record<ModelId, TransformParameters>,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const response = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/business-transforms`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_a: transforms.a, model_b: transforms.b }), signal,
+  });
+  const body = await responseBody(response);
+  signal.throwIfAborted();
+  if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+}
 
 function waitForPoll(signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();

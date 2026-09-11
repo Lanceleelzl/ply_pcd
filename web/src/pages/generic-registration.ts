@@ -1,4 +1,5 @@
 import { waitForSession } from '../api/registration-api';
+import { createBusinessTransformState, defaultBusinessTransform } from '../stores/business-transform-state';
 import { ResourceScope } from '../app/resource-scope';
 import type { GaussianViewState } from '../views/workbench/gaussian-view-state';
 import type { ResultViewState } from '../views/workbench/result-view-state';
@@ -88,7 +89,7 @@ async function initializeWorkbench(
   signal.throwIfAborted();
   const infoA = session.metadata!.models.a;
   const infoB = session.metadata!.models.b;
-  const defaultTransform = (): TransformParameters => ({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] });
+  const defaultTransform = defaultBusinessTransform;
   const businessTransforms: Record<ModelId, TransformParameters> = session.business_transforms ?? { a: defaultTransform(), b: defaultTransform() };
   const gaussianState = reactive<GaussianViewState>({
     models: { a: { active: false, loading: false }, b: { active: false, loading: false } },
@@ -250,39 +251,16 @@ async function initializeWorkbench(
   });
   refreshRoles();
 
-  const toDraft = (value: TransformParameters) => ({
-    translation: value.translation.map(String), rotation_degrees: value.rotation_degrees.map(String), scale: value.scale.map(String),
+  const business = createBusinessTransformState(sessionId, businessTransforms, signal, next => {
+    businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
+    coordinateQuery?.invalidate(); resultState.visible = false;
   });
-  const businessDraft = reactive({ a: toDraft(businessTransforms.a), b: toDraft(businessTransforms.b) });
-  const businessState = shallowReactive({ disabled: false, saving: false, message: '' });
-  const readBusinessTransform = (model: ModelId): TransformParameters => {
-    const values = (kind: keyof TransformParameters) => businessDraft[model][kind].map(value =>
-      value.trim() === '' ? (kind === 'scale' ? 1 : 0) : Number(value)) as XYZ;
-    return { translation: values('translation'), rotation_degrees: values('rotation_degrees'), scale: values('scale') };
-  };
-  const setBusinessInputs = (model: ModelId, value: TransformParameters) => { businessDraft[model] = toDraft(value); };
-  const applyBusinessTransforms = async () => {
-    if (businessState.disabled || businessState.saving) return;
-    businessState.saving = true;
-    try {
-      const next = { a: readBusinessTransform('a'), b: readBusinessTransform('b') };
-      for (const value of Object.values(next)) {
-        if ([...value.translation,...value.rotation_degrees,...value.scale].some(number => !Number.isFinite(number))) throw new Error('参数必须是有效数字');
-        if (value.scale.some(number => number <= 0)) throw new Error('缩放必须大于 0');
-      }
-      const response = await fetch(`/api/v2/registration-sessions/${sessionId}/business-transforms`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ model_a: next.a, model_b: next.b }), signal });
-      const body = await response.json(); if (!response.ok) throw new Error(body.detail ?? `HTTP ${response.status}`);
-      businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
-      coordinateQuery?.invalidate(); resultState.visible = false;
-      businessState.message = '已应用。视图已按各模型预变换更新，粗配准及旧 ICP 结果已失效，请重新配准。';
-    } catch (error) { if (!signal.aborted) businessState.message = `应用失败：${String(error)}`; }
-    finally { businessState.saving = false; }
-  };
+  const { drafts: businessDraft, state: businessState } = business;
   panels.business = () => h(BusinessTransformPanel, {
     drafts: businessDraft, ...businessState,
     onChange: (model: ModelId, kind: keyof TransformParameters, index: number, value: string) => { businessDraft[model][kind][index] = value; },
-    onReset: () => { setBusinessInputs('a', defaultTransform()); setBusinessInputs('b', defaultTransform()); },
-    onApply: applyBusinessTransforms,
+    onReset: business.reset,
+    onApply: business.apply,
   });
 
   let clippingHandles: ClippingHandles | null = null;
