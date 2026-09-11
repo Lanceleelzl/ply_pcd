@@ -5,7 +5,7 @@ import type { PreviewCloud } from '../../point-cloud';
 import { ResourceScope } from '../../app/resource-scope';
 import { RegistrationApplication } from './Application';
 import { RegistrationScene } from '../modules/RegistrationScene';
-import { ViewportCameraController, type ViewportInputDelegate } from './ViewportCameraController';
+import { ViewportCameraController, type ViewportInputDelegate, type CameraOrientation } from './ViewportCameraController';
 import { InputController } from './InputController';
 import { ToolManager } from './ToolManager';
 
@@ -13,7 +13,7 @@ export type EditingToolId = 'idle' | 'model-transform' | 'clipping' | 'coordinat
 
 interface RegistrationEngineOptions {
   canvas: HTMLCanvasElement;
-  root: HTMLElement;
+  orientationChanged: (orientation: CameraOrientation) => void;
   clouds: Record<ModelId, PreviewCloud>;
   origins: Record<ModelId, XYZ>;
   transforms: Record<ModelId, TransformParameters>;
@@ -42,10 +42,9 @@ export class RegistrationEngine {
       this.scene = new RegistrationScene(this.app, options.clouds, options.origins, options.transforms, options.moving);
       this.resources.add(() => this.scene.destroy());
       this.cameraController = new ViewportCameraController({
-        camera: this.camera, canvas: options.canvas, root: options.root,
+        camera: this.camera, canvas: options.canvas, orientationChanged: options.orientationChanged,
         baseDiagonal: this.scene.baseDiagonal, getBounds: () => this.scene.bounds(),
       });
-      this.resources.add(() => this.cameraController.destroy());
       const translate = (name: string) => {
         const gizmo = new pc.TranslateGizmo(this.camera.camera!, pc.TranslateGizmo.createLayer(this.app, name));
         this.resources.add(() => gizmo.destroy());

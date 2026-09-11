@@ -25,6 +25,7 @@ import { loadPreview, type PointCloudMaterial } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
 import { RegistrationEngine } from '../engine/core/RegistrationEngine';
+import { mountViewControls } from '../views/workbench/view-controls';
 import { TransformGizmoInput } from '../engine/core/TransformGizmoInput';
 import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
 import { GaussianDisplayController } from '../engine/modules/GaussianDisplayController';
@@ -128,8 +129,14 @@ async function initializeWorkbench(
   const viewportElement = canvas.parentElement!;
   viewportElement.style.minHeight = '0';
   viewportElement.style.overflow = 'hidden';
+  const viewControls = mountViewControls(root, {
+    direction: value => engine.cameraController.setViewDirection(new pc.Vec3(...value)),
+    orbit: (horizontal, vertical) => engine.cameraController.orbit(horizontal, vertical),
+    projection: orthographic => engine.cameraController.setProjection(orthographic),
+  });
+  resources.add(() => viewControls.destroy());
   const engine = new RegistrationEngine({
-    canvas, root, clouds: { a: cloudA, b: cloudB },
+    canvas, orientationChanged: viewControls.update, clouds: { a: cloudA, b: cloudB },
     origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
     transforms: businessTransforms, moving: effectiveMoving(),
   });
