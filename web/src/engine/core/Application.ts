@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import { ResourceScope } from '../../app/resource-scope';
 
 interface RegistrationApplicationOptions {
   canvas: HTMLCanvasElement;
@@ -10,38 +11,42 @@ export class RegistrationApplication {
   readonly app: pc.Application;
   readonly camera: pc.Entity;
 
-  private readonly resizeObserver: ResizeObserver;
-  private destroyed = false;
+  private readonly resources = new ResourceScope();
 
   constructor(options: RegistrationApplicationOptions) {
-    const keyboard = new pc.Keyboard(window);
-    this.app = new pc.Application(options.canvas, {
-      mouse: new pc.Mouse(options.canvas),
-      touch: new pc.TouchDevice(options.canvas),
-      keyboard,
-    });
-    this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
-    this.app.scene.gsplat.alphaClip = 0.1;
+    try {
+      const keyboard = new pc.Keyboard(window);
+      this.resources.add(() => keyboard.detach());
+      const mouse = new pc.Mouse(options.canvas);
+      this.resources.add(() => mouse.detach());
+      const touch = new pc.TouchDevice(options.canvas);
+      this.resources.add(() => touch.detach());
+      this.app = new pc.Application(options.canvas, { mouse, touch, keyboard });
+      this.resources.add(() => this.app.destroy());
+      this.app.setCanvasResolution(pc.RESOLUTION_AUTO);
+      this.app.scene.gsplat.alphaClip = 0.1;
 
-    this.camera = new pc.Entity('Camera');
-    this.camera.addComponent('camera', {
-      clearColor: options.clearColor ?? new pc.Color(0.035, 0.055, 0.085),
-      farClip: 100000,
-      toneMapping: pc.TONEMAP_ACES,
-    });
-    this.app.root.addChild(this.camera);
+      this.camera = new pc.Entity('Camera');
+      this.camera.addComponent('camera', {
+        clearColor: options.clearColor ?? new pc.Color(0.035, 0.055, 0.085),
+        farClip: 100000,
+        toneMapping: pc.TONEMAP_ACES,
+      });
+      this.app.root.addChild(this.camera);
 
-    this.resizeObserver = new ResizeObserver(() => {
-      this.app.resizeCanvas(options.viewport.clientWidth, options.viewport.clientHeight);
-    });
-    this.resizeObserver.observe(options.viewport);
-    this.app.start();
+      const resizeObserver = new ResizeObserver(() => {
+        this.app.resizeCanvas(options.viewport.clientWidth, options.viewport.clientHeight);
+      });
+      this.resources.add(() => resizeObserver.disconnect());
+      resizeObserver.observe(options.viewport);
+      this.app.start();
+    } catch (error) {
+      this.destroy();
+      throw error;
+    }
   }
 
   destroy(): void {
-    if (this.destroyed) return;
-    this.destroyed = true;
-    this.resizeObserver.disconnect();
-    this.app.destroy();
+    this.resources.dispose();
   }
 }
