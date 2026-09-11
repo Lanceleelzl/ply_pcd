@@ -42,6 +42,26 @@ test('Gaussian commands ignore unavailable models and duplicate pending loads', 
   f.controller.destroy();
 });
 
+test('late successful loads release their resource without reviving a destroyed scene', async () => {
+  const f = fixture();
+  const pending = f.controller.toggle('a');
+  const asset = f.assets[0];
+  asset.registry = Object.assign(new pc.EventHandler(), { _loader: { clearCache: () => {} } }) as unknown as pc.AssetRegistry;
+  f.controller.destroy();
+  const stateCount = f.states.length;
+  Object.defineProperty(f.entities.a, 'render', { get: () => { throw new Error('model already destroyed'); } });
+  let released = 0;
+  asset.resource = { destroy: () => { released++; } };
+  asset.loaded = true;
+  asset.fire('load', asset);
+  await pending;
+  assert.equal(released, 1);
+  assert.equal(asset.resources.length, 0);
+  assert.equal(f.states.length, stateCount);
+  assert.equal(f.messages.length, 0);
+  assert.equal(f.removed.length, 1);
+});
+
 test('late load errors after destruction do not touch destroyed models or publish UI state', async () => {
   const f = fixture();
   const pending = f.controller.toggle('a');

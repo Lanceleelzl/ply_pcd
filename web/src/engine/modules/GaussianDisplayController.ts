@@ -96,7 +96,10 @@ export class GaussianDisplayController {
         asset.once('error', reject);
         this.options.app.assets.load(asset);
       });
-      if (this.destroyed) return;
+      if (this.destroyed) {
+        asset.unload();
+        return;
+      }
       const entity = new pc.Entity(`Model ${model.toUpperCase()} Original Gaussian`);
       entity.addComponent('gsplat', { asset });
       const origin = this.options.origins[model];
