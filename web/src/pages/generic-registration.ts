@@ -18,11 +18,11 @@ import { h, reactive, shallowReactive } from 'vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
-import { RegistrationDisplay } from '../registration-display';
+import { RegistrationScene } from '../engine/modules/RegistrationScene';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { OriginPlaneController } from '../origin-planes';
 import { createOriginPlanePanel } from '../views/workbench/origin-plane-panel';
-import { createPointCloudEntity, loadPreview, type PointCloudMaterial, type PreviewCloud } from '../point-cloud';
+import { loadPreview, type PointCloudMaterial } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
 import { ViewportCameraController } from '../engine/core/ViewportCameraController';
@@ -44,16 +44,6 @@ import type {
 import type { WorkbenchLayoutOptions } from '../views/workbench/mount-workbench-layout';
 
 const matrixText = (matrix: Matrix4) => matrix.map(row => row.map(value => value.toFixed(12)).join(' ')).join('\n');
-
-function boundsOf(a: PreviewCloud, b: PreviewCloud): { center: pc.Vec3; diagonal: number } {
-  const min = new pc.Vec3(Math.min(a.min.x, b.min.x), Math.min(a.min.y, b.min.y), Math.min(a.min.z, b.min.z));
-  const max = new pc.Vec3(Math.max(a.max.x, b.max.x), Math.max(a.max.y, b.max.y), Math.max(a.max.z, b.max.z));
-  return { center: min.clone().add(max).mulScalar(0.5), diagonal: max.clone().sub(min).length() };
-}
-
-function cloudDiagonal(cloud: PreviewCloud): number {
-  return cloud.max.clone().sub(cloud.min).length();
-}
 
 export async function renderGenericRegistration(
   root: HTMLElement,
@@ -146,57 +136,22 @@ async function initializeWorkbench(
   resources.add(() => engine.destroy());
   const application = engine.app;
   const camera = engine.camera;
-  const entityA = createPointCloudEntity(application, cloudA, new pc.Color(0.68, 0.72, 0.78), 'Model A');
-  const entityB = createPointCloudEntity(application, cloudB, new pc.Color(0.68, 0.72, 0.78), 'Model B');
-  application.root.addChild(entityA); application.root.addChild(entityB);
-  const entities = { a: entityA, b: entityB };
-  const clouds = { a: cloudA, b: cloudB };
-  const pointMaterials: Record<ModelId, PointCloudMaterial> = {
-    a: entityA.render!.meshInstances[0].material as PointCloudMaterial,
-    b: entityB.render!.meshInstances[0].material as PointCloudMaterial,
-  };
-  const createClipBox = (name: string, color: pc.Color) => {
-    const box = new pc.Entity(name); box.addComponent('render', { type: 'box' });
-    const material = new pc.StandardMaterial();
-    material.diffuse = color; material.emissive = color.clone().mulScalar(0.25);
-    material.opacity = 0.055; material.blendType = pc.BLEND_NORMAL; material.depthWrite = false; material.update();
-    box.render!.meshInstances.forEach(instance => { instance.material = material; });
-    application.root.addChild(box); box.enabled = false; return box;
-  };
-  const clipBox = createClipBox('Joint Clipping Box', new pc.Color(0.12, 0.82, 0.68));
-  const independentClipBoxes: Record<ModelId, pc.Entity> = {
-    a: createClipBox('Model A Clipping Box', new pc.Color(0.45, 0.65, 0.9)),
-    b: createClipBox('Model B Clipping Box', new pc.Color(1.0, 0.72, 0.08)),
-  };
+  const scene = new RegistrationScene(application, { a: cloudA, b: cloudB },
+    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms, effectiveMoving());
+  resources.add(() => scene.destroy());
+  const { entities, clouds, pointMaterials, clipBox, independentClipBoxes, display, modelDiagonals } = scene;
   const modelVisible = toolbarState.visible;
-  const display = new RegistrationDisplay(application.root, entities,
-    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms);
-  display.reset(effectiveMoving());
-  const bounds = boundsOf(cloudA, cloudB);
-  const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
   const originPlaneUI = createOriginPlanePanel(root, inspectorState, active => { toolbarState.originPlanesActive = active; });
   panels.originPlanes = originPlaneUI.render;
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
   resources.add(() => originPlanes.destroy());
-  const displayBounds = () => {
-    const min = new pc.Vec3(Infinity, Infinity, Infinity);
-    const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
-    (['a', 'b'] as ModelId[]).forEach(model => {
-      const cloud = clouds[model]; const matrix = display.localToDisplay(model);
-      for (const x of [cloud.min.x, cloud.max.x]) for (const y of [cloud.min.y, cloud.max.y]) for (const z of [cloud.min.z, cloud.max.z]) {
-        const point = new pc.Vec3(...transformXYZ(matrix, [x, y, z]));
-        min.min(point); max.max(point);
-      }
-    });
-    return { min, max };
-  };
   const cameraController = new ViewportCameraController({
     camera,
     canvas,
     root,
-    baseDiagonal: bounds.diagonal,
-    getBounds: displayBounds,
+    baseDiagonal: scene.baseDiagonal,
+    getBounds: () => scene.bounds(),
   });
   resources.add(() => cameraController.destroy());
 
@@ -557,7 +512,7 @@ async function initializeWorkbench(
     panel: queryPanel,
     toolbar: queryToolbar,
     app: application, camera, canvas, entities, clouds, sessionId,
-    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: bounds.diagonal,
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessMatrices: display.businessMatrices, diagonal: scene.baseDiagonal,
     localToDisplay: model => display.localToDisplay(model),
     signature: () => display.signature(),
     setOriginal: original => { display.setOriginal(original); cameraController.fit(); },
