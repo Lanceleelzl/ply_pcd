@@ -8,6 +8,8 @@ import WorkbenchLayout from './WorkbenchLayout.vue';
 import type { WorkbenchPanels } from './workbench-panels';
 
 export interface WorkbenchLayoutOptions {
+  view: { roleSummary: string; initialMatrix: string; help: string };
+  onNewTask: () => void;
   session: RegistrationSession;
   gaussian: GaussianViewState;
   toolbar: ToolbarState;

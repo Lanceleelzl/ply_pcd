@@ -113,7 +113,9 @@ async function initializeWorkbench(
     result: null, direction: 'a_to_b', visible: false, status: '尚未提交',
     progressVisible: false, progressCompleted: false, progressText: '', progressTop: 0,
   });
+  const viewState = reactive({ roleSummary: '', initialMatrix: '', help: '' });
   await host.mountLayout({
+    view: viewState, onNewTask: host.navigateHome,
     session, gaussian: gaussianState, toolbar: toolbarState, result: resultState, inspector: inspectorState, panels,
     onToolbar: command => {
       switch (command.type) {
@@ -357,7 +359,7 @@ async function initializeWorkbench(
     });
     recolor(entities[moving], new pc.Color(1.0, 0.72, 0.08));
     recolor(entities[fixed], new pc.Color(0.68, 0.72, 0.78));
-    root.querySelector<HTMLElement>('#badge')!.textContent = `移动 ${moving.toUpperCase()}（黄色）　固定 ${fixed.toUpperCase()}（灰色）`;
+    viewState.roleSummary = `移动 ${moving.toUpperCase()}（黄色）　固定 ${fixed.toUpperCase()}（灰色）`;
     attach();
   };
   panels.roles = () => h(RegistrationRoles, {
@@ -411,7 +413,7 @@ async function initializeWorkbench(
     const pose = display.getPose();
     const values = [...pose.position, ...pose.rotation];
     if (values.some((value, index) => value !== poseState.values[index])) poseState.values = values;
-    root.querySelector<HTMLElement>('#initial-matrix')!.textContent = matrixText(display.getMovingLocalToFixedLocal());
+    viewState.initialMatrix = matrixText(display.getMovingLocalToFixedLocal());
     clippingScene?.sync();
     clippingScene?.drawHelpers();
     clippingHandles?.update();
@@ -500,7 +502,7 @@ async function initializeWorkbench(
     clippingInteractionActive = inspectorState.clipping && editedMode !== 'off';
     clipBox.enabled = clippingState.controlMode === 'joint' && clippingState.jointMode === 'box' && clippingState.jointHelperVisible;
     attach();
-    root.querySelector<HTMLElement>('#viewport-help')!.textContent = editedMode === 'box'
+    viewState.help = editedMode === 'box'
       ? '左键空白：旋转　中键：平移　滚轮：缩放　左键手柄：调整剖切长方体'
       : '左键空白：旋转　中键：平移　滚轮：缩放　左键平移轴／面：移动模型　左键旋转圆环：旋转模型';
   };
@@ -534,9 +536,6 @@ async function initializeWorkbench(
   });
 
   refreshClippingMode();
-  root.querySelector('#new-task')!.addEventListener('click', () => {
-    host.navigateHome();
-  });
 
   const inputController = new InputController(canvas, cameraController, {
     pointerMove: event => {
