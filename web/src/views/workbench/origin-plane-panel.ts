@@ -3,14 +3,12 @@ import type { ModelId } from '../../api/contracts';
 import { createOriginPlaneState, type OriginPlane } from '../../origin-plane-state';
 import OriginPlaneForm from './OriginPlaneForm.vue';
 
-export function mountOriginPlanePanel(root: HTMLElement) {
+export function mountOriginPlanePanel(root: HTMLElement, activeChanged: (active: boolean) => void) {
   const state = reactive(createOriginPlaneState());
-  const toggle = root.querySelector<HTMLButtonElement>('#origin-planes-toggle')!;
   const panel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
   const refresh = () => {
     const active = Object.values(state).some(model => Object.values(model).some(plane => plane.visible || plane.side !== 0));
-    toggle.classList.toggle('active', active);
-    toggle.setAttribute('aria-pressed', String(active));
+    activeChanged(active);
   };
   const togglePanel = () => {
     panel.hidden = !panel.hidden;
@@ -24,12 +22,11 @@ export function mountOriginPlanePanel(root: HTMLElement) {
     onClear: () => { Object.assign(state, createOriginPlaneState()); refresh(); },
   }) });
   form.mount(panel);
-  toggle.addEventListener('click', togglePanel);
   refresh();
   return {
     state,
+    toggle: togglePanel,
     destroy() {
-      toggle.removeEventListener('click', togglePanel);
       form.unmount();
     },
   };

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { ModelId, RegistrationSession } from '../../api/contracts';
-import GaussianControls from './GaussianControls.vue';
+import type { RegistrationSession } from '../../api/contracts';
+import ViewportToolbar from './ViewportToolbar.vue';
+import type { ToolbarCommand, ToolbarState } from './toolbar-state';
 import type { GaussianViewState } from './gaussian-view-state';
 
-defineProps<{ session: RegistrationSession; gaussian: GaussianViewState }>();
-const emit = defineEmits<{ gaussian: [model: ModelId] }>();
-const models = ['a', 'b'] as const;
+defineProps<{ session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState }>();
+const emit = defineEmits<{ toolbar: [command: ToolbarCommand] }>();
 const faces = [
   { axis: 'x', direction: '1,0,0', label: 'X', title: '沿 +X 查看' },
   { axis: 'nx', direction: '-1,0,0', label: '−X', title: '沿 -X 查看' },
@@ -43,27 +43,7 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       </aside>
       <section class="viewport">
         <canvas id="viewport"></canvas>
-        <div class="viewport-toolbar toolbar">
-          <div class="viewport-tool-group" role="group" aria-label="配准与视图">
-            <span class="tool-group-label">配准与视图</span>
-            <button id="reset" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置">重置</button>
-            <button id="fit">适应全部</button>
-            <button id="clipping-toggle">剖切</button>
-          </div>
-          <div class="viewport-tool-group" role="group" aria-label="模型显隐">
-            <span class="tool-group-label">模型显隐</span>
-            <button v-for="model in models" :id="`toggle-model-${model}`" :key="model" class="active">{{ model.toUpperCase() }}：显示</button>
-          </div>
-          <GaussianControls :session="session" :state="gaussian" @toggle="emit('gaussian', $event)" />
-          <div class="viewport-tool-group" role="group" aria-label="平面工具">
-            <span class="tool-group-label">平面工具</span><button id="origin-planes-toggle" aria-pressed="false">原点平面</button>
-          </div>
-          <div class="viewport-tool-group" role="group" aria-label="坐标工具">
-            <span class="tool-group-label">坐标工具</span>
-            <button id="coordinate-query" disabled title="完成 ICP 后可查询坐标对">坐标查询</button>
-            <button id="origin-a" aria-pressed="false">A 原点／轴</button><button id="origin-b" aria-pressed="false">B 原点／轴</button>
-          </div>
-        </div>
+        <ViewportToolbar :session="session" :gaussian="gaussian" :state="toolbar" @command="emit('toolbar', $event)" />
         <div id="iteration-progress" class="viewport-progress" role="status" aria-live="polite" hidden></div>
         <div class="view-gizmo" aria-label="快速视角">
           <div class="view-cube-scene"><div class="view-cube">

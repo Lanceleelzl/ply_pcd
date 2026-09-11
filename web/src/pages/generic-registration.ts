@@ -6,7 +6,7 @@ import ClippingPanel from '../views/workbench/ClippingPanel.vue';
 import { createAxisRange, setAxisRangeBoundary, type AxisRangeState } from '../engine/modules/axis-range';
 import { mountCoordinateLabels } from '../views/workbench/coordinate-labels';
 import { mountCoordinatePanel } from '../views/workbench/coordinate-fields';
-import { mountViewportToolbar } from '../views/workbench/viewport-toolbar';
+import { createViewportToolbar } from '../views/workbench/viewport-toolbar';
 import BusinessTransformPanel from '../views/workbench/BusinessTransformPanel.vue';
 import CoarsePoseForm from '../views/workbench/CoarsePoseForm.vue';
 import RegistrationActions from '../views/workbench/RegistrationActions.vue';
@@ -102,7 +102,23 @@ async function initializeWorkbench(
     models: { a: { active: false, loading: false }, b: { active: false, loading: false } },
     message: '', error: false,
   });
-  resources.add(mountWorkbenchLayout(root, session, gaussianState, model => { void gaussianController.toggle(model); }));
+  const queryToolbar = createViewportToolbar();
+  const toolbarState = queryToolbar.state;
+  resources.add(mountWorkbenchLayout(root, {
+    session, gaussian: gaussianState, toolbar: toolbarState,
+    onToolbar: command => {
+      switch (command.type) {
+        case 'reset': if (!toolbarState.locked) display.reset(effectiveMoving()); break;
+        case 'fit': cameraController.fit(); break;
+        case 'clipping': toggleClippingPanel(); break;
+        case 'origin-planes': toggleOriginPlanes(); break;
+        case 'query': coordinateQuery?.toggleQuery(); break;
+        case 'visibility': setModelVisible(command.model, !modelVisible[command.model]); break;
+        case 'origin-axes': toolbarState.axes[command.model] = coordinateQuery?.toggleOrigin(command.model) ?? false; break;
+        case 'gaussian': void gaussianController.toggle(command.model); break;
+      }
+    },
+  }));
 
   const roleState = reactive({ moving: session.moving_model, direction: session.output_direction, disabled: false });
   const effectiveMoving = (): ModelId => roleState.moving === 'auto'
@@ -139,13 +155,13 @@ async function initializeWorkbench(
     a: createClipBox('Model A Clipping Box', new pc.Color(0.45, 0.65, 0.9)),
     b: createClipBox('Model B Clipping Box', new pc.Color(1.0, 0.72, 0.08)),
   };
-  const modelVisible: Record<ModelId, boolean> = { a: true, b: true };
+  const modelVisible = toolbarState.visible;
   const display = new RegistrationDisplay(application.root, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms);
   display.reset(effectiveMoving());
   const bounds = boundsOf(cloudA, cloudB);
   const modelDiagonals: Record<ModelId, number> = { a: cloudDiagonal(cloudA), b: cloudDiagonal(cloudB) };
-  const originPlaneUI = mountOriginPlanePanel(root);
+  const originPlaneUI = mountOriginPlanePanel(root, active => { toolbarState.originPlanesActive = active; });
   resources.add(() => originPlaneUI.destroy());
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
@@ -296,22 +312,11 @@ async function initializeWorkbench(
     else toolManager.activate('idle');
   };
 
-  const visibilityButtons: Record<ModelId, HTMLButtonElement> = {
-    a: root.querySelector<HTMLButtonElement>('#toggle-model-a')!,
-    b: root.querySelector<HTMLButtonElement>('#toggle-model-b')!,
-  };
   const setModelVisible = (model: ModelId, visible: boolean) => {
     modelVisible[model] = visible;
     entities[model].enabled = visible;
-    visibilityButtons[model].classList.toggle('active', visible);
-    visibilityButtons[model].textContent = `${model.toUpperCase()}：${visible ? '显示' : '隐藏'}`;
-    visibilityButtons[model].setAttribute('aria-pressed', String(visible));
     attach();
   };
-  (['a', 'b'] as ModelId[]).forEach(model => {
-    visibilityButtons[model].addEventListener('click', () => setModelVisible(model, !modelVisible[model]));
-    visibilityButtons[model].setAttribute('aria-pressed', 'true');
-  });
 
   const gaussianController = new GaussianDisplayController({
     app: application,
@@ -408,21 +413,17 @@ async function initializeWorkbench(
     clippingHandles?.update();
   });
 
-  const resetButton = root.querySelector<HTMLButtonElement>('#reset')!;
-  const clippingToggle = root.querySelector<HTMLButtonElement>('#clipping-toggle')!;
   const clippingPanel = root.querySelector<HTMLElement>('#clipping-panel')!;
   const originPlanePanel = root.querySelector<HTMLElement>('.origin-planes-panel')!;
   const clippingSettings = reactive<{ scope: 'both' | ModelId }>({ scope: 'both' });
-  resetButton.addEventListener('click', () => { if (!running) display.reset(effectiveMoving()); });
-  root.querySelector('#fit')!.addEventListener('click', () => cameraController.fit());
-  clippingToggle.addEventListener('click', () => {
+  const toggleClippingPanel = () => {
     clippingPanel.hidden = !clippingPanel.hidden;
     if (!clippingPanel.hidden) {
       originPlanePanel.hidden = true;
       clippingPanel.parentElement!.scrollTop = 0;
     }
     refreshClippingMode();
-  });
+  };
 
   const originalBounds = (() => {
     const min = new pc.Vec3(Math.min(cloudA.min.x, cloudB.min.x), Math.min(cloudA.min.y, cloudB.min.y), Math.min(cloudA.min.z, cloudB.min.z));
@@ -489,9 +490,8 @@ async function initializeWorkbench(
         && clippingState.independentModes[model] === 'box' && clippingState.independentHelpers[model];
     });
     const clippingEnabled = clippingState.enabled();
-    clippingToggle.classList.toggle('active', clippingEnabled);
-    clippingToggle.setAttribute('aria-pressed', String(clippingEnabled));
-    clippingToggle.title = `${clippingState.summary()}；点击打开或关闭剖切面板`;
+    toolbarState.clippingActive = clippingEnabled;
+    toolbarState.clippingTitle = `${clippingState.summary()}；点击打开或关闭剖切面板`;
     gaussianController.refreshStatus();
     const editedMode = clippingState.editedMode();
     clippingInteractionActive = !clippingPanel.hidden && editedMode !== 'off';
@@ -594,7 +594,6 @@ async function initializeWorkbench(
   progressResize.observe(progressToolbar);
   progressResize.observe(iterationProgress);
   positionProgress();
-  const registrationControls = [resetButton];
   let latestProgressIteration = 0;
   const setRunning = (value: boolean) => {
     running = value;
@@ -604,15 +603,10 @@ async function initializeWorkbench(
     roleState.disabled = value || queryActive;
     actionState.running = value;
     actionState.cancelling = false;
-    registrationControls.forEach(control => { control.disabled = value || queryActive; });
+    toolbarState.locked = value || queryActive;
     actionState.locked = queryActive;
     attach();
   };
-  const queryToolbar = mountViewportToolbar(root, {
-    query: () => coordinateQuery?.toggleQuery(),
-    toggleOrigin: model => coordinateQuery?.toggleOrigin(model) ?? false,
-  });
-  resources.add(() => queryToolbar.destroy());
   const queryPanel = mountCoordinatePanel(root, {
     onSource: model => coordinateQuery?.setSource(model),
     onChange: values => coordinateQuery?.setCoordinates(values),
@@ -637,11 +631,10 @@ async function initializeWorkbench(
       poseState.disabled = active || running;
       businessState.disabled = active || running;
       roleState.disabled = active || running;
-      registrationControls.forEach(control => { control.disabled = active || running; });
+      toolbarState.locked = active || running;
       actionState.locked = active;
       clippingPanel.hidden = true; clippingInteractionActive = false;
       if (active) originPlanePanel.hidden = true;
-      clippingToggle.disabled = false;
       attach();
     },
     visiblePoint: (model, point) => {
@@ -650,12 +643,13 @@ async function initializeWorkbench(
     },
   });
   resources.add(() => coordinateQuery?.destroy());
-  root.querySelector('#origin-planes-toggle')!.addEventListener('click', () => {
+  const toggleOriginPlanes = () => {
+    originPlaneUI.toggle();
     if (originPlanePanel.hidden) return;
     clippingPanel.hidden = true; clippingInteractionActive = false;
     if (coordinateQuery?.active) coordinateQuery.close();
     attach(); positionProgress();
-  });
+  };
   const showResult = (result: RegistrationResult, jobId: string) => {
     display.setMovingLocalToFixedLocal(result.moving_local_to_fixed_local);
     coordinateQuery?.setResult(result, jobId);

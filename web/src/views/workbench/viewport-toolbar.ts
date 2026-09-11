@@ -1,23 +1,15 @@
-import type { ModelId } from '../../api/contracts';
+import { reactive } from 'vue';
+import type { ToolbarState } from './toolbar-state';
 
-export function mountViewportToolbar(root: HTMLElement, actions: {
-  query: () => void;
-  toggleOrigin: (model: ModelId) => boolean;
-}) {
-  const toggle = root.querySelector<HTMLButtonElement>('#coordinate-query')!;
-  const lifecycle = new AbortController();
-  toggle.addEventListener('click', actions.query, { signal: lifecycle.signal });
-  for (const model of ['a', 'b'] as const) {
-    const button = root.querySelector<HTMLButtonElement>(`#origin-${model}`)!;
-    button.addEventListener('click', () => {
-      const active = actions.toggleOrigin(model);
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    }, { signal: lifecycle.signal });
-  }
+export function createViewportToolbar() {
+  const state = reactive<ToolbarState>({
+    locked: false, visible: { a: true, b: true }, axes: { a: false, b: false },
+    originPlanesActive: false, clippingActive: false, clippingTitle: '',
+    queryActive: false, queryAvailable: false, queryTitle: '完成 ICP 后可查询坐标对',
+  });
   return {
-    setAvailable(available: boolean, title: string) { toggle.disabled = !available; toggle.title = title; },
-    setActive(active: boolean) { toggle.classList.toggle('active', active); },
-    destroy() { lifecycle.abort(); },
+    state,
+    setAvailable(available: boolean, title: string) { state.queryAvailable = available; state.queryTitle = title; },
+    setActive(active: boolean) { state.queryActive = active; },
   };
 }
