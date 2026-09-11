@@ -18,18 +18,14 @@ import { h, reactive, shallowReactive, watch } from 'vue';
 import * as pc from 'playcanvas';
 import { CoordinateQuery } from '../engine/tools/CoordinateQuery';
 import { transformParametersMatrix, transformXYZ, type TransformParameters, type XYZ } from '../coordinate-math';
-import { RegistrationScene } from '../engine/modules/RegistrationScene';
 import { ClippingHandles, type ClipAxis, type ClipSide } from '../clipping-handles';
 import { OriginPlaneController } from '../origin-planes';
 import { createOriginPlanePanel } from '../views/workbench/origin-plane-panel';
 import { loadPreview, type PointCloudMaterial } from '../point-cloud';
 import '../workspace.css';
 import '../view-gizmo.css';
-import { ViewportCameraController } from '../engine/core/ViewportCameraController';
-import { InputController } from '../engine/core/InputController';
-import { RegistrationApplication } from '../engine/core/Application';
+import { RegistrationEngine } from '../engine/core/RegistrationEngine';
 import { TransformGizmoInput } from '../engine/core/TransformGizmoInput';
-import { ToolManager } from '../engine/core/ToolManager';
 import { RegistrationJobController } from '../engine/modules/RegistrationJobController';
 import { GaussianDisplayController } from '../engine/modules/GaussianDisplayController';
 import { ClippingStateController, type ClippingMode, type ClippingControlMode } from '../engine/modules/ClippingStateController';
@@ -132,13 +128,13 @@ async function initializeWorkbench(
   const viewportElement = canvas.parentElement!;
   viewportElement.style.minHeight = '0';
   viewportElement.style.overflow = 'hidden';
-  const engine = new RegistrationApplication({ canvas, viewport: viewportElement });
+  const engine = new RegistrationEngine({
+    canvas, root, clouds: { a: cloudA, b: cloudB },
+    origins: { a: infoA.origin as XYZ, b: infoB.origin as XYZ },
+    transforms: businessTransforms, moving: effectiveMoving(),
+  });
   resources.add(() => engine.destroy());
-  const application = engine.app;
-  const camera = engine.camera;
-  const scene = new RegistrationScene(application, { a: cloudA, b: cloudB },
-    { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, businessTransforms, effectiveMoving());
-  resources.add(() => scene.destroy());
+  const { app: application, camera, scene, cameraController, translate, rotate, clipTranslate, clipRotate, tools: toolManager } = engine;
   const { entities, clouds, pointMaterials, clipBox, independentClipBoxes, display, modelDiagonals } = scene;
   const modelVisible = toolbarState.visible;
   const originPlaneUI = createOriginPlanePanel(root, inspectorState, active => { toolbarState.originPlanesActive = active; });
@@ -146,31 +142,6 @@ async function initializeWorkbench(
   const originPlanes = new OriginPlaneController(application, entities,
     { a: infoA.origin as XYZ, b: infoB.origin as XYZ }, modelDiagonals, modelVisible, originPlaneUI.state);
   resources.add(() => originPlanes.destroy());
-  const cameraController = new ViewportCameraController({
-    camera,
-    canvas,
-    root,
-    baseDiagonal: scene.baseDiagonal,
-    getBounds: () => scene.bounds(),
-  });
-  resources.add(() => cameraController.destroy());
-
-  const movingTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Moving Model Translation');
-  const movingRotateLayer = pc.RotateGizmo.createLayer(application, 'Moving Model Rotation');
-  const clipTranslateLayer = pc.TranslateGizmo.createLayer(application, 'Clipping Box Translation');
-  const clipRotateLayer = pc.RotateGizmo.createLayer(application, 'Clipping Box Rotation');
-  const translate = new pc.TranslateGizmo(camera.camera!, movingTranslateLayer);
-  resources.add(() => translate.destroy());
-  const rotate = new pc.RotateGizmo(camera.camera!, movingRotateLayer);
-  resources.add(() => rotate.destroy());
-  const clipTranslate = new pc.TranslateGizmo(camera.camera!, clipTranslateLayer);
-  resources.add(() => clipTranslate.destroy());
-  const clipRotate = new pc.RotateGizmo(camera.camera!, clipRotateLayer);
-  resources.add(() => clipRotate.destroy());
-  [translate, clipTranslate].forEach(gizmo => {
-    gizmo.axisGap = 0.08; gizmo.axisLineLength = 0.72; gizmo.axisPlaneSize = 0.14; gizmo.axisPlaneGap = 0.22;
-  });
-  [rotate, clipRotate].forEach(gizmo => { gizmo.centerRadius = 0.001; gizmo.ringTolerance = 0.025; });
   const clippingState = reactive(new ClippingStateController());
   let clippingScene: ClippingSceneController | null = null;
   let clippingInteractionActive = false;
@@ -185,9 +156,6 @@ async function initializeWorkbench(
   resources.add(() => clipGizmoInput.destroy());
   const movingEntity = () => entities[effectiveMoving()];
   [translate, rotate].forEach(gizmo => gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => display.applyHandle()));
-  type EditingToolId = 'idle' | 'model-transform' | 'clipping' | 'coordinate-query';
-  const toolManager = new ToolManager<EditingToolId>();
-  resources.add(() => toolManager.destroy());
   toolManager.register({
     id: 'idle',
     activate: () => {},
@@ -442,7 +410,7 @@ async function initializeWorkbench(
 
   refreshClippingMode();
 
-  const inputController = new InputController(canvas, cameraController, {
+  engine.bindInput({
     pointerMove: event => {
       if (clippingHandles?.pointerMove(event)) {
         canvas.style.cursor = clippingHandles.dragging ? 'grabbing' : 'grab';
@@ -467,7 +435,6 @@ async function initializeWorkbench(
     },
     dragBlocked: () => gizmoTransforming || Boolean(coordinateQuery?.dragging),
   });
-  resources.add(() => inputController.destroy());
 
   const icpValues = reactive<Record<string, string>>({
     min_rms_decrease: '0.00001', sampling_limit: '50000', overlap: '1', random_seed: '42',
