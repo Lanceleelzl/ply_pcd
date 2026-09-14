@@ -16,6 +16,18 @@ class ModelRegistrationRequest(BaseModel):
     coordinate_space: str = "file"
 
 
+class CoarseRegistrationRequest(BaseModel):
+    moving_model: str
+    delta: float = 0.01
+    beta: float = 0.005
+    overlap: float = 0.7
+    base_count: int = 200
+    base_tries: int = 100
+    max_candidates: int = 500
+    sample_limit: int = 1000
+    random_seed: int = 42
+
+
 class TransformParameters(BaseModel):
     translation: list[float] = [0.0, 0.0, 0.0]
     rotation_degrees: list[float] = [0.0, 0.0, 0.0]

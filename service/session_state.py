@@ -57,3 +57,30 @@ def sync_session_job(
             write_history(session_directory, session_status)
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+
+
+def sync_coarse_session_job(
+    job_status: dict[str, Any],
+    *,
+    resolve_session_directory: Callable[[str], Path],
+    read_status: Callable[[Path], dict[str, Any]],
+    write_status: Callable[[Path, dict[str, Any]], None],
+) -> None:
+    session_id = job_status.get("manual_session_id")
+    if not session_id:
+        return
+    directory = resolve_session_directory(session_id)
+    session = read_status(directory)
+    entry = next((item for item in session.setdefault("coarse_registrations", [])
+                  if item.get("job_id") == job_status.get("job_id")), None)
+    if entry is None:
+        return
+    for field in ("status", "started_at_unix", "finished_at_unix", "result_url", "error_code", "error"):
+        if field in job_status:
+            entry[field] = job_status[field]
+    if job_status.get("status") in {"succeeded", "failed", "cancelled"}:
+        if session.get("active_job_id") == job_status.get("job_id"):
+            session["active_job_id"] = None
+    else:
+        session["active_job_id"] = job_status.get("job_id")
+    write_status(directory, session)

@@ -24,17 +24,22 @@ def create_job_router(
 ) -> APIRouter:
     router = APIRouter()
 
+    def registration_status(job_id: str) -> tuple[Path, dict[str, Any]]:
+        directory = _job_directory(job_id)
+        status = _read_status(directory)
+        authorize_resource(status)
+        if status.get("job_type") == "coarse_registration":
+            raise HTTPException(status_code=404, detail="Registration job not found")
+        return directory, status
+
     @router.get("/api/v2/registrations/{job_id}")
     async def get_registration(job_id: str) -> dict[str, Any]:
-        status = _read_status(_job_directory(job_id))
-        authorize_resource(status)
-        return status
+        return registration_status(job_id)[1]
 
 
     @router.get("/api/v2/registrations/{job_id}/events")
     async def stream_registration_events(job_id: str, from_latest: bool = False) -> StreamingResponse:
-        job_directory = _job_directory(job_id)
-        authorize_resource(_read_status(job_directory))
+        job_directory, _ = registration_status(job_id)
 
         async def event_stream():
             offset = 0
@@ -73,9 +78,7 @@ def create_job_router(
 
     @router.post("/api/v2/registrations/{job_id}/cancel")
     async def cancel_registration(job_id: str) -> dict[str, Any]:
-        job_directory = _job_directory(job_id)
-        status = _read_status(job_directory)
-        authorize_resource(status)
+        job_directory, status = registration_status(job_id)
         if status.get("status") == "cancelled":
             return status
         if status.get("status") not in {"queued", "running"}:
@@ -98,9 +101,7 @@ def create_job_router(
 
     @router.get("/api/v2/registrations/{job_id}/result")
     async def get_registration_result(job_id: str) -> dict[str, Any]:
-        job_directory = _job_directory(job_id)
-        status = _read_status(job_directory)
-        authorize_resource(status)
+        job_directory, status = registration_status(job_id)
         if status["status"] != "succeeded":
             raise HTTPException(status_code=409, detail=f"Job status is {status['status']}")
         path = job_directory / "result" / "registration.json"
@@ -130,8 +131,8 @@ def create_job_router(
         }
         if filename not in allowed:
             raise HTTPException(status_code=404, detail="File not found")
-        path = _job_directory(job_id) / "result" / filename
-        authorize_resource(_read_status(_job_directory(job_id)))
+        job_directory, _ = registration_status(job_id)
+        path = job_directory / "result" / filename
         if not path.is_file():
             try:
                 restored = await asyncio.to_thread(restore_result, job_id, filename, path)

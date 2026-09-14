@@ -65,7 +65,7 @@ def delete_session_objects(store: Any, status: dict[str, Any]) -> None:
         return
     session_id = status["session_id"]
     store.delete_prefix(store.key("sessions", session_id) + "/")
-    for registration in status.get("registrations", []):
+    for registration in [*status.get("registrations", []), *status.get("coarse_registrations", [])]:
         if registration.get("job_id"):
             store.delete_prefix(store.key("jobs", registration["job_id"]) + "/")
     status.setdefault("object_storage", {})["source_available"] = False

@@ -31,18 +31,20 @@ from service.schemas import (
 from service.routes.history import create_history_router
 from service.routes.jobs import create_job_router
 from service.routes.registrations import create_registration_router
+from service.routes.coarse_registrations import create_coarse_registration_router
 from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.preview_tasks import run_preview_task
 from service.registration_tasks import run_registration_task
+from service.coarse_tasks import run_coarse_registration_task
 from service.registration_queue import recover_registration_queue, write_task_descriptor
 from service.object_storage import create_object_storage
 from service.object_lifecycle import (
     archive_job_result, archive_session_sources, delete_session_objects, restore_job_result,
     restore_session_sources, source_available_locally_or_remotely,
 )
-from service.session_state import normalize_task_links, source_available, sync_session_job
+from service.session_state import normalize_task_links, source_available, sync_coarse_session_job, sync_session_job
 from service.storage import (
     history_directory as _storage_history_directory,
     history_path as _storage_history_path,
@@ -159,6 +161,22 @@ def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
     )
 
 
+def _sync_coarse_job(job_status: dict[str, Any]) -> None:
+    sync_coarse_session_job(
+        job_status,
+        resolve_session_directory=_manual_session_directory,
+        read_status=_read_status,
+        write_status=_write_status,
+    )
+
+
+def _sync_any_job(job_status: dict[str, Any]) -> None:
+    if job_status.get("job_type") == "coarse_registration":
+        _sync_coarse_job(job_status)
+    else:
+        _sync_manual_session_job(job_status)
+
+
 app.include_router(create_job_router(
     _job_directory, _read_status, _write_status, _sync_manual_session_job, _running_processes,
     lambda job_id, filename, destination: restore_job_result(_object_storage, job_id, filename, destination),
@@ -171,6 +189,14 @@ app.include_router(create_registration_router(
     lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
 ))
 
+app.include_router(create_coarse_registration_router(
+    _manual_session_directory, _job_directory, _read_status, _write_status,
+    _v2_source_available, _restore_sources, _manual_submission_lock, WORKER_PATH,
+    write_task_descriptor,
+    lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
+    _sync_coarse_job, _running_processes,
+))
+
 
 app.include_router(create_upload_router(
     _manual_session_directory, _write_status, WORKER_PATH, SOURCE_RETENTION_HOURS,
@@ -180,6 +206,18 @@ app.include_router(create_upload_router(
 
 
 async def _run_worker(job_id: str, command: list[str]) -> None:
+    if _read_status(_job_directory(job_id)).get("job_type") == "coarse_registration":
+        await run_coarse_registration_task(
+            job_id, command,
+            resolve_job_directory=_job_directory,
+            read_status=_read_status,
+            write_status=_write_status,
+            sync_session_job=_sync_coarse_job,
+            semaphore=_job_semaphore,
+            running_processes=_running_processes,
+            timeout_seconds=WORKER_TIMEOUT_SECONDS,
+        )
+        return
     await run_registration_task(
         job_id, command,
         resolve_job_directory=_job_directory,
@@ -221,7 +259,7 @@ async def start_cleanup() -> None:
         RUNTIME_ROOT,
         read_status=_read_status,
         write_status=_write_status,
-        sync_session_job=_sync_manual_session_job,
+        sync_session_job=_sync_any_job,
         start_registration=lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
     )
     _background_tasks.start(_cleanup_loop())

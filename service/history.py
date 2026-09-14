@@ -73,7 +73,7 @@ def release_source_data(session_directory: Path, session_status: dict[str, Any],
     if active_job_id:
         try:
             if _read_status(_job_directory(active_job_id)).get("status") in {"queued", "running"}:
-                raise HTTPException(status_code=409, detail="Active registration must finish or be cancelled first")
+                raise HTTPException(status_code=409, detail="Active job must finish or be cancelled first")
         except HTTPException as error:
             if error.status_code == 409:
                 raise
@@ -82,7 +82,7 @@ def release_source_data(session_directory: Path, session_status: dict[str, Any],
     shutil.rmtree(session_directory / "preview", ignore_errors=True)
     for filename in ("worker.stdout.log", "worker.stderr.log"):
         (session_directory / filename).unlink(missing_ok=True)
-    for entry in session_status.get("registrations", []):
+    for entry in [*session_status.get("registrations", []), *session_status.get("coarse_registrations", [])]:
         job_id = entry.get("job_id")
         if not job_id:
             continue
