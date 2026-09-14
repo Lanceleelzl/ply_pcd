@@ -2,6 +2,31 @@
 
 # Gaussian PLY／定位参考点云坐标配准服务实施方案
 
+## 阶段 10：S3 兼容对象存储
+
+### 目标与边界
+
+- `runtime` 继续作为 C++ Worker 的本地工作区；对象存储保存源模型、预览和最终结果的持久副本，不能把远程对象 URL 直接传给 Worker。
+- 默认 `local` 后端保持现有行为；显式配置 `s3` 后端时兼容 AWS S3 与 MinIO 的自定义端点和 path-style 寻址。
+- 对象键固定在服务配置的前缀下，并按 `sessions/{session_id}`、`jobs/{job_id}` 隔离；禁止接受调用方提供任意对象键。
+- 凭证沿用 AWS SDK 默认凭证链或进程环境变量，任何状态、日志和 API 响应都不得保存访问密钥。
+- 源模型上传成功后写入对象存储；本地源缺失但远程对象存在时，继续配准／恢复会话前下载回本地工作区。
+- 用户立即释放或保留期到期时同步删除该会话及关联 Job 的远程对象；对象存储失败不得伪造释放成功。
+- 本阶段不提供跨区域复制、对象版本管理、浏览器直传、预签名 URL 或公开桶访问。
+
+### 配置
+
+- `REGISTRATION_OBJECT_STORAGE_BACKEND=local|s3`，默认 `local`。
+- S3 后端读取 `REGISTRATION_S3_BUCKET`、可选 `REGISTRATION_S3_PREFIX`、`REGISTRATION_S3_ENDPOINT_URL`、`REGISTRATION_S3_REGION` 和 `REGISTRATION_S3_ADDRESSING_STYLE`。
+- AWS 访问密钥由 `boto3` 默认凭证链读取，不增加项目密钥文件。
+
+### 验收标准
+
+- 默认本地模式的 API、Worker 命令、矩阵和保留语义不变。
+- S3 后端完成源文件上传、存在性检查、恢复下载、结果归档和前缀删除，网络调用不阻塞事件循环。
+- MinIO path-style 和 AWS 默认端点均可构造；缺失必需配置时服务启动明确失败。
+- 使用伪造 S3 客户端覆盖对象键、上传、下载、分页删除和异常传播；服务回归及隔离真实 Worker 端到端保持通过。
+
 ## 阶段 9：任务持久化与队列基础
 
 ### 目标与边界

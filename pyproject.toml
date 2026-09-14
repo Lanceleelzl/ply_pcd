@@ -3,6 +3,7 @@ name = "ply-pcd-registration-service"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "boto3==1.43.93",
     "fastapi==0.116.1",
     "python-multipart==0.0.20",
     "uvicorn==0.35.0",
