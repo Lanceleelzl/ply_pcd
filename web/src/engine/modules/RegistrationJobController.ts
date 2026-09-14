@@ -1,4 +1,5 @@
 import type { RegistrationIteration, RegistrationRequest, RegistrationResult } from '../../api/contracts';
+import { apiFetch, authenticatedHeaders, getApiKey } from '../../api/api-auth.ts';
 
 interface RegistrationJobEvents {
   runningChanged(running: boolean): void;
@@ -82,7 +83,7 @@ export class RegistrationJobController {
     this.events.runningChanged(true);
     this.events.statusChanged('正在提交……');
     try {
-      const created = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/register`, {
+      const created = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
@@ -95,7 +96,7 @@ export class RegistrationJobController {
       if (this.cancelRequested) await this.sendCancel();
 
       while (!signal.aborted) {
-        const status = await fetch(created.status_url, { signal }).then(response => jsonResponse<JobStatus>(response));
+        const status = await apiFetch(created.status_url, { signal }).then(response => jsonResponse<JobStatus>(response));
         signal.throwIfAborted();
         if (!['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(status.status)) throw new Error('任务响应包含无效状态');
         this.events.statusChanged(`任务状态：${status.status}`);
@@ -106,7 +107,7 @@ export class RegistrationJobController {
         if (status.status === 'failed') throw new Error(status.error ?? 'ICP 失败');
         if (status.status === 'succeeded') {
           if (!status.result_url) throw new Error('任务成功但缺少结果地址');
-          const result = await fetch(status.result_url, { signal }).then(response => jsonResponse<RegistrationResult>(response));
+          const result = await apiFetch(status.result_url, { signal }).then(response => jsonResponse<RegistrationResult>(response));
           signal.throwIfAborted();
           this.closeProgress();
           this.events.succeeded(result, this.activeJobId);
@@ -137,7 +138,7 @@ export class RegistrationJobController {
   }
 
   private async sendCancel(): Promise<void> {
-    const response = await fetch(`/api/v2/registrations/${this.activeJobId}/cancel`, {
+    const response = await apiFetch(`/api/v2/registrations/${this.activeJobId}/cancel`, {
       method: 'POST',
       signal: this.lifecycle.signal,
     });
@@ -146,6 +147,12 @@ export class RegistrationJobController {
 
   private openProgress(): void {
     if (this.lifecycle.signal.aborted || !this.activeProgressUrl || this.progressSource) return;
+    if (getApiKey()) {
+      const controller = new AbortController();
+      this.progressSource = { close: () => controller.abort() } as EventSource;
+      void this.readAuthenticatedProgress(controller);
+      return;
+    }
     const source = new EventSource(`${this.activeProgressUrl}?from_latest=true`);
     this.progressSource = source;
     source.addEventListener('iteration', event => {
@@ -158,6 +165,37 @@ export class RegistrationJobController {
     source.addEventListener('terminal', () => {
       if (this.progressSource === source) this.closeProgress();
     });
+  }
+
+  private async readAuthenticatedProgress(controller: AbortController): Promise<void> {
+    try {
+      const response = await fetch(`${this.activeProgressUrl}?from_latest=true`, {
+        headers: authenticatedHeaders(), signal: controller.signal,
+      });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+          const event = block.match(/^event: (.+)$/m)?.[1];
+          const data = block.match(/^data: (.+)$/m)?.[1];
+          if (event === 'iteration' && data) {
+            const progress = JSON.parse(data) as RegistrationIteration;
+            if (progress.iteration > (this.latestProgress?.iteration ?? 0)) {
+              this.latestProgress = progress; this.events.progressChanged(progress);
+            }
+          } else if (event === 'terminal') { this.closeProgress(); return; }
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) this.events.statusChanged(`进度连接失败：${String(error)}`);
+    }
   }
 
   private closeProgress(): void {

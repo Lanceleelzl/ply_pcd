@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import { apiFetch } from './api/api-auth.ts';
 
 export interface PreviewCloud {
   positions: Float32Array;
@@ -14,7 +15,7 @@ export interface PointCloudMaterial extends pc.ShaderMaterial {
 }
 
 export async function loadPreview(url: string, signal?: AbortSignal): Promise<PreviewCloud> {
-  const response = await fetch(url, { signal });
+  const response = await apiFetch(url, { signal });
   if (!response.ok) throw new Error(`加载预览失败：HTTP ${response.status}`);
   const buffer = await response.arrayBuffer();
   const bytes = new Uint8Array(buffer, 0, 8);

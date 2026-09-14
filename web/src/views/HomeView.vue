@@ -4,10 +4,13 @@ import ModelUploadCard from '../components/home/ModelUploadCard.vue';
 import HistoryPanel from '../components/home/HistoryPanel.vue';
 import { useRegistrationDraftStore } from '../stores/registration-draft-store';
 import { useWorkspaceStore } from '../stores/workspace-store';
+import { getApiKey, setApiKey } from '../api/api-auth';
+import { ref } from 'vue';
 
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const draft = useRegistrationDraftStore();
+const apiKey = ref(getApiKey());
 
 async function openWorkspace(sessionId: string): Promise<void> {
   await router.push({ name: 'registration', params: { sessionId } });
@@ -23,7 +26,7 @@ async function submit(): Promise<void> {
   <main class="home-app-shell">
     <header class="app-topbar">
       <div class="brand-mark"><span class="brand-symbol">R</span><div><strong>Registration Studio</strong><small>点云坐标配准工作台</small></div></div>
-      <nav><a href="/docs" target="_blank" rel="noreferrer">API 文档</a><span class="service-chip"><i />本地服务</span></nav>
+      <nav><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用时留空" @change="setApiKey(apiKey)" /></label><a href="/docs" target="_blank" rel="noreferrer">API 文档</a><span class="service-chip"><i />本地服务</span></nav>
     </header>
     <div class="home-content">
       <section class="hero-copy">

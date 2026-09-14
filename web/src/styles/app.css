@@ -29,6 +29,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .brand-mark strong { font-size: 14px; letter-spacing: .02em; }
 .brand-mark small { color: var(--text-muted); font-size: 11px; }
 .app-topbar nav { display: flex; align-items: center; gap: 20px; }
+.api-key-field { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 12px; }
+.api-key-field input { width: 150px; min-height: 32px; padding: 5px 9px; }
 .app-topbar a { color: var(--text-soft); text-decoration: none; font-size: 13px; }
 .service-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft); font-size: 12px; background: #102033; }
 .service-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px #45c39a18; }

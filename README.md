@@ -45,6 +45,8 @@ pnpm run dev
 
 如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 
+API 鉴权默认关闭。生产部署可设置 `REGISTRATION_AUTH_ENABLED=true`，并通过 `REGISTRATION_API_KEY_HASHES` 配置逗号分隔的 `key_id:user|admin:sha256` 记录；配置中只保存原始 Key 的 SHA-256 十六进制摘要。客户端在 `X-API-Key` 请求头传入原始 Key，网页可在首页顶部输入，Key 仅保存在当前浏览器会话。普通用户只能访问自己创建的会话、任务和历史，管理员可访问全部资源；启用鉴权前生成的无归属记录仅管理员可读。
+
 工作台采用顶部应用栏、左侧模型与业务矩阵、中央三维视口、右侧工具与配准检查器、底部结果区。剖切、原点平面和坐标查询停靠右侧；窄屏按纵向排列，参数和执行操作仍可访问。当前选定的移动模型可平移和旋转，粗配准不提供缩放，文件格式不决定模型角色。默认加载轻量中心点；包含完整 Gaussian 属性的模型可按需加载原始 Gaussian，切回中心点时卸载资源。
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。

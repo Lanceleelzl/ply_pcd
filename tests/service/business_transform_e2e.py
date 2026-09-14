@@ -4,6 +4,7 @@ Usage: .venv/Scripts/python.exe tests/service/business_transform_e2e.py http://1
 """
 import http.client
 import json
+import os
 from pathlib import Path
 import random
 import sys
@@ -18,12 +19,16 @@ from service import app as service
 base = urlsplit(sys.argv[1])
 output = ROOT / "runtime" / "business-verification"
 output.mkdir(parents=True, exist_ok=True)
+api_key = os.getenv("REGISTRATION_API_KEY", "")
 
 
 def request(method, path, data=None):
     connection = http.client.HTTPConnection(base.hostname, base.port, timeout=60)
     body = None if data is None else json.dumps(data)
-    connection.request(method, path, body, {"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    connection.request(method, path, body, headers)
     response = connection.getresponse()
     payload = response.read().decode()
     connection.close()
@@ -44,6 +49,8 @@ def upload(paths, fields):
     connection.putrequest("POST", "/api/v2/registration-sessions")
     connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
     connection.putheader("Content-Length", str(length))
+    if api_key:
+        connection.putheader("X-API-Key", api_key)
     connection.endheaders()
     for header, path in parts:
         connection.send(header)
@@ -127,7 +134,10 @@ for role in roles:
             close([transform_point(result["a_to_b"], transform_point(pa_matrix, point_a))], [transform_point(pb_matrix, point_b)], 2e-5)
     for name in ("a_to_b", "b_to_a", "file_a_to_b", "file_b_to_a"):
         connection = http.client.HTTPConnection(base.hostname, base.port, timeout=10)
-        connection.request("GET", f'/api/v2/registrations/{created_job["job_id"]}/files/{name}_matrix.txt')
+        connection.request(
+            "GET", f'/api/v2/registrations/{created_job["job_id"]}/files/{name}_matrix.txt',
+            headers={"X-API-Key": api_key} if api_key else {},
+        )
         response = connection.getresponse()
         matrix = [[float(value) for value in row.split()] for row in response.read().decode().splitlines()]
         connection.close()

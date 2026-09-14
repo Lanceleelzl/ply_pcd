@@ -126,6 +126,51 @@ test('successful registration publishes one result and restores editing', async 
   controller.destroy();
 });
 
+test('authenticated progress uses a fetch stream and publishes SSE iterations', async context => {
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    value: { getItem: () => 'secret-key' },
+  });
+  context.after(() => {
+    if (storageDescriptor) Object.defineProperty(globalThis, 'sessionStorage', storageDescriptor);
+    else Reflect.deleteProperty(globalThis, 'sessionStorage');
+  });
+
+  let progressPublished!: () => void;
+  const published = new Promise<void>(resolve => { progressPublished = resolve; });
+  const calls: Array<{ url: string; key: string | null }> = [];
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    calls.push({ url: String(url), key: headers.get('X-API-Key') });
+    if (String(url).endsWith('/register')) {
+      return Response.json({ job_id: 'job', status_url: '/status', progress_url: '/events' });
+    }
+    if (String(url).startsWith('/events')) {
+      return new Response('event: iteration\ndata: {"iteration":3}\n\nevent: terminal\ndata: {}\n\n', {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+    if (url === '/status') {
+      await published;
+      return Response.json({ status: 'succeeded', result_url: '/result' });
+    }
+    return Response.json({});
+  });
+  const iterations: number[] = [];
+  const e = events();
+  const controller = new RegistrationJobController({
+    ...e.callbacks,
+    progressChanged: value => { iterations.push(value.iteration); progressPublished(); },
+  });
+  controller.setProgressVisible(true);
+  await controller.run('session', request);
+  assert.deepEqual(iterations, [3]);
+  assert.ok(calls.some(call => call.url.startsWith('/events?from_latest=true')));
+  assert.ok(calls.every(call => call.key === 'secret-key'));
+  controller.destroy();
+});
+
 test('invalid task status stops polling and restores editing', async context => {
   const calls = context.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
     if (String(url).endsWith('/register')) return Response.json({ job_id: 'job', status_url: '/status', progress_url: '/events' });

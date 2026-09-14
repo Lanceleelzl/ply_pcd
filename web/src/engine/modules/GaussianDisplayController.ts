@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import { apiFetch, getApiKey } from '../../api/api-auth.ts';
 import type { ModelId } from '../../api/contracts';
 import type { XYZ } from '../../coordinate-math';
 import { GaussianClipController } from '../../gaussian-clipping.ts';
@@ -21,14 +22,15 @@ interface GaussianDisplay {
   clipController: GaussianClipController | null;
   active: boolean;
   loading: boolean;
+  objectUrl: string | null;
 }
 
 const models: ModelId[] = ['a', 'b'];
 
 export class GaussianDisplayController {
   private readonly displays: Record<ModelId, GaussianDisplay> = {
-    a: { entity: null, asset: null, clipController: null, active: false, loading: false },
-    b: { entity: null, asset: null, clipController: null, active: false, loading: false },
+    a: { entity: null, asset: null, clipController: null, active: false, loading: false, objectUrl: null },
+    b: { entity: null, asset: null, clipController: null, active: false, loading: false, objectUrl: null },
   };
   private destroyed = false;
 
@@ -85,8 +87,15 @@ export class GaussianDisplayController {
         this.options.presentationChanged();
         return;
       }
+      let assetUrl = url;
+      if (getApiKey()) {
+        const response = await apiFetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        display.objectUrl = URL.createObjectURL(await response.blob());
+        assetUrl = display.objectUrl;
+      }
       const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
-        url,
+        url: assetUrl,
         filename: `model-${model}-original-gaussian.ply`,
       });
       display.asset = asset;
@@ -134,6 +143,8 @@ export class GaussianDisplayController {
     }
     display.entity = null;
     display.asset = null;
+    if (display.objectUrl) URL.revokeObjectURL(display.objectUrl);
+    display.objectUrl = null;
     display.active = false;
     this.options.entities[model].render!.enabled = true;
     if (!this.destroyed) this.publish(model);

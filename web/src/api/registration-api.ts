@@ -1,10 +1,11 @@
 import type { CreateSessionInput, HistoryItem, RegistrationResult, RegistrationSession } from './contracts';
 import type { ModelId } from './contracts';
 import type { TransformParameters } from '../coordinate-math';
+import { apiFetch, authenticateRequest } from './api-auth.ts';
 
 export async function loadRegistrationResult(url: string, signal: AbortSignal): Promise<RegistrationResult> {
   signal.throwIfAborted();
-  const response = await fetch(url, { signal });
+  const response = await apiFetch(url, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const result = await response.json() as RegistrationResult;
   signal.throwIfAborted();
@@ -17,7 +18,7 @@ export async function saveBusinessTransforms(
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  const response = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/business-transforms`, {
+  const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/business-transforms`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model_a: transforms.a, model_b: transforms.b }), signal,
   });
@@ -48,7 +49,7 @@ export async function waitForSession(
 ): Promise<RegistrationSession> {
   while (true) {
     signal.throwIfAborted();
-    const response = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}`, { signal });
+    const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}`, { signal });
     const body = await responseBody(response);
     signal.throwIfAborted();
     if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
@@ -70,14 +71,14 @@ async function responseBody(response: Response): Promise<Record<string, unknown>
 }
 
 export async function listHistory(workspaceId: string): Promise<HistoryItem[]> {
-  const response = await fetch(`/api/v2/registration-history?workspace_id=${encodeURIComponent(workspaceId)}`);
+  const response = await apiFetch(`/api/v2/registration-history?workspace_id=${encodeURIComponent(workspaceId)}`);
   const body = await responseBody(response);
   if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
   return (body.items ?? []) as HistoryItem[];
 }
 
 export async function runSessionAction(sessionId: string, action: 'retain' | 'release' | 'resume', workspaceId: string): Promise<void> {
-  const response = await fetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/${action}`, {
+  const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspace_id: workspaceId }),
@@ -90,6 +91,7 @@ export function createSession(input: CreateSessionInput, onProgress: (percent: n
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', '/api/v2/registration-sessions');
+    authenticateRequest(request);
     request.upload.addEventListener('progress', event => {
       if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100));
     });
