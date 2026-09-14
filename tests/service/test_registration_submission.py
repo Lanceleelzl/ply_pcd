@@ -18,12 +18,13 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
             "model_a_filename": "a.ply", "model_b_filename": "b.pcd",
         }}
         self.start = Mock()
+        self.persist = Mock()
         self.available = Mock(return_value=True)
         self.router = create_registration_router(
             lambda _: self.session, lambda job: Path("runtime/jobs") / job,
             lambda path: copy.deepcopy(self.states[path]),
             lambda path, status: self.states.__setitem__(path, copy.deepcopy(status)),
-            self.available, asyncio.Lock(), "worker", self.start,
+            self.available, asyncio.Lock(), "worker", self.persist, self.start,
         )
         self.submit = self.router.routes[0].endpoint
 
@@ -41,6 +42,7 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
                 self.submit("session", self.request()), return_exceptions=True,
             )
         self.start.assert_called_once()
+        self.persist.assert_called_once()
         self.assertEqual(outcomes[0]["status"], "queued")
         self.assertIsInstance(outcomes[1], HTTPException)
         self.assertEqual(outcomes[1].status_code, 409)
@@ -52,6 +54,7 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
                 coordinate_space="business", output_direction="b_to_a", moving_model="a",
             ))
         command = self.start.call_args.args[1]
+        self.persist.assert_called_once_with(Path("runtime/jobs") / response["job_id"], command)
         self.assertEqual(command[:2], ["worker", "register-models"])
         for flag in ("--model-a-to-business", "--model-b-to-business", "--progress-jsonl"):
             self.assertIn(flag, command)
@@ -67,10 +70,12 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, 409)
         mkdir.assert_not_called()
         self.start.assert_not_called()
+        self.persist.assert_not_called()
 
     async def test_invalid_direction_rejects_before_submission(self):
         with self.assertRaises(HTTPException) as raised:
             await self.submit("session", self.request(output_direction="invalid"))
         self.assertEqual(raised.exception.status_code, 400)
         self.start.assert_not_called()
+        self.persist.assert_not_called()
         self.assertNotIn("active_job_id", self.states[self.session])

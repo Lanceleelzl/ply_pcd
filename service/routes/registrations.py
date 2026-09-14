@@ -25,6 +25,7 @@ def create_registration_router(
     _v2_source_available: Callable[[Path, dict[str, Any]], bool],
     _manual_submission_lock: asyncio.Lock,
     worker_path: str,
+    persist_registration: Callable[[Path, list[str]], None],
     start_registration: Callable[[str, list[str]], Any],
 ) -> APIRouter:
     router = APIRouter()
@@ -72,6 +73,26 @@ def create_registration_router(
                           for row in request.initial_moving_local_to_fixed_local) + "\n",
                 encoding="utf-8",
             )
+            command = [
+                worker_path, "register-models",
+                "--model-a", str(session_directory / "input" / session_status["model_a_filename"]),
+                "--model-b", str(session_directory / "input" / session_status["model_b_filename"]),
+                "--moving-model", request.moving_model,
+                "--output-direction", request.output_direction,
+                "--initial-matrix", str(matrix_path), "--output-dir", str(result_directory),
+                "--min-rms-decrease", str(request.min_rms_decrease),
+                "--sampling-limit", str(request.sampling_limit), "--overlap", str(request.overlap),
+                "--random-seed", str(request.random_seed),
+            ]
+            if request.coordinate_space == "business":
+                transforms = _business_transforms(session_status)
+                for model in ("a", "b"):
+                    path = input_directory / f"model_{model}_to_business.txt"
+                    path.write_text("\n".join(" ".join(f"{value:.17g}" for value in row)
+                                              for row in _transform_matrix(transforms[model])) + "\n", encoding="utf-8")
+                    command.extend([f"--model-{model}-to-business", str(path)])
+            command.append("--progress-jsonl")
+            persist_registration(job_directory, command)
             status = {
                 "job_id": job_id, "status": "queued", "created_at_unix": time.time(),
                 "manual_session_id": session_id, "inputs": session_status["inputs"],
@@ -96,25 +117,6 @@ def create_registration_router(
             session_status["output_direction"] = request.output_direction
             session_status["moving_model"] = request.moving_model
             _write_status(session_directory, session_status)
-        command = [
-            worker_path, "register-models",
-            "--model-a", str(session_directory / "input" / session_status["model_a_filename"]),
-            "--model-b", str(session_directory / "input" / session_status["model_b_filename"]),
-            "--moving-model", request.moving_model,
-            "--output-direction", request.output_direction,
-            "--initial-matrix", str(matrix_path), "--output-dir", str(result_directory),
-            "--min-rms-decrease", str(request.min_rms_decrease),
-            "--sampling-limit", str(request.sampling_limit), "--overlap", str(request.overlap),
-            "--random-seed", str(request.random_seed),
-        ]
-        if request.coordinate_space == "business":
-            transforms = _business_transforms(session_status)
-            for model in ("a", "b"):
-                path = input_directory / f"model_{model}_to_business.txt"
-                path.write_text("\n".join(" ".join(f"{value:.17g}" for value in row)
-                                          for row in _transform_matrix(transforms[model])) + "\n", encoding="utf-8")
-                command.extend([f"--model-{model}-to-business", str(path)])
-        command.append("--progress-jsonl")
         start_registration(job_id, command)
         return {
             "job_id": job_id,

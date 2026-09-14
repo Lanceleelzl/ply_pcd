@@ -32,6 +32,7 @@ from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.preview_tasks import run_preview_task
 from service.registration_tasks import run_registration_task
+from service.registration_queue import recover_registration_queue, write_task_descriptor
 from service.session_state import normalize_task_links, source_available, sync_session_job
 from service.storage import (
     history_directory as _storage_history_directory,
@@ -147,7 +148,7 @@ app.include_router(create_job_router(
 
 app.include_router(create_registration_router(
     _manual_session_directory, _job_directory, _read_status, _write_status,
-    _v2_source_available, _manual_submission_lock, WORKER_PATH,
+    _v2_source_available, _manual_submission_lock, WORKER_PATH, write_task_descriptor,
     lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
 ))
 
@@ -192,4 +193,11 @@ async def _cleanup_loop() -> None:
 
 @app.on_event("startup")
 async def start_cleanup() -> None:
+    recover_registration_queue(
+        RUNTIME_ROOT,
+        read_status=_read_status,
+        write_status=_write_status,
+        sync_session_job=_sync_manual_session_job,
+        start_registration=lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
+    )
     _background_tasks.start(_cleanup_loop())
