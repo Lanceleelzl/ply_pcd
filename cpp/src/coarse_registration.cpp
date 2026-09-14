@@ -118,11 +118,27 @@ double rotationDistanceDegrees(const Matrix4d& left, const Matrix4d& right)
     double trace = 0.0;
     for (std::size_t row = 0; row < 3; ++row)
         for (std::size_t column = 0; column < 3; ++column)
-            trace += left.at(row, column) * right.at(row, column);
+            trace += left.at(column, row) * right.at(column, row);
     const double cosine = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
     return std::acos(cosine) * 57.2957795130823208768;
 }
 } // namespace
+
+std::string assessCoarseRegistrationRisk(const std::vector<CoarseRegistrationCandidate>& candidates)
+{
+    constexpr unsigned minimumReliableValidationPoints = 40;
+    if (candidates.empty())
+        throw std::runtime_error("Cannot assess empty coarse registration candidates");
+    const auto& best = candidates.front();
+    std::string risk = "low_confidence";
+    if (best.score >= 0.15
+        && std::min(best.movingCoverage, best.fixedCoverage) >= 0.15
+        && best.validationPointCount >= minimumReliableValidationPoints)
+        risk = "none";
+    if (candidates.size() > 1 && candidates[1].score >= best.score * 0.95)
+        risk = "ambiguous";
+    return risk;
+}
 
 CoarseRegistrationCandidate CoarseRegistration::findCandidate(
     const PointCloud& moving,
@@ -216,12 +232,7 @@ CoarseRegistrationSearchResult CoarseRegistration::findCandidates(
         });
         if (!duplicate) result.candidates.push_back(candidate);
     }
-    const auto& best = result.candidates.front();
-    if (best.score >= 0.15 && std::min(best.movingCoverage, best.fixedCoverage) >= 0.15)
-        result.risk = "none";
-    if (result.candidates.size() > 1
-        && result.candidates[1].score >= best.score * 0.95)
-        result.risk = "ambiguous";
+    result.risk = assessCoarseRegistrationRisk(result.candidates);
     return result;
 }
 } // namespace registration

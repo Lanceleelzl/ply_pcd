@@ -40,6 +40,9 @@ struct CoarseRegistrationSearchResult
     std::string risk = "low_confidence";
 };
 
+[[nodiscard]] std::string assessCoarseRegistrationRisk(
+    const std::vector<CoarseRegistrationCandidate>& candidates);
+
 class CoarseRegistration
 {
 public:

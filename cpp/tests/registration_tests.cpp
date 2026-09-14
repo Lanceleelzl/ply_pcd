@@ -263,7 +263,7 @@ void testDeterministicCoarseRegistration()
 {
     registration::PointCloud fixed;
     registration::PointCloud moving;
-    constexpr double angle = 0.52359877559829887308;
+    constexpr double angle = 2.0943951023931954923;
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
     for (int index = 0; index < 80; ++index)
@@ -272,12 +272,12 @@ void testDeterministicCoarseRegistration()
         const double y = static_cast<double>((index * 11) % 31) * 0.09 + (index % 5) * 0.023;
         const double z = static_cast<double>((index * 7) % 23) * 0.07 + (index % 7) * 0.011;
         fixed.points.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
-        const double shiftedX = x - 2.0;
-        const double shiftedY = y + 1.0;
+        const double shiftedX = x - 25.0;
+        const double shiftedY = y + 18.0;
         moving.points.push_back({
             static_cast<float>(cosine * shiftedX + sine * shiftedY),
             static_cast<float>(-sine * shiftedX + cosine * shiftedY),
-            static_cast<float>(z - 0.5),
+            static_cast<float>(z - 9.0),
         });
     }
     registration::CoarseRegistrationOptions options;
@@ -315,6 +315,15 @@ void testDeterministicCoarseRegistration()
         moving, fixed, {0.8, 1.0}, {42, 43}, options);
     require(search.candidates.size() == 1, "Equivalent 4PCS candidates were not deduplicated");
     require(search.risk == "none", "Strong unique 4PCS candidate was marked risky");
+
+    auto sparseCandidate = first;
+    sparseCandidate.validationPointCount = 24;
+    require(registration::assessCoarseRegistrationRisk({sparseCandidate}) == "low_confidence",
+            "Sparse 4PCS evidence was marked reliable");
+    auto competingCandidate = first;
+    competingCandidate.score = first.score * 0.96;
+    require(registration::assessCoarseRegistrationRisk({first, competingCandidate}) == "ambiguous",
+            "Competing 4PCS candidates were not marked ambiguous");
 }
 
 void testRealIcpAgainstCloudCompare()
