@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from service.schemas import BusinessTransformsRequest, TransformParameters, WorkspaceRequest
+from service.auth import authorize_resource
 
 
 DirectoryResolver = Callable[[str], Path]
@@ -49,6 +50,7 @@ def create_session_router(
         validate_transform(request.model_b)
         directory = session_directory(session_id)
         status = read_status(directory)
+        authorize_resource(status)
         if status.get("api_version") != "v2":
             raise HTTPException(status_code=404, detail="V2 registration session not found")
         active_job_id = status.get("active_job_id")
@@ -71,6 +73,7 @@ def create_session_router(
     async def get_model_registration_session(session_id: str) -> dict[str, Any]:
         directory = session_directory(session_id)
         status = read_status(directory)
+        authorize_resource(status)
         if status.get("api_version") != "v2":
             raise HTTPException(status_code=404, detail="V2 registration session not found")
         status["source_available"] = source_available(directory, status)
@@ -80,6 +83,7 @@ def create_session_router(
     def read_owned_session(session_id: str, workspace_id: str) -> tuple[Path, dict[str, Any]]:
         directory = session_directory(session_id)
         status = read_status(directory)
+        authorize_resource(status)
         if status.get("api_version") != "v2" or status.get("workspace_id") != parse_workspace_id(workspace_id):
             raise HTTPException(status_code=404, detail="V2 registration session not found")
         return directory, status
@@ -114,6 +118,7 @@ def create_session_router(
     async def resume_model_registration_session(session_id: str, request: WorkspaceRequest) -> dict[str, Any]:
         directory = session_directory(session_id)
         status = read_status(directory)
+        authorize_resource(status)
         if status.get("api_version") != "v2" or status.get("workspace_id") != parse_workspace_id(request.workspace_id):
             raise HTTPException(status_code=404, detail="V2 registration session not found")
         if not source_available(directory, status) or not await asyncio.to_thread(restore_sources, directory, status):
@@ -144,6 +149,7 @@ def create_session_router(
     async def get_model_registration_preview(session_id: str, model: str) -> FileResponse:
         directory = session_directory(session_id)
         status = read_status(directory)
+        authorize_resource(status)
         if status.get("api_version") != "v2":
             raise HTTPException(status_code=404, detail="V2 registration session not found")
         if model == "model-a":

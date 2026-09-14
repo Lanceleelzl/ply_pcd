@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from service.auth import authorize_resource, current_principal, resource_owned_by
 
 
 HistoryDirectory = Callable[[str], Path]
@@ -31,7 +32,8 @@ def create_history_router(
             for path in directory.glob("*.json"):
                 try:
                     record = json.loads(path.read_text(encoding="utf-8"))
-                    records.append(history_view(record))
+                    if resource_owned_by(current_principal(), record.get("owner_id")):
+                        records.append(history_view(record))
                 except (OSError, ValueError, json.JSONDecodeError, HTTPException):
                     continue
         records.sort(key=lambda item: float(item.get("completed_at_unix") or 0), reverse=True)
@@ -42,6 +44,8 @@ def create_history_router(
         path = history_path(workspace_id, session_id)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="Registration history not found")
-        return history_view(json.loads(path.read_text(encoding="utf-8")))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        authorize_resource(record)
+        return history_view(record)
 
     return router

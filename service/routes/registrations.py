@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from service.schemas import ModelRegistrationRequest
+from service.auth import authorize_resource
 from service.transform_math import business_transforms as _business_transforms, transform_matrix as _transform_matrix
 from service.validation import (
     validate_initial_matrix as _validate_initial_matrix,
@@ -48,6 +49,7 @@ def create_registration_router(
         async with _manual_submission_lock:
             session_directory = _manual_session_directory(session_id)
             session_status = _read_status(session_directory)
+            authorize_resource(session_status)
             if session_status.get("api_version") != "v2":
                 raise HTTPException(status_code=404, detail="V2 registration session not found")
             if not _v2_source_available(session_directory, session_status) or not await asyncio.to_thread(
@@ -99,6 +101,7 @@ def create_registration_router(
             status = {
                 "job_id": job_id, "status": "queued", "created_at_unix": time.time(),
                 "manual_session_id": session_id, "inputs": session_status["inputs"],
+                "owner_id": session_status.get("owner_id"),
                 "coordinate_space": request.coordinate_space,
             }
             _write_status(job_directory, status)

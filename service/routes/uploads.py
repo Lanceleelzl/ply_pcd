@@ -11,6 +11,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from service.schemas import TransformParameters
+from service.auth import current_principal
 from service.storage import workspace_id as _workspace_id
 from service.uploads import save_upload_with_sha256 as _save_upload_with_sha256
 from service.validation import model_extension as _model_extension, validate_transform as _validate_transform
@@ -72,6 +73,7 @@ def create_upload_router(
             "session_id": session_id,
             "api_version": "v2",
             "workspace_id": workspace_id,
+            "owner_id": current_principal().key_id,
             "status": "queued",
             "created_at_unix": time.time(),
             "source_expires_at_unix": time.time() + source_retention_hours * 3600,

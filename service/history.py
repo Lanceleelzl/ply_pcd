@@ -32,6 +32,7 @@ def write_history(session_directory: Path, session_status: dict[str, Any], *, _j
     record = {
         "session_id": session_status["session_id"],
         "workspace_id": workspace_id,
+        "owner_id": session_status.get("owner_id"),
         "status": "succeeded",
         "created_at_unix": session_status.get("created_at_unix"),
         "completed_at_unix": latest.get("finished_at_unix"),

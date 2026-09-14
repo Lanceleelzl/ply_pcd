@@ -24,3 +24,5 @@ OBJECT_STORAGE_SETTINGS = ObjectStorageSettings(
     region=os.getenv("REGISTRATION_S3_REGION") or None,
     addressing_style=os.getenv("REGISTRATION_S3_ADDRESSING_STYLE", "auto"),
 )
+AUTH_ENABLED = os.getenv("REGISTRATION_AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
+API_KEY_HASHES = os.getenv("REGISTRATION_API_KEY_HASHES", "")

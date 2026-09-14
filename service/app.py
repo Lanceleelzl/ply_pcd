@@ -9,10 +9,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from service.background_tasks import BackgroundTasks
+from service.auth import ApiKeyAuthenticator, ApiKeyAuthMiddleware
 from service.history import write_history, release_source_data, history_view
 from service.cleanup import cleanup_completed_jobs, run_cleanup_loop
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
+    API_KEY_HASHES,
+    AUTH_ENABLED,
     MAX_CONCURRENT_JOBS,
     OBJECT_STORAGE_SETTINGS,
     RESULT_RETENTION_HOURS,
@@ -61,6 +64,7 @@ from service.validation import (
 )
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
+app.add_middleware(ApiKeyAuthMiddleware, authenticator=ApiKeyAuthenticator(AUTH_ENABLED, API_KEY_HASHES))
 STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
