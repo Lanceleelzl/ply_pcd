@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "registration/icp_registration.hpp"
 #include "registration/bidirectional_registration.hpp"
+#include "registration/coarse_registration.hpp"
 #include "registration/gaussian_preview.hpp"
 #include "registration/matrix.hpp"
 #include "registration/pcd_reader.hpp"
@@ -258,6 +259,60 @@ void testInitialMatrixValidation()
     require(rejected, "ICP accepted an initial matrix containing scale");
 }
 
+void testDeterministicCoarseRegistration()
+{
+    registration::PointCloud fixed;
+    registration::PointCloud moving;
+    constexpr double angle = 0.52359877559829887308;
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    for (int index = 0; index < 80; ++index)
+    {
+        const double x = static_cast<double>((index * 17) % 29) * 0.13 + (index % 3) * 0.017;
+        const double y = static_cast<double>((index * 11) % 31) * 0.09 + (index % 5) * 0.023;
+        const double z = static_cast<double>((index * 7) % 23) * 0.07 + (index % 7) * 0.011;
+        fixed.points.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)});
+        const double shiftedX = x - 2.0;
+        const double shiftedY = y + 1.0;
+        moving.points.push_back({
+            static_cast<float>(cosine * shiftedX + sine * shiftedY),
+            static_cast<float>(-sine * shiftedX + cosine * shiftedY),
+            static_cast<float>(z - 0.5),
+        });
+    }
+    registration::CoarseRegistrationOptions options;
+    options.delta = 0.02;
+    options.beta = 0.02;
+    options.overlap = 1.0;
+    options.baseCount = 300;
+    options.baseTries = 200;
+    options.maxCandidates = 1000;
+    options.randomSeed = 42;
+    const auto first = registration::CoarseRegistration().findCandidate(moving, fixed, options);
+    const auto repeated = registration::CoarseRegistration().findCandidate(moving, fixed, options);
+    for (std::size_t index = 0; index < 16; ++index)
+        requireNear(first.movingLocalToFixedLocal.values()[index], repeated.movingLocalToFixedLocal.values()[index],
+                    0.0, "Fixed-seed 4PCS candidate is not deterministic");
+    require(first.movingCoverage > 0.99 && first.fixedCoverage > 0.99,
+            "4PCS independent validation coverage is too low");
+    require(first.score > 0.9, "4PCS independent validation score is too low");
+
+    double squaredError = 0.0;
+    for (std::size_t index = 0; index < moving.points.size(); ++index)
+    {
+        for (std::size_t row = 0; row < 3; ++row)
+        {
+            double transformed = first.movingLocalToFixedLocal.at(row, 3);
+            for (std::size_t column = 0; column < 3; ++column)
+                transformed += first.movingLocalToFixedLocal.at(row, column) * moving.points[index][column];
+            const double error = transformed - fixed.points[index][row];
+            squaredError += error * error;
+        }
+    }
+    const double rms = std::sqrt(squaredError / static_cast<double>(moving.points.size()));
+    require(rms < 0.03, "4PCS candidate did not recover the synthetic rigid transform");
+}
+
 void testRealIcpAgainstCloudCompare()
 {
     const auto ply = registration::PlyReader().read(sourcePath("source/ply/point_cloud.ply"));
@@ -316,6 +371,7 @@ int main()
         testRealPly();
         testPreviewWriters();
         testInitialMatrixValidation();
+        testDeterministicCoarseRegistration();
         testRealIcpAgainstCloudCompare();
         std::cout << "All registration tests passed\n";
         return 0;

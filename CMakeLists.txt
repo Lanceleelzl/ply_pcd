@@ -19,6 +19,7 @@ add_subdirectory(libs/cloudcompare_core EXCLUDE_FROM_ALL)
 
 add_library(registration_io STATIC
     cpp/src/bidirectional_registration.cpp
+    cpp/src/coarse_registration.cpp
     cpp/src/gaussian_preview.cpp
     cpp/src/icp_registration.cpp
     cpp/src/las_reader.cpp

@@ -13,6 +13,8 @@ src/RegistrationTools.cpp
 
 `RegistrationTools` 增加可选的已接受迭代回调。回调仅在 ICP 接受本轮累计刚体变换后触发，报告迭代序号、RMS、有效点数和累计 `ScaledTransformation`；回调为空时原始计算路径不变，服务用它只读输出三维视口进度。
 
+`FPCSRegistrationTools::RegisterClouds` 增加可选随机种子参数。调用方传入非零种子时，原始 4PCS 的基选择可复现；未传入时保留上游按当前时间初始化的行为。算法搜索、候选过滤和评分逻辑不变。
+
 本项目通过独立适配层完成：
 
 - 将项目点云转换为 `CCCoreLib::PointCloud`。

@@ -1331,7 +1331,8 @@ bool FPCSRegistrationTools::RegisterClouds(	GenericIndexedCloud* modelCloud,
 											unsigned nbBases,
 											unsigned nbTries,
 											GenericProgressCallback* progressCb,
-											unsigned nbMaxCandidates)
+											unsigned nbMaxCandidates,
+											unsigned randomSeed)
 {
 	//DGM: KDTree::buildFromCloud will call reset right away!
 	//if (progressCb)
@@ -1345,8 +1346,8 @@ bool FPCSRegistrationTools::RegisterClouds(	GenericIndexedCloud* modelCloud,
 	//	progressCb->start();
 	//}
 
-	//Initialize random seed with current time
-	srand(static_cast<unsigned>(time(nullptr)));
+	// Keep the historical time-based behavior for callers that don't provide a seed.
+	srand(randomSeed == 0 ? static_cast<unsigned>(time(nullptr)) : randomSeed);
 
 	unsigned bestScore = 0;
 	unsigned score = 0;

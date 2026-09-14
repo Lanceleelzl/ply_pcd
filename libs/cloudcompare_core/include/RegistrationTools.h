@@ -277,7 +277,8 @@ namespace CCCoreLib
 									unsigned nbBases,
 									unsigned nbTries,
 									GenericProgressCallback* progressCb = nullptr,
-									unsigned nbMaxCandidates = 0);
+									unsigned nbMaxCandidates = 0,
+									unsigned randomSeed = 0);
 
 	protected:
 
