@@ -53,6 +53,7 @@ def write_history(session_directory: Path, session_status: dict[str, Any], *, _j
             },
         },
         "parameters": latest.get("parameters", result.get("parameters", {})),
+        "initial_source": latest.get("initial_source", result.get("initial_source", "manual")),
         "recommended_matrix": result.get("recommended_matrix"),
         "a_to_b": result.get("a_to_b"), "b_to_a": result.get("b_to_a"),
         "file_a_to_b": result.get("file_a_to_b"), "file_b_to_a": result.get("file_b_to_a"),

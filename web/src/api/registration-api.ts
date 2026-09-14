@@ -1,5 +1,4 @@
-import type { CreateSessionInput, HistoryItem, RegistrationResult, RegistrationSession } from './contracts';
-import type { ModelId } from './contracts';
+import type { CoarseRegistrationResult, CreateSessionInput, HistoryItem, ModelId, RegistrationResult, RegistrationSession } from './contracts';
 import type { TransformParameters } from '../coordinate-math';
 import { apiFetch, authenticateRequest } from './api-auth.ts';
 
@@ -85,6 +84,30 @@ export async function runSessionAction(sessionId: string, action: 'retain' | 're
   });
   const body = await responseBody(response);
   if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+}
+
+export async function createCoarseRegistration(sessionId: string, movingModel: ModelId, signal: AbortSignal) {
+  const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/coarse-register`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+    body: JSON.stringify({ moving_model: movingModel }),
+  });
+  const body = await responseBody(response);
+  if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+  return body as unknown as { job_id: string; status_url: string; result_url: string };
+}
+
+export async function loadCoarseRegistrationResult(url: string, signal: AbortSignal): Promise<CoarseRegistrationResult> {
+  const response = await apiFetch(url, { signal });
+  const body = await responseBody(response);
+  if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+  return body as unknown as CoarseRegistrationResult;
+}
+
+export async function cancelCoarseRegistration(jobId: string, signal: AbortSignal): Promise<void> {
+  const response = await apiFetch(`/api/v2/coarse-registrations/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST', signal,
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
 export function createSession(input: CreateSessionInput, onProgress: (percent: number) => void): Promise<string> {

@@ -102,6 +102,7 @@ async def run_registration_task(
                         transforms = _business_transforms(session_status)
                         pa, pb = _transform_matrix(transforms["a"]), _transform_matrix(transforms["b"])
                         result = json.loads(result_path.read_text(encoding="utf-8"))
+                        result["initial_source"] = status.get("initial_source", "manual")
                         result["business_transforms"] = {"a": {"parameters": transforms["a"], "matrix": pa}, "b": {"parameters": transforms["b"], "matrix": pb}}
                         if status.get("coordinate_space") == "business":
                             result["coordinate_space"] = "business"

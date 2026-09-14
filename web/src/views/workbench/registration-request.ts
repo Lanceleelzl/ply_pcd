@@ -8,6 +8,7 @@ export interface RegistrationRequestInputs {
   samplingLimit: string;
   overlap: string;
   randomSeed: string;
+  initialSource?: RegistrationRequest['initial_source'];
 }
 
 export function buildRegistrationRequest(input: RegistrationRequestInputs): RegistrationRequest {
@@ -21,6 +22,7 @@ export function buildRegistrationRequest(input: RegistrationRequestInputs): Regi
     random_seed: Number(input.randomSeed),
     show_registration_progress: true,
     coordinate_space: 'business',
+    initial_source: input.initialSource ?? 'manual',
   };
 }
 

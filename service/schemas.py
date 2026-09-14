@@ -14,6 +14,7 @@ class ModelRegistrationRequest(BaseModel):
     random_seed: int = 42
     show_registration_progress: bool = False
     coordinate_space: str = "file"
+    initial_source: str = "manual"
 
 
 class CoarseRegistrationRequest(BaseModel):

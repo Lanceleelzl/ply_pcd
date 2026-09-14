@@ -31,6 +31,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .app-topbar nav { display: flex; align-items: center; gap: 20px; }
 .api-key-field { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 12px; }
 .api-key-field input { width: 150px; min-height: 32px; padding: 5px 9px; }
+.auto-coarse { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.auto-coarse-heading { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.auto-coarse-heading small { color: var(--text-muted); }
+.coarse-risk { margin: 0; padding: 7px 9px; border-radius: 6px; background: #45c39a18; color: var(--text-soft); }
+.coarse-risk.low_confidence, .coarse-risk.ambiguous { background: #d99b3d1c; color: #e8bd78; }
+.coarse-candidates { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.coarse-candidates li { display: grid; gap: 5px; padding: 7px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; }
+.candidate-actions { display: flex; gap: 6px; }
+.candidate-actions button { min-height: 30px; padding: 4px 9px; }
 .app-topbar a { color: var(--text-soft); text-decoration: none; font-size: 13px; }
 .service-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft); font-size: 12px; background: #102033; }
 .service-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px #45c39a18; }

@@ -39,6 +39,7 @@ export interface WorkbenchRegistrationRuntimeOptions {
   runningChanged(running: boolean): void;
   refreshRoles(reset: boolean): void;
   fitCamera(): void;
+  initialSource?(): 'manual' | '4pcs' | '4pcs_adjusted';
 }
 
 export function createWorkbenchRegistrationRuntime(options: WorkbenchRegistrationRuntimeOptions) {
@@ -76,6 +77,7 @@ export function createWorkbenchRegistrationRuntime(options: WorkbenchRegistratio
       samplingLimit: icp.sampling_limit,
       overlap: icp.overlap,
       randomSeed: icp.random_seed,
+      initialSource: options.initialSource?.() ?? 'manual',
     }),
   });
   return {

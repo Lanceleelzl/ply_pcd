@@ -43,6 +43,7 @@ export interface RegistrationRequest {
   random_seed: number;
   show_registration_progress: boolean;
   coordinate_space: 'business';
+  initial_source: 'manual' | '4pcs' | '4pcs_adjusted';
 }
 
 export interface RegistrationResult {
@@ -65,6 +66,33 @@ export interface RegistrationIteration {
   point_count: number;
   elapsed_seconds: number;
   moving_local_to_fixed_local: Matrix4;
+}
+
+export interface CoarseRegistrationCandidate {
+  moving_local_to_fixed_local: Matrix4;
+  overlap: number;
+  random_seed: number;
+  moving_coverage: number;
+  fixed_coverage: number;
+  inlier_rms: number;
+  score: number;
+  validation_point_count: number;
+}
+
+export interface CoarseRegistrationResult {
+  algorithm: 'cccorelib_4pcs';
+  moving_model: ModelId;
+  risk: 'none' | 'low_confidence' | 'ambiguous';
+  moving_local_to_fixed_local: Matrix4;
+  candidates: CoarseRegistrationCandidate[];
+  metrics: {
+    moving_coverage: number;
+    fixed_coverage: number;
+    inlier_rms: number;
+    score: number;
+    validation_point_count: number;
+    elapsed_seconds: number;
+  };
 }
 
 export interface HistoryItem {

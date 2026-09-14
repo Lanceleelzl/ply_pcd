@@ -46,6 +46,8 @@ def create_registration_router(
             raise HTTPException(status_code=400, detail="moving_model must be auto, a, or b")
         if request.coordinate_space not in {"file", "business"}:
             raise HTTPException(status_code=400, detail="coordinate_space must be file or business")
+        if request.initial_source not in {"manual", "4pcs", "4pcs_adjusted"}:
+            raise HTTPException(status_code=400, detail="initial_source is invalid")
         async with _manual_submission_lock:
             session_directory = _manual_session_directory(session_id)
             session_status = _read_status(session_directory)
@@ -103,6 +105,7 @@ def create_registration_router(
                 "manual_session_id": session_id, "inputs": session_status["inputs"],
                 "owner_id": session_status.get("owner_id"),
                 "coordinate_space": request.coordinate_space,
+                "initial_source": request.initial_source,
             }
             _write_status(job_directory, status)
             session_status.setdefault("registrations", []).append({
@@ -110,6 +113,7 @@ def create_registration_router(
                 "initial_moving_local_to_fixed_local": request.initial_moving_local_to_fixed_local,
                 "output_direction": request.output_direction, "moving_model": request.moving_model,
                 "coordinate_space": request.coordinate_space,
+                "initial_source": request.initial_source,
                 "parameters": {
                     "min_rms_decrease": request.min_rms_decrease,
                     "sampling_limit": request.sampling_limit,

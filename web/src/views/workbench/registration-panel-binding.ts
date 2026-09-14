@@ -1,5 +1,5 @@
 import { h } from 'vue';
-import type { ModelId, RegistrationRequest } from '../../api/contracts';
+import type { CoarseRegistrationResult, ModelId, RegistrationRequest } from '../../api/contracts';
 import type { TransformParameters } from '../../coordinate-math';
 import type { createBusinessTransformState } from '../../stores/business-transform-state';
 import type { createWorkbenchActivity } from '../../stores/workbench-activity';
@@ -10,6 +10,7 @@ import CoarsePoseForm from './CoarsePoseForm.vue';
 import IcpParameters from './IcpParameters.vue';
 import RegistrationActions from './RegistrationActions.vue';
 import RegistrationRoles from './RegistrationRoles.vue';
+import AutoCoarseRegistration from './AutoCoarseRegistration.vue';
 
 type ActivityState = ReturnType<typeof createWorkbenchActivity>['state'];
 type BusinessState = ReturnType<typeof createBusinessTransformState>;
@@ -21,6 +22,10 @@ export interface RegistrationPanelBindingOptions {
   recommendedMoving: ModelId;
   modelDiagonals: Record<ModelId, number>;
   pose: { values: number[] };
+  coarse: {
+    state: { running: boolean; status: string; result: CoarseRegistrationResult | null; previewed: number; accepted: number };
+    actions: { run(): Promise<void>; cancel(): Promise<void>; preview(index: number): void; accept(index: number): void; discard(): void };
+  };
   business: BusinessState;
   icp: IcpParameterValues;
   actions: {
@@ -38,7 +43,15 @@ export interface RegistrationPanelBindingOptions {
 export function createRegistrationPanelBindings(options: RegistrationPanelBindingOptions) {
   const { activity, role, pose, business, icp, actions } = options;
   return {
-    pose: () => h(CoarsePoseForm, { ...pose, disabled: activity.editingLocked, onChange: options.changePose }),
+    pose: () => h('div', [
+      h(CoarsePoseForm, { ...pose, disabled: activity.editingLocked, onChange: options.changePose }),
+      h(AutoCoarseRegistration, {
+        ...options.coarse.state, disabled: activity.editingLocked,
+        onRun: options.coarse.actions.run, onCancel: options.coarse.actions.cancel,
+        onPreview: options.coarse.actions.preview, onAccept: options.coarse.actions.accept,
+        onDiscard: options.coarse.actions.discard,
+      }),
+    ]),
     roles: () => h(RegistrationRoles, {
       ...role, disabled: activity.editingLocked,
       recommended: options.recommendedMoving, diagonals: options.modelDiagonals,

@@ -37,6 +37,7 @@ import { createWorkbenchRegistrationRuntime } from './workbench-registration-run
 import { createWorkbenchToolRuntime } from './workbench-tool-runtime';
 import { createRegistrationPanelBindings } from '../views/workbench/registration-panel-binding';
 import { createWorkbenchOriginPlaneRuntime } from './workbench-origin-plane-runtime';
+import { createWorkbenchCoarseRegistration } from './workbench-coarse-registration';
 
 export interface WorkbenchHost {
   signal: AbortSignal;
@@ -165,6 +166,8 @@ export async function initializeWorkbench(
   resources.add(originPlaneRuntime.bindStatusRefresh(() => gaussianController.refreshStatus()));
 
   const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0] });
+  let markCoarseAdjusted = () => {};
+  let resetCoarse = () => {};
 
   const refreshRoles = (reset = false) => {
     const moving = effectiveMoving();
@@ -173,6 +176,7 @@ export async function initializeWorkbench(
   refreshRoles();
 
   const business = createBusinessTransformState(sessionId, businessTransforms, signal, next => {
+    resetCoarse();
     businessTransforms.a = next.a; businessTransforms.b = next.b; refreshRoles(true);
     coordinateQuery?.invalidate(); results.hide();
   });
@@ -195,7 +199,12 @@ export async function initializeWorkbench(
   resources.add(bindWorkbenchFrameUpdates(application, createWorkbenchFrameUpdater({
     invalidateResult: () => results.invalidateIfChanged(display.signature()),
     readPose: () => { const pose = display.getPose(); return [new pc.Vec3(...pose.position), new pc.Vec3(...pose.rotation)]; },
-    updatePose: values => { if (values.some((value, index) => value !== poseState.values[index])) poseState.values = values; },
+    updatePose: values => {
+      if (values.some((value, index) => value !== poseState.values[index])) {
+        poseState.values = values;
+        markCoarseAdjusted();
+      }
+    },
     readMatrix: () => formatMovingLocalToFixedLocal(display.getMovingLocalToFixedLocal()),
     updateMatrix: value => { viewState.initialMatrix = value; },
     syncClipping: () => clippingRuntime.scene.sync(),
@@ -250,21 +259,36 @@ export async function initializeWorkbench(
   coordinateQuery = queryRuntime.controller;
   panels.query = queryRuntime.render;
   resources.add(queryRuntime.destroy);
+  let coarseInitialSource: () => 'manual' | '4pcs' | '4pcs_adjusted' = () => 'manual';
   const registrationRuntime = createWorkbenchRegistrationRuntime({
     sessionId, registrations: session.registrations, signal, activity, results,
     role: roleState, icp: icpValues, display, query: () => coordinateQuery,
     runningChanged: setRunning, refreshRoles, fitCamera: () => cameraController.fit(),
+    initialSource: () => coarseInitialSource(),
   });
   resources.add(registrationRuntime.destroy);
+  const coarseRuntime = createWorkbenchCoarseRegistration({
+    sessionId, signal, display,
+    movingModel: () => effectiveMovingModel(roleState.moving, session.metadata!.recommended_moving_model),
+    setRunning,
+    updatePose: values => { poseState.values = values; },
+    invalidateResult: () => { coordinateQuery?.invalidate(); results.hide(); },
+    fitCamera: () => cameraController.fit(),
+  });
+  coarseInitialSource = coarseRuntime.initialSource;
+  markCoarseAdjusted = coarseRuntime.markAdjusted;
+  resetCoarse = coarseRuntime.reset;
+  resources.add(coarseRuntime.destroy);
   Object.assign(panels, createRegistrationPanelBindings({
     activity: activityState, role: roleState,
     recommendedMoving: session.metadata!.recommended_moving_model, modelDiagonals,
-    pose: poseState, business, icp: icpValues, actions: registrationRuntime.actions,
+    pose: poseState, coarse: coarseRuntime, business, icp: icpValues, actions: registrationRuntime.actions,
     changePose: values => {
       const pose = splitCoarsePose(values);
       display.setPose(pose.position, pose.rotation);
+      coarseRuntime.markAdjusted();
     },
-    changeMoving: value => { roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },
+    changeMoving: value => { coarseRuntime.reset(); roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },
     changeDirection: value => setOutputDirection(roleState, value, results.hide, () => coordinateQuery?.invalidate()),
     changeBusiness: (model, kind, index, value) => { businessDraft[model][kind][index] = value; },
     changeIcp: (key, value) => updateIcpParameter(icpValues, key, value),

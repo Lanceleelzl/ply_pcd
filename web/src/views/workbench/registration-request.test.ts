@@ -10,6 +10,7 @@ test('builds a business registration request with progress events enabled', () =
   assert.equal(request.coordinate_space, 'business');
   assert.equal(request.show_registration_progress, true);
   assert.equal(request.sampling_limit, 50000);
+  assert.equal(request.initial_source, 'manual');
 });
 
 test('resolves automatic moving model from session recommendation', () => {

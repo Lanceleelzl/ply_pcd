@@ -45,7 +45,7 @@ class CoarseRegistrationRouteTest(unittest.IsolatedAsyncioTestCase):
             )
             endpoints = {route.name: route.endpoint for route in router.routes}
             created = await endpoints["create_coarse_registration"](
-                "session", CoarseRegistrationRequest(moving_model="a")
+                "session", CoarseRegistrationRequest(moving_model="a", overlaps=[1.0], random_seeds=[42])
             )
             job_id = created["job_id"]
             command = started.call_args.args[1]
