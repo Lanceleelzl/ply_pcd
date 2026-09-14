@@ -1,5 +1,5 @@
 import * as pc from 'playcanvas';
-import { ResourceScope } from '../../app/resource-scope';
+import { ResourceScope } from '../../shared/resource-scope';
 
 interface RegistrationApplicationOptions {
   canvas: HTMLCanvasElement;

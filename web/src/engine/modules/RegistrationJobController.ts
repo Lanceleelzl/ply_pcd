@@ -145,16 +145,19 @@ export class RegistrationJobController {
   }
 
   private openProgress(): void {
-    if (!this.activeProgressUrl || this.progressSource) return;
-    this.progressSource = new EventSource(`${this.activeProgressUrl}?from_latest=true`);
-    this.progressSource.addEventListener('iteration', event => {
-      if (this.lifecycle.signal.aborted) return;
+    if (this.lifecycle.signal.aborted || !this.activeProgressUrl || this.progressSource) return;
+    const source = new EventSource(`${this.activeProgressUrl}?from_latest=true`);
+    this.progressSource = source;
+    source.addEventListener('iteration', event => {
+      if (this.lifecycle.signal.aborted || this.progressSource !== source) return;
       const progress = JSON.parse((event as MessageEvent<string>).data) as RegistrationIteration;
       if (progress.iteration <= (this.latestProgress?.iteration ?? 0)) return;
       this.latestProgress = progress;
       this.events.progressChanged(progress);
     });
-    this.progressSource.addEventListener('terminal', () => this.closeProgress());
+    source.addEventListener('terminal', () => {
+      if (this.progressSource === source) this.closeProgress();
+    });
   }
 
   private closeProgress(): void {

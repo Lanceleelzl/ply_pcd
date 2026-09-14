@@ -4,6 +4,68 @@ import { RegistrationJobController } from './RegistrationJobController.ts';
 import type { RegistrationRequest } from '../../api/contracts';
 
 const request = {} as RegistrationRequest;
+
+test('closed progress streams cannot publish iterations or close a replacement stream', async context => {
+  class ProgressSource extends EventTarget {
+    static instances: ProgressSource[] = [];
+    closed = false;
+    constructor(readonly url: string) {
+      super();
+      ProgressSource.instances.push(this);
+    }
+    close() { this.closed = true; }
+    iteration(value: number) {
+      this.dispatchEvent(new MessageEvent('iteration', { data: JSON.stringify({ iteration: value }) }));
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'EventSource');
+  Object.defineProperty(globalThis, 'EventSource', { configurable: true, value: ProgressSource });
+  context.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'EventSource', descriptor);
+    else Reflect.deleteProperty(globalThis, 'EventSource');
+  });
+  let statusRequested!: () => void;
+  const waiting = new Promise<void>(resolve => { statusRequested = resolve; });
+  let finish!: (response: Response) => void;
+  const status = new Promise<Response>(resolve => { finish = resolve; });
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
+    if (String(url).endsWith('/register')) return Response.json({ job_id: 'job', status_url: '/status', progress_url: '/events' });
+    statusRequested();
+    return status;
+  });
+  const iterations: number[] = [];
+  const parent = new AbortController();
+  const e = events();
+  const controller = new RegistrationJobController({ ...e.callbacks, progressChanged: value => iterations.push(value.iteration) }, parent.signal);
+  context.after(() => controller.destroy());
+  controller.setProgressVisible(true);
+  const pending = controller.run('session', request);
+  const stopped = assert.rejects(pending, { name: 'AbortError' });
+  await waiting;
+  const first = ProgressSource.instances[0];
+  first.iteration(1);
+  controller.setProgressVisible(false);
+  assert.equal(first.closed, true);
+  controller.setProgressVisible(true);
+  const second = ProgressSource.instances[1];
+  // Model callbacks already queued when the old connection was closed.
+  first.iteration(99);
+  first.dispatchEvent(new Event('terminal'));
+  const replacementClosedByOldStream = second.closed;
+  second.iteration(2);
+  parent.abort();
+  controller.setProgressVisible(true);
+  second.iteration(3);
+  finish(Response.json({ status: 'cancelled' }));
+  await stopped;
+  assert.deepEqual(iterations, [1, 2]);
+  assert.equal(replacementClosedByOldStream, false);
+  assert.equal(second.closed, true);
+  controller.setProgressVisible(true);
+  assert.equal(ProgressSource.instances.length, 2);
+  assert.deepEqual(e.running, [true]);
+});
+
 function events() {
   const running: boolean[] = [];
   const completed: string[] = [];

@@ -3,9 +3,20 @@ import type { ModelId } from '../../api/contracts';
 export type ClippingMode = 'off' | 'axis' | 'box';
 export type ClippingControlMode = 'joint' | 'independent';
 
-const models: ModelId[] = ['a', 'b'];
+export function editedClippingMode(controlMode: ClippingControlMode, jointMode: ClippingMode, editor: ModelId, independentModes: Record<ModelId, ClippingMode>): ClippingMode {
+  return controlMode === 'joint' ? jointMode : independentModes[editor];
+}
 
-const modeLabel = (mode: ClippingMode) => mode === 'off' ? '关闭' : mode === 'axis' ? '坐标轴' : '长方体';
+export function isClippingEnabled(controlMode: ClippingControlMode, jointMode: ClippingMode, independentModes: Record<ModelId, ClippingMode>): boolean {
+  return controlMode === 'joint' ? jointMode !== 'off' : independentModes.a !== 'off' || independentModes.b !== 'off';
+}
+
+export function clippingStateSummary(controlMode: ClippingControlMode, jointMode: ClippingMode, independentModes: Record<ModelId, ClippingMode>): string {
+  const modeLabel = (mode: ClippingMode) => mode === 'off' ? '关闭' : mode === 'axis' ? '坐标轴' : '长方体';
+  return controlMode === 'joint'
+    ? `联合剖切：${modeLabel(jointMode)}`
+    : `独立剖切：A ${modeLabel(independentModes.a)}，B ${modeLabel(independentModes.b)}`;
+}
 
 export class ClippingStateController {
   controlMode: ClippingControlMode = 'joint';
@@ -20,7 +31,7 @@ export class ClippingStateController {
   }
 
   editedMode(): ClippingMode {
-    return this.mode(this.editor);
+    return editedClippingMode(this.controlMode, this.jointMode, this.editor, this.independentModes);
   }
 
   helperVisible(model = this.editor): boolean {
@@ -28,14 +39,10 @@ export class ClippingStateController {
   }
 
   enabled(): boolean {
-    return this.controlMode === 'joint'
-      ? this.jointMode !== 'off'
-      : models.some(model => this.independentModes[model] !== 'off');
+    return isClippingEnabled(this.controlMode, this.jointMode, this.independentModes);
   }
 
   summary(): string {
-    return this.controlMode === 'joint'
-      ? `联合剖切：${modeLabel(this.jointMode)}`
-      : `独立剖切：A ${modeLabel(this.independentModes.a)}，B ${modeLabel(this.independentModes.b)}`;
+    return clippingStateSummary(this.controlMode, this.jointMode, this.independentModes);
   }
 }

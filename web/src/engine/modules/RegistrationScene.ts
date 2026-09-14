@@ -3,7 +3,7 @@ import type { ModelId } from '../../api/contracts';
 import { transformXYZ, type TransformParameters, type XYZ } from '../../coordinate-math.ts';
 import { createPointCloudEntity, type PointCloudMaterial, type PreviewCloud } from '../../point-cloud.ts';
 import { RegistrationDisplay } from '../../registration-display.ts';
-import { ResourceScope } from '../../app/resource-scope.ts';
+import { ResourceScope } from '../../shared/resource-scope.ts';
 
 /** Owns the model hierarchy and preview materials for one registration session. */
 export class RegistrationScene {

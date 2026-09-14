@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RegistrationSession } from '../../api/contracts';
 import ViewportToolbar from './ViewportToolbar.vue';
 import type { ToolbarCommand, ToolbarState } from './toolbar-state';
@@ -7,8 +8,23 @@ import type { ResultViewState } from './result-view-state';
 import RegistrationResultPanel from './RegistrationResultPanel.vue';
 import type { InspectorState } from './inspector-state';
 
-defineProps<{ view: { roleSummary: string; initialMatrix: string; help: string }; session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState; inspector: InspectorState }>();
+const props = defineProps<{ view: { roleSummary: string; initialMatrix: string; help: string }; session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState; inspector: InspectorState }>();
 const emit = defineEmits<{ newTask: []; toolbar: [command: ToolbarCommand] }>();
+const viewport = ref<HTMLElement | null>(null);
+const progressTop = ref(0);
+let progressResize: ResizeObserver | undefined;
+const positionProgress = () => {
+  const toolbar = viewport.value?.querySelector<HTMLElement>('.viewport-toolbar');
+  if (toolbar) progressTop.value = toolbar.offsetTop + toolbar.offsetHeight + 8;
+};
+onMounted(() => {
+  const toolbar = viewport.value!.querySelector<HTMLElement>('.viewport-toolbar')!;
+  progressResize = new ResizeObserver(positionProgress);
+  progressResize.observe(toolbar);
+  positionProgress();
+});
+watch(() => props.result.progressVisible, positionProgress, { flush: 'post' });
+onBeforeUnmount(() => progressResize?.disconnect());
 const faces = [
   { axis: 'x', direction: '1,0,0', label: 'X', title: '沿 +X 查看' },
   { axis: 'nx', direction: '-1,0,0', label: '−X', title: '沿 -X 查看' },
@@ -44,10 +60,10 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
           <p id="gaussian-status" class="gaussian-status" :class="{ error: gaussian.error }" :hidden="!gaussian.message">{{ gaussian.message }}</p>
         </section>
       </aside>
-      <section class="viewport">
+      <section ref="viewport" class="viewport">
         <canvas id="viewport"></canvas>
         <ViewportToolbar :session="session" :gaussian="gaussian" :state="toolbar" @command="emit('toolbar', $event)" />
-        <div id="iteration-progress" class="viewport-progress" :class="{ completed: result.progressCompleted }" :style="{ top: `${result.progressTop}px` }"
+        <div id="iteration-progress" class="viewport-progress" :class="{ completed: result.progressCompleted }" :style="{ top: `${progressTop}px` }"
           role="status" aria-live="polite" :hidden="!result.progressVisible">{{ result.progressText }}</div>
         <div class="view-gizmo" aria-label="快速视角">
           <div class="view-cube-scene"><div class="view-cube">

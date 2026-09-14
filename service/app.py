@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from pathlib import Path
 from typing import Any
@@ -11,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from service.background_tasks import BackgroundTasks
 from service.history import write_history, release_source_data, history_view
-from service.cleanup import cleanup_completed_jobs
+from service.cleanup import cleanup_completed_jobs, run_cleanup_loop
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
     MAX_CONCURRENT_JOBS,
@@ -33,6 +32,7 @@ from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.preview_tasks import run_preview_task
 from service.registration_tasks import run_registration_task
+from service.session_state import normalize_task_links, source_available, sync_session_job
 from service.storage import (
     history_directory as _storage_history_directory,
     history_path as _storage_history_path,
@@ -87,21 +87,11 @@ def _write_status(job_directory: Path, status: dict[str, Any]) -> None:
 
 
 def _read_status(job_directory: Path) -> dict[str, Any]:
-    status = _storage_read_status(job_directory)
-    # Normalize persisted task links without rewriting historical files.
-    for record in [status, *status.get("registrations", [])]:
-        for field in ("status_url", "progress_url", "result_url"):
-            value = record.get(field)
-            if isinstance(value, str) and value.startswith("/api/v1/registrations/"):
-                record[field] = value.replace("/api/v1/registrations/", "/api/v2/registrations/", 1)
-    return status
+    return normalize_task_links(_storage_read_status(job_directory))
 
 
 def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> bool:
-    return all(
-        (session_directory / "input" / status.get(field, "")).is_file()
-        for field in ("model_a_filename", "model_b_filename")
-    )
+    return source_available(session_directory, status)
 
 
 def _history_path(workspace_id: str, session_id: str) -> Path:
@@ -141,31 +131,13 @@ app.include_router(create_session_router(
 
 
 def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
-    session_id = job_status.get("manual_session_id")
-    if not session_id:
-        return
-    session_directory = _manual_session_directory(session_id)
-    session_status = _read_status(session_directory)
-    registrations = session_status.setdefault("registrations", [])
-    entry = next((item for item in registrations if item.get("job_id") == job_status["job_id"]), None)
-    if entry is None:
-        return
-    for field in (
-        "status", "started_at_unix", "finished_at_unix", "result_url", "error_code", "error"
-    ):
-        if field in job_status:
-            entry[field] = job_status[field]
-    if job_status.get("status") in {"succeeded", "failed", "cancelled"}:
-        if session_status.get("active_job_id") == job_status["job_id"]:
-            session_status["active_job_id"] = None
-    else:
-        session_status["active_job_id"] = job_status["job_id"]
-    _write_status(session_directory, session_status)
-    if job_status.get("status") == "succeeded" and session_status.get("api_version") == "v2":
-        try:
-            _write_v2_history(session_directory, session_status)
-        except (OSError, ValueError, json.JSONDecodeError):
-            pass
+    sync_session_job(
+        job_status,
+        resolve_session_directory=_manual_session_directory,
+        read_status=_read_status,
+        write_status=_write_status,
+        write_history=_write_v2_history,
+    )
 
 
 app.include_router(create_job_router(
@@ -215,9 +187,7 @@ def _cleanup_completed_jobs() -> None:
 
 
 async def _cleanup_loop() -> None:
-    while True:
-        await asyncio.to_thread(_cleanup_completed_jobs)
-        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+    await run_cleanup_loop(_cleanup_completed_jobs, CLEANUP_INTERVAL_SECONDS)
 
 
 @app.on_event("startup")

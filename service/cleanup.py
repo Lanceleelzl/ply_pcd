@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import time
@@ -10,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+
+
+async def run_cleanup_loop(cleanup: Callable[[], None], interval_seconds: float) -> None:
+    while True:
+        await asyncio.to_thread(cleanup)
+        await asyncio.sleep(interval_seconds)
 
 
 def cleanup_completed_jobs(

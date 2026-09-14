@@ -47,8 +47,9 @@ RUN python3 -m venv /opt/registration-venv \
 COPY --from=builder /opt/registration/bin/registration_worker /usr/local/bin/registration_worker
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/ply-pcd-registration/
 COPY LICENSES /usr/share/licenses/ply-pcd-registration/LICENSES
-COPY service /opt/registration-service
-COPY --from=web-builder /src/service/static /opt/registration-service/static
+COPY service /opt/registration-service/service
+COPY --from=web-builder /src/service/static /opt/registration-service/service/static
+RUN PYTHONPATH=/opt/registration-service /opt/registration-venv/bin/python -c "import service.app"
 
 USER registration
 WORKDIR /data

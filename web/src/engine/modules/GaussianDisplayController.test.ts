@@ -75,3 +75,52 @@ test('late load errors after destruction do not touch destroyed models or publis
   assert.equal(f.removed.length, 1);
   assert.doesNotThrow(() => f.controller.destroy());
 });
+
+test('twenty Gaussian display cycles release every entity and asset', async context => {
+  const modifiers: unknown[] = [];
+  context.mock.method(pc.Entity.prototype, 'addComponent', function (this: pc.Entity, type: string) {
+    assert.equal(type, 'gsplat');
+    Object.defineProperty(this, 'gsplat', {
+      configurable: true,
+      value: {
+        setWorkBufferModifier: (modifier: unknown) => modifiers.push(modifier),
+        setParameter: () => {},
+      },
+    });
+  });
+
+  const assets: pc.Asset[] = [];
+  const removed: pc.Asset[] = [];
+  const parents = { a: new pc.Entity('A'), b: new pc.Entity('B') };
+  Object.defineProperty(parents.a, 'render', { value: { enabled: true } });
+  Object.defineProperty(parents.b, 'render', { value: { enabled: true } });
+  const controller = new GaussianDisplayController({
+    app: { assets: {
+      add: (asset: pc.Asset) => assets.push(asset),
+      load: () => {},
+      remove: (asset: pc.Asset) => removed.push(asset),
+    } } as unknown as pc.Application,
+    entities: parents,
+    urls: { a: '/a.ply', b: undefined }, origins: { a: [0, 0, 0], b: [0, 0, 0] },
+    clippingEnabled: () => false, clipStateChanged: () => {}, presentationChanged: () => {},
+    displayChanged: () => {}, statusChanged: () => {},
+  });
+
+  for (let cycle = 0; cycle < 20; cycle++) {
+    const loading = controller.toggle('a');
+    const asset = assets.at(-1)!;
+    asset.fire('load', asset);
+    await loading;
+    assert.equal(parents.a.children.length, 1);
+    assert.equal(parents.a.render!.enabled, false);
+
+    await controller.toggle('a');
+    assert.equal(parents.a.children.length, 0);
+    assert.equal(parents.a.render!.enabled, true);
+  }
+
+  assert.equal(assets.length, 20);
+  assert.deepEqual(removed, assets);
+  assert.equal(modifiers.length, 20);
+  assert.doesNotThrow(() => controller.destroy());
+});

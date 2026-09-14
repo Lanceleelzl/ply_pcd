@@ -2,7 +2,7 @@ import * as pc from 'playcanvas';
 import type { ModelId } from '../../api/contracts';
 import type { TransformParameters, XYZ } from '../../coordinate-math';
 import type { PreviewCloud } from '../../point-cloud';
-import { ResourceScope } from '../../app/resource-scope';
+import { ResourceScope } from '../../shared/resource-scope';
 import { RegistrationApplication } from './Application';
 import { RegistrationScene } from '../modules/RegistrationScene';
 import { ViewportCameraController, type ViewportInputDelegate, type CameraOrientation } from './ViewportCameraController';

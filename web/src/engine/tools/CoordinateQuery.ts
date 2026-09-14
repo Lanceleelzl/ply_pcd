@@ -2,6 +2,7 @@ import type { CoordinatePanelView, CoordinateLabelsView } from './coordinate-que
 import * as pc from 'playcanvas';
 import type { PreviewCloud } from '../../point-cloud';
 import { invertAffine, offsetXYZ, transformXYZ, type Matrix, type XYZ } from '../../coordinate-math';
+import { pickVisiblePreviewPoint } from './coordinate-query-picking.ts';
 
 type Model = 'a' | 'b';
 const models: Model[] = ['a', 'b'];
@@ -163,17 +164,18 @@ export class CoordinateQuery {
     const y = event.clientY - rect.top;
     const radius = 9;
     const cloud = clouds[this.source]; const entity = entities[this.source];
-    let best = -1; let bestDepth = Infinity;
-    const local = new pc.Vec3(); const world = new pc.Vec3(); const screen = new pc.Vec3();
-    if (entity.enabled) for (let index = 0; index < cloud.count; index++) {
-      local.set(cloud.positions[index * 3], cloud.positions[index * 3 + 1], cloud.positions[index * 3 + 2]);
-      entity.getWorldTransform().transformPoint(local, world);
-      if (!this.options.visiblePoint(this.source, world)) continue;
-      const depth = world.clone().sub(camera.getPosition()).dot(camera.forward);
-      if (depth <= camera.camera!.nearClip || depth >= bestDepth) continue;
-      camera.camera!.worldToScreen(world, screen);
-      if ((screen.x - x) ** 2 + (screen.y - y) ** 2 <= radius ** 2) { best = index; bestDepth = depth; }
-    }
+    const best = entity.enabled ? pickVisiblePreviewPoint({
+      cloud,
+      localToWorld: entity.getWorldTransform(),
+      cameraPosition: camera.getPosition(),
+      cameraForward: camera.forward,
+      nearClip: camera.camera!.nearClip,
+      screenX: x,
+      screenY: y,
+      radius,
+      visiblePoint: world => this.options.visiblePoint(this.source, world),
+      worldToScreen: (world, screen) => { camera.camera!.worldToScreen(world, screen); },
+    }) : -1;
     if (best >= 0) {
       this.picking = false;
       const filePoint = offsetXYZ([cloud.positions[best * 3], cloud.positions[best * 3 + 1], cloud.positions[best * 3 + 2]], origins[this.source]);

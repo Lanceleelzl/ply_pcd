@@ -1,8 +1,42 @@
+import asyncio
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from service.cleanup import cleanup_completed_jobs
+from service.cleanup import cleanup_completed_jobs, run_cleanup_loop
+
+
+class CleanupLoopTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cleanup_completes_before_waiting_and_cancellation_stops_loop(self):
+        calls = []
+        cleanup = Mock()
+
+        async def run_in_thread(callback):
+            self.assertIs(callback, cleanup)
+            calls.append("cleanup")
+
+        async def wait(interval):
+            self.assertEqual(interval, 17)
+            calls.append("wait")
+            if len(calls) == 4:
+                raise asyncio.CancelledError
+
+        with patch("service.cleanup.asyncio.to_thread", side_effect=run_in_thread), \
+             patch("service.cleanup.asyncio.sleep", side_effect=wait):
+            with self.assertRaises(asyncio.CancelledError):
+                await run_cleanup_loop(cleanup, 17)
+        self.assertEqual(calls, ["cleanup", "wait", "cleanup", "wait"])
+
+    async def test_cleanup_failure_propagates_without_waiting_or_retrying(self):
+        failure = OSError("cleanup unavailable")
+        with patch("service.cleanup.asyncio.to_thread", new_callable=AsyncMock,
+                   side_effect=failure) as run_in_thread, \
+             patch("service.cleanup.asyncio.sleep", new_callable=AsyncMock) as wait:
+            with self.assertRaises(OSError) as caught:
+                await run_cleanup_loop(Mock(), 17)
+        self.assertIs(caught.exception, failure)
+        run_in_thread.assert_awaited_once()
+        wait.assert_not_awaited()
 
 
 class CleanupTest(unittest.TestCase):

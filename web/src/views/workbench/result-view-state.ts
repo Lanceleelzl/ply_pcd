@@ -8,5 +8,4 @@ export interface ResultViewState {
   progressVisible: boolean;
   progressCompleted: boolean;
   progressText: string;
-  progressTop: number;
 }
