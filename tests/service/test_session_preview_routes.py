@@ -17,11 +17,12 @@ class SessionPreviewRoutesTest(unittest.IsolatedAsyncioTestCase):
         }
         self.start = Mock()
         self.available = Mock(return_value=True)
+        self.restore = Mock(return_value=True)
         self.write = Mock(side_effect=lambda _, value: self.status.update(value))
         router = create_session_router(
             lambda _: Path("runtime/manual-sessions/session"), lambda _: Path("runtime/jobs/job"),
             lambda _: dict(self.status), self.write, self.available, lambda value: value,
-            Mock(), Mock(), Mock(), 24, "worker", self.start,
+            Mock(), Mock(), Mock(), 24, "worker", self.restore, self.start,
         )
         self.routes = {route.name: route.endpoint for route in router.routes}
 
@@ -37,6 +38,7 @@ class SessionPreviewRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["status"], "queued")
         self.assertEqual(first, second)
         self.start.assert_called_once()
+        self.restore.assert_called()
         command = self.start.call_args.args[1]
         self.assertEqual(command[:2], ["worker", "prepare-model-preview"])
         self.assertNotIn("error", self.write.call_args.args[1])

@@ -19,12 +19,13 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
         }}
         self.start = Mock()
         self.persist = Mock()
+        self.restore = Mock(return_value=True)
         self.available = Mock(return_value=True)
         self.router = create_registration_router(
             lambda _: self.session, lambda job: Path("runtime/jobs") / job,
             lambda path: copy.deepcopy(self.states[path]),
             lambda path, status: self.states.__setitem__(path, copy.deepcopy(status)),
-            self.available, asyncio.Lock(), "worker", self.persist, self.start,
+            self.available, asyncio.Lock(), "worker", self.restore, self.persist, self.start,
         )
         self.submit = self.router.routes[0].endpoint
 

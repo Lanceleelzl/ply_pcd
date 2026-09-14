@@ -25,6 +25,7 @@ def create_registration_router(
     _v2_source_available: Callable[[Path, dict[str, Any]], bool],
     _manual_submission_lock: asyncio.Lock,
     worker_path: str,
+    restore_sources: Callable[[Path, dict[str, Any]], bool],
     persist_registration: Callable[[Path, list[str]], None],
     start_registration: Callable[[str, list[str]], Any],
 ) -> APIRouter:
@@ -49,7 +50,9 @@ def create_registration_router(
             session_status = _read_status(session_directory)
             if session_status.get("api_version") != "v2":
                 raise HTTPException(status_code=404, detail="V2 registration session not found")
-            if not _v2_source_available(session_directory, session_status):
+            if not _v2_source_available(session_directory, session_status) or not await asyncio.to_thread(
+                restore_sources, session_directory, session_status
+            ):
                 raise HTTPException(status_code=409, detail="Source model files have been cleaned")
             if session_status.get("status") != "ready":
                 raise HTTPException(status_code=409, detail=f"Session status is {session_status.get('status')}")

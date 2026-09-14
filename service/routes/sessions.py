@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -34,6 +35,7 @@ def create_session_router(
     release_source_data: SourceRelease,
     source_retention_hours: int,
     worker_path: str,
+    restore_sources: Callable[[Path, dict[str, Any]], bool],
     start_preview: Callable[[str, list[str]], Any],
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v2/registration-sessions")
@@ -105,7 +107,7 @@ def create_session_router(
         request: WorkspaceRequest,
     ) -> dict[str, Any]:
         directory, status = read_owned_session(session_id, request.workspace_id)
-        release_source_data(directory, status)
+        await asyncio.to_thread(release_source_data, directory, status)
         return {"session_id": session_id, "source_available": False, "restartable": False}
 
     @router.post("/{session_id}/resume", status_code=202)
@@ -114,7 +116,7 @@ def create_session_router(
         status = read_status(directory)
         if status.get("api_version") != "v2" or status.get("workspace_id") != parse_workspace_id(request.workspace_id):
             raise HTTPException(status_code=404, detail="V2 registration session not found")
-        if not source_available(directory, status):
+        if not source_available(directory, status) or not await asyncio.to_thread(restore_sources, directory, status):
             raise HTTPException(status_code=409, detail="Source model files have been cleaned")
         preview_directory = directory / "preview"
         preview_ready = all((preview_directory / name).is_file() for name in ("model-a-points.bin", "model-b-points.bin"))

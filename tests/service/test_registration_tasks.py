@@ -7,7 +7,8 @@ from service.registration_tasks import run_registration_task
 
 
 class RegistrationTaskTest(unittest.IsolatedAsyncioTestCase):
-    async def run_case(self, *, exit_code=0, result_exists=True, cancelled=False, timeout=False):
+    async def run_case(self, *, exit_code=0, result_exists=True, cancelled=False, timeout=False,
+                       archive_result=None):
         status = {"job_id": "test-job", "status": "queued"}
         writes = []
         processes = {}
@@ -40,6 +41,7 @@ class RegistrationTaskTest(unittest.IsolatedAsyncioTestCase):
                 session_directory=lambda _: Path("runtime/manual-sessions/test-session"),
                 read_status=read_status, write_status=write_status, sync_session_job=sync,
                 semaphore=asyncio.Semaphore(1), running_processes=processes, timeout_seconds=10,
+                archive_result=archive_result,
             )
         self.assertEqual(processes, {})
         self.assertEqual(writes[0]["status"], "running")
@@ -75,3 +77,9 @@ class RegistrationTaskTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["error_code"], "worker_timeout")
         process.kill.assert_called_once()
         process.communicate.assert_awaited_once()
+
+    async def test_result_archive_failure_is_not_reported_as_worker_start_failure(self):
+        status, _ = await self.run_case(archive_result=Mock(side_effect=OSError("storage unavailable")))
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error_code"], "object_storage_failed")
+        self.assertEqual(status["error"], "storage unavailable")

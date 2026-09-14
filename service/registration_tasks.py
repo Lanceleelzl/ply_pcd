@@ -29,6 +29,7 @@ async def run_registration_task(
     semaphore: asyncio.Semaphore,
     running_processes: dict[str, asyncio.subprocess.Process],
     timeout_seconds: int,
+    archive_result: Callable[[str, Path], None] | None = None,
 ) -> None:
     job_directory = resolve_job_directory(job_id)
     async with semaphore:
@@ -120,12 +121,18 @@ async def run_registration_task(
                                 encoding="utf-8",
                             )
                         result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                    if archive_result is not None:
+                        try:
+                            await asyncio.to_thread(archive_result, job_id, result_path.parent)
+                        except Exception as error:
+                            status.update(status="failed", error_code="object_storage_failed", error=str(error))
+                            raise RuntimeError("result archive failed") from error
                     status.update(status="succeeded", result_url=f"/api/v2/registrations/{job_id}/result")
         except Exception as error:  # Keep API alive if worker startup itself fails.
             current_status = read_status(job_directory)
             if current_status.get("status") == "cancelled":
                 status = current_status
-            else:
+            elif status.get("error_code") != "object_storage_failed":
                 status.update(status="failed", error_code="worker_start_failed", error=str(error))
         finally:
             running_processes.pop(job_id, None)

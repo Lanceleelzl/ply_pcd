@@ -14,6 +14,7 @@ from service.cleanup import cleanup_completed_jobs, run_cleanup_loop
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
     MAX_CONCURRENT_JOBS,
+    OBJECT_STORAGE_SETTINGS,
     RESULT_RETENTION_HOURS,
     RUNTIME_ROOT,
     SERVICE_VERSION,
@@ -33,6 +34,11 @@ from service.routes.uploads import create_upload_router
 from service.preview_tasks import run_preview_task
 from service.registration_tasks import run_registration_task
 from service.registration_queue import recover_registration_queue, write_task_descriptor
+from service.object_storage import create_object_storage
+from service.object_lifecycle import (
+    archive_job_result, archive_session_sources, delete_session_objects, restore_job_result,
+    restore_session_sources, source_available_locally_or_remotely,
+)
 from service.session_state import normalize_task_links, source_available, sync_session_job
 from service.storage import (
     history_directory as _storage_history_directory,
@@ -61,6 +67,7 @@ _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 _manual_submission_lock = asyncio.Lock()
 _background_tasks = BackgroundTasks()
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
+_object_storage = create_object_storage(OBJECT_STORAGE_SETTINGS)
 
 
 def _job_directory(job_id: str) -> Path:
@@ -92,7 +99,11 @@ def _read_status(job_directory: Path) -> dict[str, Any]:
 
 
 def _v2_source_available(session_directory: Path, status: dict[str, Any]) -> bool:
-    return source_available(session_directory, status)
+    return source_available_locally_or_remotely(session_directory, status)
+
+
+def _restore_sources(session_directory: Path, status: dict[str, Any]) -> bool:
+    return restore_session_sources(_object_storage, session_directory, status)
 
 
 def _history_path(workspace_id: str, session_id: str) -> Path:
@@ -107,7 +118,9 @@ def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -
 
 
 def _release_v2_source_data(session_directory: Path, session_status: dict[str, Any]) -> None:
-    return release_source_data(session_directory, session_status, _job_directory=_job_directory, _read_status=_read_status, _write_status=_write_status, _write_v2_history=_write_v2_history)
+    release_source_data(session_directory, session_status, _job_directory=_job_directory, _read_status=_read_status, _write_status=_write_status, _write_v2_history=_write_v2_history)
+    delete_session_objects(_object_storage, session_status)
+    _write_status(session_directory, session_status)
 
 
 def _history_view(record: dict[str, Any]) -> dict[str, Any]:
@@ -127,6 +140,7 @@ app.include_router(create_session_router(
     _release_v2_source_data,
     SOURCE_RETENTION_HOURS,
     WORKER_PATH,
+    _restore_sources,
     lambda session_id, command: _background_tasks.start(_run_model_preview(session_id, command)),
 ))
 
@@ -143,18 +157,20 @@ def _sync_manual_session_job(job_status: dict[str, Any]) -> None:
 
 app.include_router(create_job_router(
     _job_directory, _read_status, _write_status, _sync_manual_session_job, _running_processes,
+    lambda job_id, filename, destination: restore_job_result(_object_storage, job_id, filename, destination),
 ))
 
 
 app.include_router(create_registration_router(
     _manual_session_directory, _job_directory, _read_status, _write_status,
-    _v2_source_available, _manual_submission_lock, WORKER_PATH, write_task_descriptor,
+    _v2_source_available, _manual_submission_lock, WORKER_PATH, _restore_sources, write_task_descriptor,
     lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
 ))
 
 
 app.include_router(create_upload_router(
     _manual_session_directory, _write_status, WORKER_PATH, SOURCE_RETENTION_HOURS,
+    lambda directory, status: archive_session_sources(_object_storage, directory, status),
     lambda session_id, command: _background_tasks.start(_run_model_preview(session_id, command)),
 ))
 
@@ -170,6 +186,9 @@ async def _run_worker(job_id: str, command: list[str]) -> None:
         semaphore=_job_semaphore,
         running_processes=_running_processes,
         timeout_seconds=WORKER_TIMEOUT_SECONDS,
+        archive_result=lambda current_job_id, directory: archive_job_result(
+            _object_storage, current_job_id, directory
+        ),
     )
 
 
@@ -184,6 +203,7 @@ def _cleanup_completed_jobs() -> None:
     cleanup_completed_jobs(
         RUNTIME_ROOT, RESULT_RETENTION_HOURS, _job_directory, _read_status,
         _v2_source_available, _release_v2_source_data,
+        preserve_job_status=_object_storage.enabled,
     )
 
 

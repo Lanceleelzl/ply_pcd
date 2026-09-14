@@ -26,6 +26,7 @@ def cleanup_completed_jobs(
     _read_status: Callable[[Path], dict[str, Any]],
     _v2_source_available: Callable[[Path, dict[str, Any]], bool],
     _release_v2_source_data: Callable[[Path, dict[str, Any]], None],
+    preserve_job_status: bool = False,
 ) -> None:
     jobs_directory = RUNTIME_ROOT / "jobs"
     if not jobs_directory.is_dir():
@@ -43,7 +44,12 @@ def cleanup_completed_jobs(
             continue
         shutil.rmtree(job_directory / "input", ignore_errors=True)
         if float(status.get("updated_at_unix", 0)) < expires_before:
-            shutil.rmtree(job_directory)
+            if preserve_job_status:
+                shutil.rmtree(job_directory / "result", ignore_errors=True)
+                for filename in ("progress.ndjson", "worker.stdout.log", "worker.stderr.log"):
+                    (job_directory / filename).unlink(missing_ok=True)
+            else:
+                shutil.rmtree(job_directory)
 
     sessions_directory = RUNTIME_ROOT / "manual-sessions"
     if not sessions_directory.is_dir():

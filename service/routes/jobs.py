@@ -19,6 +19,7 @@ def create_job_router(
     _write_status: Callable[[Path, dict[str, Any]], None],
     _sync_manual_session_job: Callable[[dict[str, Any]], None],
     _running_processes: dict[str, asyncio.subprocess.Process],
+    restore_result: Callable[[str, str, Path], bool],
 ) -> APIRouter:
     router = APIRouter()
 
@@ -97,7 +98,15 @@ def create_job_router(
         status = _read_status(job_directory)
         if status["status"] != "succeeded":
             raise HTTPException(status_code=409, detail=f"Job status is {status['status']}")
-        result = json.loads((job_directory / "result" / "registration.json").read_text(encoding="utf-8"))
+        path = job_directory / "result" / "registration.json"
+        if not path.is_file():
+            try:
+                restored = await asyncio.to_thread(restore_result, job_id, "registration.json", path)
+            except Exception as error:
+                raise HTTPException(status_code=502, detail="Stored result is unavailable") from error
+            if not restored:
+                raise HTTPException(status_code=404, detail="Result not found")
+        result = json.loads(path.read_text(encoding="utf-8"))
         return result
 
 
@@ -118,7 +127,12 @@ def create_job_router(
             raise HTTPException(status_code=404, detail="File not found")
         path = _job_directory(job_id) / "result" / filename
         if not path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
+            try:
+                restored = await asyncio.to_thread(restore_result, job_id, filename, path)
+            except Exception as error:
+                raise HTTPException(status_code=502, detail="Stored result is unavailable") from error
+            if not restored:
+                raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(path, filename=filename)
 
     return router

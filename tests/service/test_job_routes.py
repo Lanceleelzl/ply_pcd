@@ -14,9 +14,10 @@ class JobRouteTest(unittest.IsolatedAsyncioTestCase):
         self.process = Mock(returncode=None)
         self.sync = Mock()
         self.write = Mock(side_effect=lambda _, status: self.status.update(status))
+        self.restore = Mock(return_value=False)
         self.router = create_job_router(
             lambda _: Path("runtime/jobs/job"), lambda _: dict(self.status),
-            self.write, self.sync, {"job": self.process},
+            self.write, self.sync, {"job": self.process}, self.restore,
         )
         self.endpoints = {route.name: route.endpoint for route in self.router.routes}
 

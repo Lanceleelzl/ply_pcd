@@ -21,6 +21,7 @@ def create_upload_router(
     _write_status: Callable[[Path, dict[str, Any]], None],
     worker_path: str,
     source_retention_hours: int,
+    archive_sources: Callable[[Path, dict[str, Any]], None],
     start_preview: Callable[[str, list[str]], Any],
 ) -> APIRouter:
     router = APIRouter()
@@ -88,6 +89,11 @@ def create_upload_router(
             },
             "editor_url": f"/?session={session_id}&api=v2",
         }
+        try:
+            await asyncio.to_thread(archive_sources, session_directory, status)
+        except Exception as error:
+            shutil.rmtree(session_directory, ignore_errors=True)
+            raise HTTPException(status_code=502, detail="Object storage upload failed") from error
         _write_status(session_directory, status)
         command = [
             worker_path, "prepare-model-preview",

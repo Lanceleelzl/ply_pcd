@@ -12,9 +12,10 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.write = Mock()
         self.start = Mock()
+        self.archive = Mock()
         router = create_upload_router(
             lambda _: Path("runtime/manual-sessions/test-session"),
-            self.write, "worker", 24, self.start,
+            self.write, "worker", 24, self.archive, self.start,
         )
         self.create = router.routes[0].endpoint
         self.a = UploadFile(filename="scene.ply", file=io.BytesIO(b"a"))
@@ -37,6 +38,7 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(save.await_count, 2)
         self.assertEqual(status["business_transforms"]["a"]["scale"], [1, 1, 1])
         self.start.assert_called_once()
+        self.archive.assert_called_once()
         self.assertEqual(self.start.call_args.args[1][:2], ["worker", "prepare-model-preview"])
 
     async def test_empty_upload_does_not_start_preview(self):
@@ -47,6 +49,20 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as error:
                 await self.create(self.a, self.b)
         self.assertEqual(error.exception.status_code, 400)
+        cleanup.assert_called_once()
+        self.write.assert_not_called()
+        self.start.assert_not_called()
+        self.archive.assert_not_called()
+
+    async def test_object_archive_failure_rolls_back_session(self):
+        self.archive.side_effect = RuntimeError("storage unavailable")
+        with patch.object(Path, "mkdir"), patch(
+            "service.routes.uploads._save_upload_with_sha256",
+            new=AsyncMock(side_effect=[(1, "a-hash"), (1, "b-hash")]),
+        ), patch("service.routes.uploads.shutil.rmtree") as cleanup:
+            with self.assertRaises(HTTPException) as error:
+                await self.create(self.a, self.b)
+        self.assertEqual(error.exception.status_code, 502)
         cleanup.assert_called_once()
         self.write.assert_not_called()
         self.start.assert_not_called()
