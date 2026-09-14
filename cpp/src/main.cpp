@@ -27,6 +27,11 @@ int main(int argc, char** argv)
             return registration::worker::runModelRegistration(
                 registration::worker::parseModelRegisterArguments(argc, argv));
         }
+        if (command == "coarse-register-models")
+        {
+            return registration::worker::runCoarseRegistration(
+                registration::worker::parseCoarseRegisterArguments(argc, argv));
+        }
         if (command == "prepare-preview")
         {
             return registration::worker::runPreview(

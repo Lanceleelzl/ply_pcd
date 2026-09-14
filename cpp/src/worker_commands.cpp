@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "registration/icp_registration.hpp"
 #include "registration/bidirectional_registration.hpp"
+#include "registration/coarse_registration.hpp"
 #include "registration/matrix.hpp"
 #include "registration/ply_reader.hpp"
 #include "registration/point_cloud_preview.hpp"
@@ -100,6 +101,36 @@ registration::Matrix4d translationMatrix(const registration::Point3d& translatio
     registration::Matrix4d result;
     for (std::size_t axis = 0; axis < 3; ++axis) result.at(axis, 3) = translation[axis];
     return result;
+}
+
+void transformToBusiness(registration::ReferenceCloudReadResult& model,
+                         const registration::Matrix4d& matrix)
+{
+    registration::Point3d businessOrigin{};
+    for (std::size_t row = 0; row < 3; ++row)
+    {
+        businessOrigin[row] = matrix.at(row, 3);
+        for (std::size_t column = 0; column < 3; ++column)
+            businessOrigin[row] += matrix.at(row, column) * model.origin[column];
+    }
+    registration::BoundingBox3d bounds;
+    bounds.min = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+    bounds.max = {-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    for (auto& point : model.cloud.points)
+    {
+        registration::Point3d transformed{};
+        for (std::size_t row = 0; row < 3; ++row)
+            for (std::size_t column = 0; column < 3; ++column)
+                transformed[row] += matrix.at(row, column) * static_cast<double>(point[column]);
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            point[axis] = static_cast<float>(transformed[axis]);
+            bounds.min[axis] = std::min(bounds.min[axis], businessOrigin[axis] + transformed[axis]);
+            bounds.max[axis] = std::max(bounds.max[axis], businessOrigin[axis] + transformed[axis]);
+        }
+    }
+    model.origin = businessOrigin;
+    model.worldBounds = bounds;
 }
 
 } // namespace
@@ -280,34 +311,6 @@ int runModelRegistration(const ModelRegisterArguments& arguments)
     std::filesystem::create_directories(arguments.outputDirectory);
     auto modelA = registration::ReferenceCloudReader().read(arguments.modelA);
     auto modelB = registration::ReferenceCloudReader().read(arguments.modelB);
-    const auto transformToBusiness = [](registration::ReferenceCloudReadResult& model,
-                                        const registration::Matrix4d& matrix) {
-        registration::Point3d businessOrigin{};
-        for (std::size_t row = 0; row < 3; ++row)
-        {
-            businessOrigin[row] = matrix.at(row, 3);
-            for (std::size_t column = 0; column < 3; ++column)
-                businessOrigin[row] += matrix.at(row, column) * model.origin[column];
-        }
-        registration::BoundingBox3d bounds;
-        bounds.min = {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
-        bounds.max = {-std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
-        for (auto& point : model.cloud.points)
-        {
-            registration::Point3d transformed{};
-            for (std::size_t row = 0; row < 3; ++row)
-                for (std::size_t column = 0; column < 3; ++column)
-                    transformed[row] += matrix.at(row, column) * static_cast<double>(point[column]);
-            for (std::size_t axis = 0; axis < 3; ++axis)
-            {
-                point[axis] = static_cast<float>(transformed[axis]);
-                bounds.min[axis] = std::min(bounds.min[axis], businessOrigin[axis] + transformed[axis]);
-                bounds.max[axis] = std::max(bounds.max[axis], businessOrigin[axis] + transformed[axis]);
-            }
-        }
-        model.origin = businessOrigin;
-        model.worldBounds = bounds;
-    };
     if (arguments.modelAToBusiness.has_value() != arguments.modelBToBusiness.has_value())
         throw std::runtime_error("Both business transform matrices are required");
     if (arguments.modelAToBusiness)
@@ -383,6 +386,51 @@ int runModelRegistration(const ModelRegisterArguments& arguments)
            << ", \"sampling_limit\": " << arguments.options.icp.samplingLimit
            << ", \"overlap\": " << arguments.options.icp.finalOverlapRatio
            << ", \"random_seed\": " << arguments.options.icp.randomSeed << "}\n}\n";
+    std::cout << "{\"status\":\"success\",\"output_dir\":\""
+              << arguments.outputDirectory.generic_string() << "\"}\n";
+    return 0;
+}
+
+int runCoarseRegistration(const CoarseRegisterArguments& arguments)
+{
+    const auto started = std::chrono::steady_clock::now();
+    std::filesystem::create_directories(arguments.outputDirectory);
+    auto modelA = registration::ReferenceCloudReader().read(arguments.modelA);
+    auto modelB = registration::ReferenceCloudReader().read(arguments.modelB);
+    if (arguments.modelAToBusiness)
+    {
+        transformToBusiness(modelA, *arguments.modelAToBusiness);
+        transformToBusiness(modelB, *arguments.modelBToBusiness);
+    }
+    const auto& moving = arguments.movingModel == registration::MovingModel::A ? modelA.cloud : modelB.cloud;
+    const auto& fixed = arguments.movingModel == registration::MovingModel::A ? modelB.cloud : modelA.cloud;
+    const auto candidate = registration::CoarseRegistration().findCandidate(moving, fixed, arguments.options);
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+
+    std::ofstream matrixOutput(arguments.outputDirectory / "coarse_moving_local_to_fixed_local_matrix.txt");
+    if (!matrixOutput) throw std::runtime_error("Cannot create coarse registration matrix file");
+    matrixOutput << candidate.movingLocalToFixedLocal.toString();
+
+    std::ofstream output(arguments.outputDirectory / "coarse-registration.json");
+    if (!output) throw std::runtime_error("Cannot create coarse registration result file");
+    output << std::fixed << std::setprecision(12)
+           << "{\n  \"status\": \"success\",\n"
+           << "  \"algorithm\": \"cccorelib_4pcs\",\n"
+           << "  \"matrix_convention\": \"column_vector\",\n"
+           << "  \"moving_model\": \"" << (arguments.movingModel == registration::MovingModel::A ? "a" : "b") << "\",\n"
+           << "  \"moving_local_to_fixed_local\": ";
+    writeMatrixJson(output, candidate.movingLocalToFixedLocal, 2);
+    output << ",\n  \"metrics\": {\"moving_coverage\": " << candidate.movingCoverage
+           << ", \"fixed_coverage\": " << candidate.fixedCoverage
+           << ", \"inlier_rms\": " << candidate.inlierRms
+           << ", \"score\": " << candidate.score
+           << ", \"validation_point_count\": " << candidate.validationPointCount
+           << ", \"elapsed_seconds\": " << elapsed << "},\n"
+           << "  \"parameters\": {\"delta\": " << arguments.options.delta
+           << ", \"beta\": " << arguments.options.beta
+           << ", \"overlap\": " << arguments.options.overlap
+           << ", \"sample_limit\": " << arguments.options.sampleLimit
+           << ", \"random_seed\": " << arguments.options.randomSeed << "}\n}\n";
     std::cout << "{\"status\":\"success\",\"output_dir\":\""
               << arguments.outputDirectory.generic_string() << "\"}\n";
     return 0;

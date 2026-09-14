@@ -2,6 +2,7 @@
 #pragma once
 
 #include "registration/bidirectional_registration.hpp"
+#include "registration/coarse_registration.hpp"
 #include "registration/icp_registration.hpp"
 #include "registration/matrix.hpp"
 
@@ -43,6 +44,17 @@ struct ModelRegisterArguments
     std::optional<Matrix4d> modelBToBusiness;
 };
 
+struct CoarseRegisterArguments
+{
+    std::filesystem::path modelA;
+    std::filesystem::path modelB;
+    std::filesystem::path outputDirectory;
+    MovingModel movingModel = MovingModel::A;
+    CoarseRegistrationOptions options;
+    std::optional<Matrix4d> modelAToBusiness;
+    std::optional<Matrix4d> modelBToBusiness;
+};
+
 struct ModelPreviewArguments
 {
     std::filesystem::path modelA;
@@ -56,5 +68,6 @@ void printUsage();
 PreviewArguments parsePreviewArguments(int argc, char** argv);
 RegisterArguments parseRegisterArguments(int argc, char** argv);
 ModelRegisterArguments parseModelRegisterArguments(int argc, char** argv);
+CoarseRegisterArguments parseCoarseRegisterArguments(int argc, char** argv);
 ModelPreviewArguments parseModelPreviewArguments(int argc, char** argv);
 } // namespace registration::worker

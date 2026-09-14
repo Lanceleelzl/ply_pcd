@@ -25,6 +25,7 @@ void printUsage()
         << "  registration_worker prepare-preview --ply <model.ply> --reference <data.pcd|data.las|data.laz> --output-dir <dir> [options]\n"
         << "  registration_worker register --ply <model.ply> --reference <data.pcd|data.las|data.laz> --output-dir <dir> [options]\n\n"
         << "  registration_worker register-models --model-a <file> --model-b <file> --moving-model <auto|a|b> --output-direction <a_to_b|b_to_a> --output-dir <dir> [options]\n\n"
+        << "  registration_worker coarse-register-models --model-a <file> --model-b <file> --moving-model <a|b> --output-dir <dir> [options]\n\n"
         << "  registration_worker prepare-model-preview --model-a <file> --model-b <file> --output-dir <dir> [options]\n\n"
         << "Register options:\n"
         << "  --min-rms-decrease <value>  Default: 1e-5\n"
@@ -37,6 +38,41 @@ void printUsage()
         << "  --filter-farthest            Default: disabled\n"
         << "  --initial-matrix <file>      Initial rigid moving-local-to-fixed-local matrix\n"
         << "  --progress-jsonl             Emit one JSON line after each accepted ICP iteration\n";
+}
+
+CoarseRegisterArguments parseCoarseRegisterArguments(int argc, char** argv)
+{
+    CoarseRegisterArguments result;
+    for (int index = 2; index < argc; ++index)
+    {
+        const std::string option = argv[index];
+        if (option == "--model-a") result.modelA = nextValue(index, argc, argv, option);
+        else if (option == "--model-b") result.modelB = nextValue(index, argc, argv, option);
+        else if (option == "--output-dir") result.outputDirectory = nextValue(index, argc, argv, option);
+        else if (option == "--moving-model")
+        {
+            const auto moving = nextValue(index, argc, argv, option);
+            if (moving == "a") result.movingModel = MovingModel::A;
+            else if (moving == "b") result.movingModel = MovingModel::B;
+            else throw std::runtime_error("coarse moving-model must be a or b");
+        }
+        else if (option == "--delta") result.options.delta = std::stod(nextValue(index, argc, argv, option));
+        else if (option == "--beta") result.options.beta = std::stod(nextValue(index, argc, argv, option));
+        else if (option == "--overlap") result.options.overlap = std::stod(nextValue(index, argc, argv, option));
+        else if (option == "--base-count") result.options.baseCount = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--base-tries") result.options.baseTries = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--max-candidates") result.options.maxCandidates = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--sample-limit") result.options.sampleLimit = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--random-seed") result.options.randomSeed = static_cast<std::uint32_t>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--model-a-to-business") result.modelAToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
+        else if (option == "--model-b-to-business") result.modelBToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
+        else throw std::runtime_error("Unknown coarse-register-models option: " + option);
+    }
+    if (result.modelA.empty() || result.modelB.empty() || result.outputDirectory.empty())
+        throw std::runtime_error("coarse-register-models requires --model-a, --model-b and --output-dir");
+    if (result.modelAToBusiness.has_value() != result.modelBToBusiness.has_value())
+        throw std::runtime_error("Both business transform matrices are required");
+    return result;
 }
 
 PreviewArguments parsePreviewArguments(int argc, char** argv)

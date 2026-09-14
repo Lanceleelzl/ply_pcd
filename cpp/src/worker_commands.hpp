@@ -9,6 +9,7 @@ namespace registration::worker
 {
 int runRegistration(const RegisterArguments& arguments);
 int runModelRegistration(const ModelRegisterArguments& arguments);
+int runCoarseRegistration(const CoarseRegisterArguments& arguments);
 int runPreview(const PreviewArguments& arguments);
 int runModelPreview(const ModelPreviewArguments& arguments);
 int runInspectPly(const std::filesystem::path& path);
