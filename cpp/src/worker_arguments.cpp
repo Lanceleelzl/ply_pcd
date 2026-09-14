@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 namespace registration::worker
 {
@@ -12,6 +13,18 @@ std::string nextValue(int& index, int argc, char** argv, const std::string& opti
 {
     if (index + 1 >= argc) throw std::runtime_error("Missing value after " + option);
     return argv[++index];
+}
+
+template <typename Value, typename Parse>
+std::vector<Value> commaSeparated(const std::string& text, Parse parse)
+{
+    std::vector<Value> values;
+    std::istringstream input(text);
+    std::string item;
+    while (std::getline(input, item, ','))
+        if (!item.empty()) values.push_back(parse(item));
+    if (values.empty()) throw std::runtime_error("Comma-separated option must contain a value");
+    return values;
 }
 } // namespace
 
@@ -58,12 +71,16 @@ CoarseRegisterArguments parseCoarseRegisterArguments(int argc, char** argv)
         }
         else if (option == "--delta") result.options.delta = std::stod(nextValue(index, argc, argv, option));
         else if (option == "--beta") result.options.beta = std::stod(nextValue(index, argc, argv, option));
-        else if (option == "--overlap") result.options.overlap = std::stod(nextValue(index, argc, argv, option));
+        else if (option == "--overlap") result.overlaps = {std::stod(nextValue(index, argc, argv, option))};
+        else if (option == "--overlaps") result.overlaps = commaSeparated<double>(
+            nextValue(index, argc, argv, option), [](const std::string& value) { return std::stod(value); });
         else if (option == "--base-count") result.options.baseCount = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
         else if (option == "--base-tries") result.options.baseTries = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
         else if (option == "--max-candidates") result.options.maxCandidates = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
         else if (option == "--sample-limit") result.options.sampleLimit = static_cast<unsigned>(std::stoul(nextValue(index, argc, argv, option)));
-        else if (option == "--random-seed") result.options.randomSeed = static_cast<std::uint32_t>(std::stoul(nextValue(index, argc, argv, option)));
+        else if (option == "--random-seed") result.randomSeeds = {static_cast<std::uint32_t>(std::stoul(nextValue(index, argc, argv, option)))};
+        else if (option == "--random-seeds") result.randomSeeds = commaSeparated<std::uint32_t>(
+            nextValue(index, argc, argv, option), [](const std::string& value) { return static_cast<std::uint32_t>(std::stoul(value)); });
         else if (option == "--model-a-to-business") result.modelAToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
         else if (option == "--model-b-to-business") result.modelBToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
         else throw std::runtime_error("Unknown coarse-register-models option: " + option);

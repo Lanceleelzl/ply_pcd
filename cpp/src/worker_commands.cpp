@@ -404,7 +404,9 @@ int runCoarseRegistration(const CoarseRegisterArguments& arguments)
     }
     const auto& moving = arguments.movingModel == registration::MovingModel::A ? modelA.cloud : modelB.cloud;
     const auto& fixed = arguments.movingModel == registration::MovingModel::A ? modelB.cloud : modelA.cloud;
-    const auto candidate = registration::CoarseRegistration().findCandidate(moving, fixed, arguments.options);
+    const auto search = registration::CoarseRegistration().findCandidates(
+        moving, fixed, arguments.overlaps, arguments.randomSeeds, arguments.options);
+    const auto& candidate = search.candidates.front();
     const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 
     std::ofstream matrixOutput(arguments.outputDirectory / "coarse_moving_local_to_fixed_local_matrix.txt");
@@ -418,6 +420,7 @@ int runCoarseRegistration(const CoarseRegisterArguments& arguments)
            << "  \"algorithm\": \"cccorelib_4pcs\",\n"
            << "  \"matrix_convention\": \"column_vector\",\n"
            << "  \"moving_model\": \"" << (arguments.movingModel == registration::MovingModel::A ? "a" : "b") << "\",\n"
+           << "  \"risk\": \"" << search.risk << "\",\n"
            << "  \"moving_local_to_fixed_local\": ";
     writeMatrixJson(output, candidate.movingLocalToFixedLocal, 2);
     output << ",\n  \"metrics\": {\"moving_coverage\": " << candidate.movingCoverage
@@ -426,11 +429,30 @@ int runCoarseRegistration(const CoarseRegisterArguments& arguments)
            << ", \"score\": " << candidate.score
            << ", \"validation_point_count\": " << candidate.validationPointCount
            << ", \"elapsed_seconds\": " << elapsed << "},\n"
-           << "  \"parameters\": {\"delta\": " << arguments.options.delta
+           << "  \"candidates\": [\n";
+    for (std::size_t index = 0; index < search.candidates.size(); ++index)
+    {
+        const auto& item = search.candidates[index];
+        output << "    {\"moving_local_to_fixed_local\": ";
+        writeMatrixJson(output, item.movingLocalToFixedLocal, 4);
+        output << ", \"overlap\": " << item.overlap << ", \"random_seed\": " << item.randomSeed
+               << ", \"moving_coverage\": " << item.movingCoverage
+               << ", \"fixed_coverage\": " << item.fixedCoverage
+               << ", \"inlier_rms\": " << item.inlierRms
+               << ", \"score\": " << item.score
+               << ", \"validation_point_count\": " << item.validationPointCount << "}"
+               << (index + 1 == search.candidates.size() ? "\n" : ",\n");
+    }
+    output << "  ],\n  \"parameters\": {\"delta\": " << arguments.options.delta
            << ", \"beta\": " << arguments.options.beta
-           << ", \"overlap\": " << arguments.options.overlap
            << ", \"sample_limit\": " << arguments.options.sampleLimit
-           << ", \"random_seed\": " << arguments.options.randomSeed << "}\n}\n";
+           << ", \"overlaps\": [";
+    for (std::size_t index = 0; index < arguments.overlaps.size(); ++index)
+        output << (index == 0 ? "" : ", ") << arguments.overlaps[index];
+    output << "], \"random_seeds\": [";
+    for (std::size_t index = 0; index < arguments.randomSeeds.size(); ++index)
+        output << (index == 0 ? "" : ", ") << arguments.randomSeeds[index];
+    output << "]}\n}\n";
     std::cout << "{\"status\":\"success\",\"output_dir\":\""
               << arguments.outputDirectory.generic_string() << "\"}\n";
     return 0;

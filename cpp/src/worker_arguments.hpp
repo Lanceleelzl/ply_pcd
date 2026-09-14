@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace registration::worker
 {
@@ -51,6 +52,8 @@ struct CoarseRegisterArguments
     std::filesystem::path outputDirectory;
     MovingModel movingModel = MovingModel::A;
     CoarseRegistrationOptions options;
+    std::vector<double> overlaps{0.5, 0.7, 0.9};
+    std::vector<std::uint32_t> randomSeeds{42, 43};
     std::optional<Matrix4d> modelAToBusiness;
     std::optional<Matrix4d> modelBToBusiness;
 };

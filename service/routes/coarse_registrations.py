@@ -37,10 +37,14 @@ def create_coarse_registration_router(
     async def create_coarse_registration(session_id: str, request: CoarseRegistrationRequest) -> dict[str, Any]:
         if request.moving_model not in {"a", "b"}:
             raise HTTPException(status_code=400, detail="moving_model must be a or b")
-        if not 0.2 <= request.overlap <= 1.0:
-            raise HTTPException(status_code=400, detail="overlap must be between 0.2 and 1.0")
-        if request.delta <= 0 or request.beta <= 0 or request.random_seed <= 0:
-            raise HTTPException(status_code=400, detail="delta, beta and random_seed must be positive")
+        if not request.overlaps or len(request.overlaps) > 8 or any(not 0.2 <= value <= 1.0 for value in request.overlaps):
+            raise HTTPException(status_code=400, detail="overlaps must contain 1 to 8 values between 0.2 and 1.0")
+        if not request.random_seeds or len(request.random_seeds) > 8 or any(value <= 0 for value in request.random_seeds):
+            raise HTTPException(status_code=400, detail="random_seeds must contain 1 to 8 positive values")
+        if len(request.overlaps) * len(request.random_seeds) > 16:
+            raise HTTPException(status_code=400, detail="coarse candidate search is limited to 16 combinations")
+        if request.delta <= 0 or request.beta <= 0:
+            raise HTTPException(status_code=400, detail="delta and beta must be positive")
         if not 4 <= request.sample_limit <= 10000:
             raise HTTPException(status_code=400, detail="sample_limit must be between 4 and 10000")
         if not 1 <= request.base_count <= 10000 or not 1 <= request.base_tries <= 10000:
@@ -82,9 +86,10 @@ def create_coarse_registration_router(
                 "--moving-model", request.moving_model,
                 "--output-dir", str(result_directory),
                 "--delta", str(request.delta), "--beta", str(request.beta),
-                "--overlap", str(request.overlap), "--base-count", str(request.base_count),
+                "--overlaps", ",".join(str(value) for value in request.overlaps), "--base-count", str(request.base_count),
                 "--base-tries", str(request.base_tries), "--max-candidates", str(request.max_candidates),
-                "--sample-limit", str(request.sample_limit), "--random-seed", str(request.random_seed),
+                "--sample-limit", str(request.sample_limit),
+                "--random-seeds", ",".join(str(value) for value in request.random_seeds),
             ]
             transforms = business_transforms(session)
             for model in ("a", "b"):

@@ -4,11 +4,13 @@
 #include <PointCloud.h>
 #include <RegistrationTools.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace registration
 {
@@ -99,6 +101,27 @@ DirectionMetrics evaluateDirection(const PointCloud& source, const PointCloud& t
     }
     return metrics;
 }
+
+double translationDistance(const Matrix4d& left, const Matrix4d& right)
+{
+    double squared = 0.0;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+        const double difference = left.at(axis, 3) - right.at(axis, 3);
+        squared += difference * difference;
+    }
+    return std::sqrt(squared);
+}
+
+double rotationDistanceDegrees(const Matrix4d& left, const Matrix4d& right)
+{
+    double trace = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column)
+            trace += left.at(row, column) * right.at(row, column);
+    const double cosine = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    return std::acos(cosine) * 57.2957795130823208768;
+}
 } // namespace
 
 CoarseRegistrationCandidate CoarseRegistration::findCandidate(
@@ -148,5 +171,57 @@ CoarseRegistrationCandidate CoarseRegistration::findCandidate(
         candidate.score = coverage / (1.0 + candidate.inlierRms / options.delta);
     }
     return candidate;
+}
+
+
+CoarseRegistrationSearchResult CoarseRegistration::findCandidates(
+    const PointCloud& moving,
+    const PointCloud& fixed,
+    const std::vector<double>& overlaps,
+    const std::vector<std::uint32_t>& randomSeeds,
+    const CoarseRegistrationOptions& options) const
+{
+    if (overlaps.empty() || randomSeeds.empty())
+        throw std::runtime_error("4PCS candidate search requires overlaps and random seeds");
+    std::vector<CoarseRegistrationCandidate> found;
+    for (const double overlap : overlaps)
+    {
+        for (const std::uint32_t seed : randomSeeds)
+        {
+            auto candidateOptions = options;
+            candidateOptions.overlap = overlap;
+            candidateOptions.randomSeed = seed;
+            try
+            {
+                found.push_back(findCandidate(moving, fixed, candidateOptions));
+            }
+            catch (const std::runtime_error&)
+            {
+                // A failed search combination is not a failed multi-candidate task.
+            }
+        }
+    }
+    if (found.empty())
+        throw std::runtime_error("4PCS could not find any coarse registration candidate");
+    std::sort(found.begin(), found.end(), [](const auto& left, const auto& right) {
+        return left.score > right.score;
+    });
+
+    CoarseRegistrationSearchResult result;
+    for (const auto& candidate : found)
+    {
+        const bool duplicate = std::any_of(result.candidates.begin(), result.candidates.end(), [&](const auto& kept) {
+            return translationDistance(candidate.movingLocalToFixedLocal, kept.movingLocalToFixedLocal) <= options.delta
+                && rotationDistanceDegrees(candidate.movingLocalToFixedLocal, kept.movingLocalToFixedLocal) <= 0.25;
+        });
+        if (!duplicate) result.candidates.push_back(candidate);
+    }
+    const auto& best = result.candidates.front();
+    if (best.score >= 0.15 && std::min(best.movingCoverage, best.fixedCoverage) >= 0.15)
+        result.risk = "none";
+    if (result.candidates.size() > 1
+        && result.candidates[1].score >= best.score * 0.95)
+        result.risk = "ambiguous";
+    return result;
 }
 } // namespace registration

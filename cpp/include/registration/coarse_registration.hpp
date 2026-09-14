@@ -5,6 +5,8 @@
 #include "registration/point_cloud.hpp"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace registration
 {
@@ -32,12 +34,24 @@ struct CoarseRegistrationCandidate
     unsigned validationPointCount = 0;
 };
 
+struct CoarseRegistrationSearchResult
+{
+    std::vector<CoarseRegistrationCandidate> candidates;
+    std::string risk = "low_confidence";
+};
+
 class CoarseRegistration
 {
 public:
     [[nodiscard]] CoarseRegistrationCandidate findCandidate(
         const PointCloud& moving,
         const PointCloud& fixed,
+        const CoarseRegistrationOptions& options = {}) const;
+    [[nodiscard]] CoarseRegistrationSearchResult findCandidates(
+        const PointCloud& moving,
+        const PointCloud& fixed,
+        const std::vector<double>& overlaps,
+        const std::vector<std::uint32_t>& randomSeeds,
         const CoarseRegistrationOptions& options = {}) const;
 };
 } // namespace registration

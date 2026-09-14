@@ -311,6 +311,10 @@ void testDeterministicCoarseRegistration()
     }
     const double rms = std::sqrt(squaredError / static_cast<double>(moving.points.size()));
     require(rms < 0.03, "4PCS candidate did not recover the synthetic rigid transform");
+    const auto search = registration::CoarseRegistration().findCandidates(
+        moving, fixed, {0.8, 1.0}, {42, 43}, options);
+    require(search.candidates.size() == 1, "Equivalent 4PCS candidates were not deduplicated");
+    require(search.risk == "none", "Strong unique 4PCS candidate was marked risky");
 }
 
 void testRealIcpAgainstCloudCompare()

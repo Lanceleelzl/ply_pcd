@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelRegistrationRequest(BaseModel):
@@ -20,12 +20,12 @@ class CoarseRegistrationRequest(BaseModel):
     moving_model: str
     delta: float = 0.01
     beta: float = 0.005
-    overlap: float = 0.7
+    overlaps: list[float] = Field(default_factory=lambda: [0.5, 0.7, 0.9])
     base_count: int = 200
     base_tries: int = 100
     max_candidates: int = 500
     sample_limit: int = 1000
-    random_seed: int = 42
+    random_seeds: list[int] = Field(default_factory=lambda: [42, 43])
 
 
 class TransformParameters(BaseModel):
