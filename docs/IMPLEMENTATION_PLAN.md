@@ -108,7 +108,7 @@
 
 ### 目标与边界
 
-- 重构在 `codex/refactor-registration-workbench` 独立分支进行；用户验证前不合并或推送到 `main`。
+- 重构在 `codex/refactor-registration-workbench` 独立分支完成；用户于 2026-09-14 确认验收后，已 fast-forward 合并并推送到 `main`。
 - 保持现有 v1／v2 API、矩阵方向、双精度组合、ICP 算法行为、历史档案和运行目录兼容。
 - 先用现有测试与真实页面建立行为基线，再按模块迁移；每个阶段必须保持可构建、可运行和可回退。
 
