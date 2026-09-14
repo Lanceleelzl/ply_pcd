@@ -259,6 +259,29 @@ void testInitialMatrixValidation()
     require(rejected, "ICP accepted an initial matrix containing scale");
 }
 
+void testAsciiPlyWithWindowsLineEndings()
+{
+    const auto path = std::filesystem::temp_directory_path() / "ply-pcd-registration-crlf.ply";
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << "ply\r\n"
+               << "format ascii 1.0\r\n"
+               << "element vertex 2\r\n"
+               << "property float x\r\n"
+               << "property float y\r\n"
+               << "property float z\r\n"
+               << "end_header\r\n"
+               << "1.25 2.5 3.75\r\n"
+               << "-4.5 5.25 6.0\r\n";
+    }
+    const auto result = registration::PlyReader().read(path);
+    require(result.declaredVertexCount == 2 && result.cloud.points.size() == 2,
+            "ASCII PLY with CRLF line endings was not parsed");
+    requireNear(result.cloud.points[0][0], 1.25, 0.0, "CRLF PLY first X mismatch");
+    requireNear(result.cloud.points[1][1], 5.25, 0.0, "CRLF PLY second Y mismatch");
+    std::filesystem::remove(path);
+}
+
 void testDeterministicCoarseRegistration()
 {
     registration::PointCloud fixed;
@@ -382,6 +405,7 @@ int main()
         testReferenceOriginMatrixComposition();
         testBidirectionalRegistrationRoles();
         testRealPly();
+        testAsciiPlyWithWindowsLineEndings();
         testPreviewWriters();
         testInitialMatrixValidation();
         testDeterministicCoarseRegistration();

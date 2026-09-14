@@ -119,7 +119,12 @@ PlyReadResult PlyReader::read(const std::filesystem::path& path) const
     }
 
     std::string line;
-    if (!std::getline(input, line) || line != "ply")
+    if (!std::getline(input, line))
+    {
+        throw std::runtime_error("Invalid PLY signature");
+    }
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line != "ply")
     {
         throw std::runtime_error("Invalid PLY signature");
     }
