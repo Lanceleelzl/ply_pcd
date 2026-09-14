@@ -26,7 +26,7 @@ pnpm run dev
 打开：
 
 ```text
-http://localhost:5173
+http://localhost:5273
 ```
 
 `pnpm install` 自动执行：
@@ -102,7 +102,7 @@ pnpm run build:native
 ```json
 {
   "port": 8865,
-  "web_port": 5173
+  "web_port": 5273
 }
 ```
 

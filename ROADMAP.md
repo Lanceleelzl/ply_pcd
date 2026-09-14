@@ -16,6 +16,8 @@
 
 ### 最近验证
 
+- 2026-09-15（Windows 本地开发端口）：当前 Windows 将 TCP `5141～5240` 保留，默认 Web 端口 `5173` 的最小 Node 绑定返回 `EACCES`。本地开发 Web 端口调整为 `5273`，避免修改 Windows、Docker、WSL 或 Hyper-V 网络配置；API 继续使用 `127.0.0.1:8865`。
+
 - 2026-09-14（重构验收与合并）：用户确认阶段 8 至阶段 12 的重构验收结果；`codex/refactor-registration-workbench` 已 fast-forward 合并到 `main`，并将提交 `d174b5e` 推送到 `origin/main`。合并后工作区干净，`main`、`origin/main` 与重构分支指向同一提交。
 
 - 2026-09-14（ASCII PLY Windows 换行兼容）：阶段 12 验收发现 PowerShell 生成的有效 ASCII PLY 使用 CRLF 时，解析器因签名行残留 `\r` 返回 `Invalid PLY signature`。新增 2 点 CRLF 文件回归先复现失败，再仅规范化签名行结尾；坐标与点数断言通过，既有真实 3777901 点 PLY、149317 点 PCD、4PCS、ICP 和矩阵回归继续通过。Windows CTest 1／1、服务 71／71 和差异检查通过；Windows 预编译 Worker 与清单已更新。
