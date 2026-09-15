@@ -17,11 +17,13 @@ from service.config import (
     API_KEY_HASHES,
     AUTH_ENABLED,
     MAX_CONCURRENT_JOBS,
+    NODE_PATH,
     OBJECT_STORAGE_SETTINGS,
     RESULT_RETENTION_HOURS,
     RUNTIME_ROOT,
     SERVICE_VERSION,
     SOURCE_RETENTION_HOURS,
+    SPLAT_TRANSFORM_PATH,
     WORKER_PATH,
     WORKER_TIMEOUT_SECONDS,
 )
@@ -35,7 +37,9 @@ from service.routes.coarse_registrations import create_coarse_registration_route
 from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
+from service.routes.gaussian_resources import create_gaussian_resource_router
 from service.preview_tasks import run_preview_task
+from service.dataset_preparation import prepare_session_datasets
 from service.registration_tasks import run_registration_task
 from service.coarse_tasks import run_coarse_registration_task
 from service.registration_queue import recover_registration_queue, write_task_descriptor
@@ -117,6 +121,7 @@ def _history_path(workspace_id: str, session_id: str) -> Path:
 
 
 app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _read_status))
+app.include_router(create_gaussian_resource_router(_manual_session_directory, _read_status))
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
@@ -238,6 +243,9 @@ async def _run_model_preview(session_id: str, command: list[str]) -> None:
     await run_preview_task(
         session_id, command, _manual_session_directory, _read_status, _write_status,
         _job_semaphore, WORKER_TIMEOUT_SECONDS,
+        lambda directory, status: prepare_session_datasets(
+            directory, status, [NODE_PATH, SPLAT_TRANSFORM_PATH]
+        ),
     )
 
 

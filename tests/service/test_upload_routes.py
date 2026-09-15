@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException, UploadFile
 
+from service.dataset_formats import DatasetProbe
 from service.routes.uploads import create_upload_router
 
 
@@ -29,12 +30,20 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(Path, "mkdir"), patch(
             "service.routes.uploads._save_upload_with_sha256",
             new=AsyncMock(side_effect=[(1, "a-hash"), (1, "b-hash")]),
-        ) as save:
+        ) as save, patch(
+            "service.routes.uploads._probe_dataset",
+            side_effect=[
+                DatasetProbe("gaussian_ply", "file", "model-a.ply", None, True, True, False),
+                DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
+            ],
+        ):
             response = await self.create(self.a, self.b)
         status = self.write.call_args.args[1]
         self.assertEqual(response["status"], "queued")
         self.assertEqual(status["inputs"]["model_a_sha256"], "a-hash")
         self.assertEqual(status["inputs"]["model_b_original_filename"], "map.pcd")
+        self.assertEqual(status["inputs"]["model_a_dataset"]["format"], "gaussian_ply")
+        self.assertTrue(status["inputs"]["model_a_dataset"]["gaussian_capable"])
         self.assertEqual(save.await_count, 2)
         self.assertEqual(status["business_transforms"]["a"]["scale"], [1, 1, 1])
         self.start.assert_called_once()
@@ -59,7 +68,10 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(Path, "mkdir"), patch(
             "service.routes.uploads._save_upload_with_sha256",
             new=AsyncMock(side_effect=[(1, "a-hash"), (1, "b-hash")]),
-        ), patch("service.routes.uploads.shutil.rmtree") as cleanup:
+        ), patch("service.routes.uploads._probe_dataset", side_effect=[
+            DatasetProbe("ply", "file", "model-a.ply", None, True, False, False),
+            DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
+        ]), patch("service.routes.uploads.shutil.rmtree") as cleanup:
             with self.assertRaises(HTTPException) as error:
                 await self.create(self.a, self.b)
         self.assertEqual(error.exception.status_code, 502)

@@ -40,7 +40,7 @@ async function submit(): Promise<void> {
     <div class="home-content">
       <section class="hero-copy">
         <h1>建立两个世界之间的转换关系</h1>
-        <p>支持 PLY、PCD、LAS 与 LAZ，保留双精度坐标。</p>
+        <p>支持点云、Gaussian 单文件及带清单的数据集 ZIP，ICP 统一使用解析后的 XYZ。</p>
       </section>
       <section class="task-composer">
         <header class="section-heading"><div><h2>新建配准任务</h2></div></header>

@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from service.schemas import ModelRegistrationRequest
 from service.auth import authorize_resource
+from service.session_state import model_compute_path
 from service.transform_math import business_transforms as _business_transforms, transform_matrix as _transform_matrix
 from service.validation import (
     validate_initial_matrix as _validate_initial_matrix,
@@ -82,8 +83,8 @@ def create_registration_router(
             )
             command = [
                 worker_path, "register-models",
-                "--model-a", str(session_directory / "input" / session_status["model_a_filename"]),
-                "--model-b", str(session_directory / "input" / session_status["model_b_filename"]),
+                "--model-a", str(model_compute_path(session_directory, session_status, "a")),
+                "--model-b", str(model_compute_path(session_directory, session_status, "b")),
                 "--moving-model", request.moving_model,
                 "--output-direction", request.output_direction,
                 "--initial-matrix", str(matrix_path), "--output-dir", str(result_directory),

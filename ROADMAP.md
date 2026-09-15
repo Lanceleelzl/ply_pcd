@@ -3,11 +3,13 @@
 ## 当前阶段
 
 ```text
-阶段 8～12：整体重构与生产化基础
-状态：已验收并合并、推送到 main
+阶段 13：数据格式扩展
+状态：方案已确认，上传契约已固化，正在实施统一数据集接入
 ```
 
 ## 进行中
+
+- 2026-09-15：在 `codex/data-format-expansion` 分支启动阶段 13。兼容目标包括普通／Gaussian／PlayCanvas compressed PLY、bundled／unbundled SOG、Streamed SOG v1、LCC 和 LCC2；所有格式通过独立计算通道提取 XYZ 进入粗配准与 ICP，Gaussian 仅用于按需显示。上传结构、LOD 选择、资源完整性和拒收边界已写入 `docs/DATA_FORMAT_COMPATIBILITY.md`。当前正在实现内容探测、数据集清单和多文件上传，尚未将任何新增格式标为已完成。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
 
@@ -19,6 +21,8 @@
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-15（阶段 13 第一批）：建立内容探测和数据集准备层，区分普通／Gaussian／PlayCanvas compressed PLY、bundled／unbundled SOG、Streamed SOG v1、LCC 5.0 和 LCC2 0.0.3；ZIP 校验入口、引用、路径、符号链接、文件数、解压大小及压缩比。固定 `@playcanvas/splat-transform 3.4.2` 将高斯及 LOD 数据的 LOD 0 解码为独立标准 PLY，粗配准与 ICP 只引用该 XYZ 计算文件。原始 SOG 和 Streamed SOG 通过带会话随机令牌的资源树供 PlayCanvas 按需显示；点云／高斯状态独立。二进制 Gaussian 4 点样本完成 compressed PLY 和 SOG 往返，恢复文件均为 4 点、包围盒 `[0,0,0]～[1,1,1]`；SOG 恢复点与原始点完成 ICP，RMS `0`，正反矩阵为单位阵。服务 84／84、可执行 Web 回归 108／108、Windows CTest 1／1、类型检查、Web 构建及差异检查通过。Docker Desktop 启动未成功，当前 Linux engine pipe 不存在，镜像构建未执行。真实 LCC／LCC2／Streamed SOG 样本及浏览器流式画面仍待验证，不能标记为完整兼容。
 
 - 2026-09-15：按用户反馈将配准结果矩阵从视口底部浮层移至左侧第 4 步下方，指标、业务场景矩阵、原始模型坐标矩阵按单列顺序展示，左侧面板独立滚动；移除旧结果抽屉结构与样式。独立 Chrome 验证两组矩阵顺序、指标位于首项、旧抽屉不存在、展开前后三维视口保持 1140×842 且相机方向不变；左侧结果内容高度 1431 px，可在 842 px 可视区内独立滚动。截图：`output/playwright/workbench-result-column.png`。
 

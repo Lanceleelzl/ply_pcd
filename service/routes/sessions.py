@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from service.schemas import BusinessTransformsRequest, TransformParameters, WorkspaceRequest
 from service.auth import authorize_resource
+from service.session_state import model_compute_path, model_gaussian_path
 
 
 DirectoryResolver = Callable[[str], Path]
@@ -136,8 +137,8 @@ def create_session_router(
         write_status(directory, status)
         command = [
             worker_path, "prepare-model-preview",
-            "--model-a", str(directory / "input" / status["model_a_filename"]),
-            "--model-b", str(directory / "input" / status["model_b_filename"]),
+            "--model-a", str(model_compute_path(directory, status, "a")),
+            "--model-b", str(model_compute_path(directory, status, "b")),
             "--output-dir", str(preview_directory),
             "--model-a-limit", "300000", "--model-b-limit", "300000",
         ]
@@ -158,11 +159,11 @@ def create_session_router(
         elif model == "model-b":
             path = directory / "preview" / "model-b-points.bin"
             filename = "model-b-points.bin"
-        elif model == "gaussian-a" and status.get("metadata", {}).get("gaussian_a_available"):
-            path = directory / "input" / status["model_a_filename"]
+        elif model == "gaussian-a" and model_gaussian_path(directory, status, "a"):
+            path = model_gaussian_path(directory, status, "a")
             filename = status["model_a_filename"]
-        elif model == "gaussian-b" and status.get("metadata", {}).get("gaussian_b_available"):
-            path = directory / "input" / status["model_b_filename"]
+        elif model == "gaussian-b" and model_gaussian_path(directory, status, "b"):
+            path = model_gaussian_path(directory, status, "b")
             filename = status["model_b_filename"]
         else:
             raise HTTPException(status_code=404, detail="Preview not found")

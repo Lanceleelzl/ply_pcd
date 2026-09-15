@@ -76,6 +76,6 @@ def reference_extension(upload: UploadFile) -> str:
 
 def model_extension(upload: UploadFile) -> str:
     suffix = Path(upload.filename or "").suffix.lower()
-    if suffix not in {".ply", ".pcd", ".las", ".laz"}:
-        raise HTTPException(status_code=400, detail="model must use .ply, .pcd, .las, or .laz extension")
+    if suffix not in {".ply", ".pcd", ".las", ".laz", ".sog", ".zip"}:
+        raise HTTPException(status_code=400, detail="model must use .ply, .pcd, .las, .laz, .sog, or .zip extension")
     return suffix

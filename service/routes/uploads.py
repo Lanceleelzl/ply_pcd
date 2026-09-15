@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import secrets
 import time
 import uuid
 from collections.abc import Callable
@@ -12,6 +13,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from service.schemas import TransformParameters
 from service.auth import current_principal
+from service.dataset_formats import DatasetFormatError, probe_dataset as _probe_dataset
 from service.storage import workspace_id as _workspace_id
 from service.uploads import save_upload_with_sha256 as _save_upload_with_sha256
 from service.validation import model_extension as _model_extension, validate_transform as _validate_transform
@@ -66,6 +68,11 @@ def create_upload_router(
             )
             if bytes_a == 0 or bytes_b == 0:
                 raise HTTPException(status_code=400, detail="Uploaded files must not be empty")
+            try:
+                dataset_a = _probe_dataset(path_a)
+                dataset_b = _probe_dataset(path_b)
+            except DatasetFormatError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
         except Exception:
             shutil.rmtree(session_directory, ignore_errors=True)
             raise
@@ -74,6 +81,7 @@ def create_upload_router(
             "api_version": "v2",
             "workspace_id": workspace_id,
             "owner_id": current_principal().key_id,
+            "preview_access_token": secrets.token_urlsafe(32),
             "status": "queued",
             "created_at_unix": time.time(),
             "source_expires_at_unix": time.time() + source_retention_hours * 3600,
@@ -84,10 +92,19 @@ def create_upload_router(
             "business_transforms": {"a": transform_a.model_dump(), "b": transform_b.model_dump()},
             "inputs": {
                 "model_a_bytes": bytes_a, "model_b_bytes": bytes_b,
-                "model_a_format": extension_a[1:], "model_b_format": extension_b[1:],
+                "model_a_format": dataset_a.format, "model_b_format": dataset_b.format,
+                "model_a_upload_extension": extension_a[1:], "model_b_upload_extension": extension_b[1:],
                 "model_a_original_filename": Path(model_a.filename or path_a.name).name,
                 "model_b_original_filename": Path(model_b.filename or path_b.name).name,
                 "model_a_sha256": sha256_a, "model_b_sha256": sha256_b,
+                "model_a_dataset": {
+                    **dataset_a.to_dict(), "xyz_status": "pending",
+                    "gaussian_status": "pending" if dataset_a.gaussian_capable else "not_available",
+                },
+                "model_b_dataset": {
+                    **dataset_b.to_dict(), "xyz_status": "pending",
+                    "gaussian_status": "pending" if dataset_b.gaussian_capable else "not_available",
+                },
             },
             "editor_url": f"/?session={session_id}&api=v2",
         }

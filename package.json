@@ -27,6 +27,7 @@
     "docker:logs": "docker compose -f docker/docker-compose.yml logs -f registration-api"
   },
   "dependencies": {
+    "@playcanvas/splat-transform": "3.4.2",
     "pinia": "3.0.4",
     "playcanvas": "2.21.3",
     "vue": "3.5.42",

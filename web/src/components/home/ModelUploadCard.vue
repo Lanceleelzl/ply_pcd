@@ -19,12 +19,12 @@ function choose(event: Event): void {
       <span class="model-letter">{{ model.toUpperCase() }}</span>
       <div>
         <h3>模型 {{ model.toUpperCase() }}</h3>
-        <p>PLY、PCD、LAS 或 LAZ</p>
+        <p>PLY、PCD、LAS、LAZ、SOG 或数据集 ZIP</p>
       </div>
     </div>
     <label class="file-dropzone">
-      <input type="file" accept=".ply,.pcd,.las,.laz" required @change="choose">
-      <span class="file-action">选择点云文件</span>
+      <input type="file" accept=".ply,.pcd,.las,.laz,.sog,.zip" required @change="choose">
+      <span class="file-action">选择模型文件或数据集 ZIP</span>
       <strong>{{ file?.name ?? '尚未选择文件' }}</strong>
       <small>{{ file ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : '支持大型文件流式上传' }}</small>
     </label>

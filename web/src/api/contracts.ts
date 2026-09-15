@@ -4,6 +4,18 @@ export type ModelId = 'a' | 'b';
 export type OutputDirection = 'a_to_b' | 'b_to_a';
 export type Matrix4 = number[][];
 
+export interface DatasetInfo {
+  format: string;
+  container: 'file' | 'sog' | 'zip';
+  entrypoint: string;
+  version?: string | number;
+  xyz_capable: boolean;
+  gaussian_capable: boolean;
+  streaming_capable: boolean;
+  xyz_status: 'pending' | 'ready' | 'failed';
+  gaussian_status: 'pending' | 'ready' | 'failed' | 'not_available';
+}
+
 export interface RegistrationSession {
   status: string;
   error?: string;
@@ -13,7 +25,14 @@ export interface RegistrationSession {
   model_b_preview_url?: string;
   gaussian_a_url?: string;
   gaussian_b_url?: string;
-  inputs?: { model_a_bytes?: number; model_b_bytes?: number };
+  gaussian_a_filename?: string;
+  gaussian_b_filename?: string;
+  inputs?: {
+    model_a_bytes?: number;
+    model_b_bytes?: number;
+    model_a_dataset?: DatasetInfo;
+    model_b_dataset?: DatasetInfo;
+  };
   business_transforms?: Record<ModelId, TransformParameters>;
   registrations?: Array<{
     job_id: string;

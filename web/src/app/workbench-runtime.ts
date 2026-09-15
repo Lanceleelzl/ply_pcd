@@ -154,6 +154,7 @@ export async function initializeWorkbench(
     app: application,
     entities,
     urls: context.gaussianUrls,
+    filenames: context.gaussianFilenames,
     origins,
     clippingEnabled: () => clippingState.enabled()
       || (['a', 'b'] as ModelId[]).some(model => originPlanes.clipSides(model).lengthSq() > 0),

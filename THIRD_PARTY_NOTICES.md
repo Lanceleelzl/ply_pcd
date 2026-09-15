@@ -38,3 +38,13 @@ commit：fa089bd8b2b4ca5631e199d257374c32a125f73f
 ```text
 LICENSES/Apache-2.0-LASzip.txt
 ```
+
+## PlayCanvas SplatTransform
+
+```text
+来源：https://github.com/playcanvas/splat-transform
+版本：3.4.2
+许可证：MIT
+```
+
+项目通过固定版本的官方 CLI 将 PlayCanvas compressed PLY、SOG、Streamed SOG、LCC 和 LCC2 解码为 ICP 计算使用的标准 PLY。包内许可证随 npm 依赖保留于 `node_modules/@playcanvas/splat-transform/LICENSE`。

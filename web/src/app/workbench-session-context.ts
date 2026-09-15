@@ -7,6 +7,7 @@ export interface WorkbenchSessionContext {
   models: NonNullable<RegistrationSession['metadata']>['models'];
   businessTransforms: Record<ModelId, TransformParameters>;
   gaussianUrls: Record<ModelId, string | undefined>;
+  gaussianFilenames: Record<ModelId, string | undefined>;
   origins: Record<ModelId, XYZ>;
 }
 
@@ -29,6 +30,7 @@ export function createWorkbenchSessionContext(session: RegistrationSession): Wor
     models: session.metadata.models,
     businessTransforms: { a: cloneTransform(transforms.a), b: cloneTransform(transforms.b) },
     gaussianUrls: { a: session.gaussian_a_url, b: session.gaussian_b_url },
+    gaussianFilenames: { a: session.gaussian_a_filename, b: session.gaussian_b_filename },
     origins: { a: session.metadata.models.a.origin as XYZ, b: session.metadata.models.b.origin as XYZ },
   };
 }

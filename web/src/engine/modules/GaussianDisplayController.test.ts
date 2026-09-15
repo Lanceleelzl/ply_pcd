@@ -16,7 +16,7 @@ function fixture() {
       remove: (asset: pc.Asset) => removed.push(asset),
     } } as unknown as pc.Application,
     entities: entities as unknown as Record<'a' | 'b', pc.Entity>,
-    urls: { a: '/a.ply', b: undefined }, origins: { a: [0, 0, 0], b: [0, 0, 0] },
+    urls: { a: '/a.ply', b: undefined }, filenames: { a: 'a.ply', b: undefined }, origins: { a: [0, 0, 0], b: [0, 0, 0] },
     clippingEnabled: () => false, clipStateChanged: () => {}, presentationChanged: () => {},
     displayChanged: (_model, state) => states.push(state),
     statusChanged: message => messages.push(message),
@@ -101,7 +101,7 @@ test('twenty Gaussian display cycles release every entity and asset', async cont
       remove: (asset: pc.Asset) => removed.push(asset),
     } } as unknown as pc.Application,
     entities: parents,
-    urls: { a: '/a.ply', b: undefined }, origins: { a: [0, 0, 0], b: [0, 0, 0] },
+    urls: { a: '/a.ply', b: undefined }, filenames: { a: 'a.ply', b: undefined }, origins: { a: [0, 0, 0], b: [0, 0, 0] },
     clippingEnabled: () => false, clipStateChanged: () => {}, presentationChanged: () => {},
     displayChanged: () => {}, statusChanged: () => {},
   });

@@ -24,6 +24,22 @@ def source_available(session_directory: Path, status: dict[str, Any]) -> bool:
     )
 
 
+def model_compute_path(session_directory: Path, status: dict[str, Any], model: str) -> Path:
+    dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+    relative = dataset.get("compute_path")
+    return session_directory / relative if relative else session_directory / "input" / status[f"model_{model}_filename"]
+
+
+def model_gaussian_path(session_directory: Path, status: dict[str, Any], model: str) -> Path | None:
+    dataset = status.get("inputs", {}).get(f"model_{model}_dataset")
+    if dataset is not None:
+        relative = dataset.get("gaussian_path")
+        return session_directory / relative if relative else None
+    if status.get("metadata", {}).get(f"gaussian_{model}_available"):
+        return session_directory / "input" / status[f"model_{model}_filename"]
+    return None
+
+
 def sync_session_job(
     job_status: dict[str, Any],
     *,

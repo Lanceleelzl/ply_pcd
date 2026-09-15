@@ -8,6 +8,7 @@ interface GaussianDisplayOptions {
   app: pc.Application;
   entities: Record<ModelId, pc.Entity>;
   urls: Record<ModelId, string | undefined>;
+  filenames: Record<ModelId, string | undefined>;
   origins: Record<ModelId, XYZ>;
   clippingEnabled(): boolean;
   clipStateChanged(): void;
@@ -88,7 +89,7 @@ export class GaussianDisplayController {
         return;
       }
       let assetUrl = url;
-      if (getApiKey()) {
+      if (getApiKey() && url.startsWith('/api/v2/')) {
         const response = await apiFetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         display.objectUrl = URL.createObjectURL(await response.blob());
@@ -96,7 +97,7 @@ export class GaussianDisplayController {
       }
       const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
         url: assetUrl,
-        filename: `model-${model}-original-gaussian.ply`,
+        filename: this.options.filenames[model] ?? `model-${model}-original-gaussian.ply`,
       });
       display.asset = asset;
       this.options.app.assets.add(asset);
