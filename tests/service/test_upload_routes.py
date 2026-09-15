@@ -50,6 +50,45 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.archive.assert_called_once()
         self.assertEqual(self.start.call_args.args[1][:2], ["worker", "prepare-model-preview"])
 
+    async def test_directory_upload_is_packaged_and_records_shape(self):
+        directory_files = [UploadFile(filename="scene/lod-meta.json", file=io.BytesIO(b"{}"))]
+        try:
+            with patch.object(Path, "mkdir"), patch(
+                "service.routes.uploads._save_upload_with_sha256",
+                new=AsyncMock(return_value=(1, "b-hash")),
+            ), patch(
+                "service.routes.uploads._save_upload_directory_with_sha256",
+                new=AsyncMock(return_value=(2, "a-hash")),
+            ) as save_directory, patch(
+                "service.routes.uploads._probe_dataset",
+                side_effect=[
+                    DatasetProbe("streamed_sog", "zip", "scene/lod-meta.json", 1, True, True, True),
+                    DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
+                ],
+            ):
+                await self.create(None, self.b, directory_files, None)
+            status = self.write.call_args.args[1]
+            self.assertEqual(status["model_a_filename"], "model-a.zip")
+            self.assertEqual(status["inputs"]["model_a_original_filename"], "scene")
+            self.assertEqual(status["inputs"]["model_a_upload_shape"], "directory")
+            self.assertEqual(status["inputs"]["model_b_upload_shape"], "file")
+            save_directory.assert_awaited_once()
+        finally:
+            for upload in directory_files:
+                await upload.close()
+
+    async def test_rejects_missing_or_ambiguous_upload_shape(self):
+        with self.assertRaises(HTTPException) as missing:
+            await self.create(None, self.b)
+        self.assertEqual(missing.exception.status_code, 400)
+        extra = [UploadFile(filename="scene/meta.json", file=io.BytesIO(b"{}"))]
+        try:
+            with self.assertRaises(HTTPException) as ambiguous:
+                await self.create(self.a, self.b, extra, None)
+            self.assertEqual(ambiguous.exception.status_code, 400)
+        finally:
+            await extra[0].close()
+
     async def test_empty_upload_does_not_start_preview(self):
         with patch.object(Path, "mkdir"), patch(
             "service.routes.uploads._save_upload_with_sha256",

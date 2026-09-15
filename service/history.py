@@ -79,8 +79,8 @@ def release_source_data(session_directory: Path, session_status: dict[str, Any],
             if error.status_code == 409:
                 raise
     _write_v2_history(session_directory, session_status)
-    shutil.rmtree(session_directory / "input", ignore_errors=True)
-    shutil.rmtree(session_directory / "preview", ignore_errors=True)
+    for directory_name in ("input", "preview", "datasets", "computed"):
+        shutil.rmtree(session_directory / directory_name, ignore_errors=True)
     for filename in ("worker.stdout.log", "worker.stderr.log"):
         (session_directory / filename).unlink(missing_ok=True)
     for entry in [*session_status.get("registrations", []), *session_status.get("coarse_registrations", [])]:

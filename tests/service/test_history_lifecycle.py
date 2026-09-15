@@ -29,6 +29,10 @@ class HistoryLifecycleTest(unittest.TestCase):
         (input_directory / "model-b.pcd").write_bytes(b"pcd-b")
         (preview_directory / "model-a-points.bin").write_bytes(b"preview")
         (preview_directory / "model-b-points.bin").write_bytes(b"preview")
+        (self.session_directory / "datasets" / "model-a").mkdir(parents=True)
+        (self.session_directory / "datasets" / "model-a" / "meta.json").write_text("{}", encoding="utf-8")
+        (self.session_directory / "computed").mkdir()
+        (self.session_directory / "computed" / "model-a.ply").write_bytes(b"computed")
 
         now = time.time()
         self.status = {
@@ -78,6 +82,9 @@ class HistoryLifecycleTest(unittest.TestCase):
         self.assertEqual(archived["a_to_b"], IDENTITY)
         self.assertFalse(service._history_view(archived)["restartable"])
         self.assertFalse((self.session_directory / "input").exists())
+        self.assertFalse((self.session_directory / "preview").exists())
+        self.assertFalse((self.session_directory / "datasets").exists())
+        self.assertFalse((self.session_directory / "computed").exists())
         self.assertFalse(service._job_directory(self.job_id).exists())
 
     def test_history_is_isolated_by_workspace(self) -> None:

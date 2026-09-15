@@ -16,6 +16,7 @@ from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset as _probe_dataset
 from service.storage import workspace_id as _workspace_id
 from service.uploads import save_upload_with_sha256 as _save_upload_with_sha256
+from service.uploads import save_upload_directory_with_sha256 as _save_upload_directory_with_sha256
 from service.validation import model_extension as _model_extension, validate_transform as _validate_transform
 
 
@@ -31,16 +32,21 @@ def create_upload_router(
 
     @router.post("/api/v2/registration-sessions", status_code=202)
     async def create_model_registration_session(
-        model_a: Annotated[UploadFile, File(description="Model A: PLY, PCD, LAS, or LAZ")],
-        model_b: Annotated[UploadFile, File(description="Model B: PLY, PCD, LAS, or LAZ")],
+        model_a: Annotated[UploadFile | None, File(description="Model A single file")] = None,
+        model_b: Annotated[UploadFile | None, File(description="Model B single file")] = None,
+        model_a_files: Annotated[list[UploadFile] | None, File(description="Model A dataset directory files")] = None,
+        model_b_files: Annotated[list[UploadFile] | None, File(description="Model B dataset directory files")] = None,
         output_direction: Annotated[str, Form()] = "a_to_b",
         moving_model: Annotated[str, Form()] = "auto",
         workspace_id: Annotated[str, Form()] = "",
         model_a_transform: Annotated[str, Form()] = "",
         model_b_transform: Annotated[str, Form()] = "",
     ) -> dict[str, Any]:
-        extension_a = _model_extension(model_a)
-        extension_b = _model_extension(model_b)
+        selections = ((model_a, model_a_files, "a"), (model_b, model_b_files, "b"))
+        if any((single is None) == (not files) for single, files, _ in selections):
+            raise HTTPException(status_code=400, detail="Each model must provide exactly one single file or one dataset directory")
+        extension_a = _model_extension(model_a) if model_a else ".zip"
+        extension_b = _model_extension(model_b) if model_b else ".zip"
         if output_direction not in {"a_to_b", "b_to_a"}:
             raise HTTPException(status_code=400, detail="output_direction must be a_to_b or b_to_a")
         if moving_model not in {"auto", "a", "b"}:
@@ -63,8 +69,8 @@ def create_upload_router(
         path_b = input_directory / f"model-b{extension_b}"
         try:
             (bytes_a, sha256_a), (bytes_b, sha256_b) = await asyncio.gather(
-                _save_upload_with_sha256(model_a, path_a),
-                _save_upload_with_sha256(model_b, path_b),
+                _save_upload_with_sha256(model_a, path_a) if model_a else _save_upload_directory_with_sha256(model_a_files or [], path_a),
+                _save_upload_with_sha256(model_b, path_b) if model_b else _save_upload_directory_with_sha256(model_b_files or [], path_b),
             )
             if bytes_a == 0 or bytes_b == 0:
                 raise HTTPException(status_code=400, detail="Uploaded files must not be empty")
@@ -94,8 +100,10 @@ def create_upload_router(
                 "model_a_bytes": bytes_a, "model_b_bytes": bytes_b,
                 "model_a_format": dataset_a.format, "model_b_format": dataset_b.format,
                 "model_a_upload_extension": extension_a[1:], "model_b_upload_extension": extension_b[1:],
-                "model_a_original_filename": Path(model_a.filename or path_a.name).name,
-                "model_b_original_filename": Path(model_b.filename or path_b.name).name,
+                "model_a_original_filename": Path(model_a.filename or path_a.name).name if model_a else Path((model_a_files or [])[0].filename or "dataset").parts[0],
+                "model_b_original_filename": Path(model_b.filename or path_b.name).name if model_b else Path((model_b_files or [])[0].filename or "dataset").parts[0],
+                "model_a_upload_shape": "file" if model_a else "directory",
+                "model_b_upload_shape": "file" if model_b else "directory",
                 "model_a_sha256": sha256_a, "model_b_sha256": sha256_b,
                 "model_a_dataset": {
                     **dataset_a.to_dict(), "xyz_status": "pending",

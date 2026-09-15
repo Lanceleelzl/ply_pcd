@@ -127,8 +127,15 @@ export function createSession(input: CreateSessionInput, onProgress: (percent: n
     request.addEventListener('error', () => reject(new Error('网络连接失败')));
 
     const data = new FormData();
-    data.append('model_a', input.modelA);
-    data.append('model_b', input.modelB);
+    for (const [model, selection] of [['a', input.modelA], ['b', input.modelB]] as const) {
+      if (selection.shape === 'file') {
+        data.append(`model_${model}`, selection.files[0]);
+      } else {
+        for (const file of selection.files) {
+          data.append(`model_${model}_files`, file, file.webkitRelativePath || file.name);
+        }
+      }
+    }
     data.append('output_direction', input.outputDirection);
     data.append('moving_model', input.movingModel);
     data.append('workspace_id', input.workspaceId);

@@ -50,6 +50,19 @@ class SessionPreviewRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "ready")
         self.start.assert_not_called()
 
+    async def test_missing_computed_dataset_rebuilds_ready_preview(self):
+        self.status["status"] = "ready"
+        self.status["inputs"] = {
+            "model_a_dataset": {"compute_path": "computed/model-a.ply"},
+            "model_b_dataset": {"compute_path": "input/b.pcd"},
+        }
+        def exists(path: Path) -> bool:
+            return path.as_posix().endswith(("model-a-points.bin", "model-b-points.bin", "input/b.pcd"))
+        with patch.object(Path, "is_file", autospec=True, side_effect=exists), patch.object(Path, "mkdir"):
+            response = await self.resume()
+        self.assertEqual(response["status"], "queued")
+        self.start.assert_called_once()
+
     async def test_missing_source_rejects_resume(self):
         self.available.return_value = False
         with self.assertRaises(HTTPException) as error:

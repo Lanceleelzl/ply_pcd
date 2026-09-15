@@ -126,7 +126,8 @@ def create_session_router(
             raise HTTPException(status_code=409, detail="Source model files have been cleaned")
         preview_directory = directory / "preview"
         preview_ready = all((preview_directory / name).is_file() for name in ("model-a-points.bin", "model-b-points.bin"))
-        if preview_ready and status.get("status") == "ready":
+        compute_ready = all(model_compute_path(directory, status, model).is_file() for model in ("a", "b"))
+        if preview_ready and compute_ready and status.get("status") == "ready":
             return {"session_id": session_id, "status": "ready", "editor_url": status["editor_url"]}
         if status.get("status") in {"queued", "preparing"}:
             return {"session_id": session_id, "status": status["status"], "editor_url": status["editor_url"]}

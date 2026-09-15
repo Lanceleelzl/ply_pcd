@@ -68,10 +68,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .model-b .model-letter { color: #071426; background: var(--model-b); }
 .model-card-heading h3 { margin: 0 0 3px; font-size: 16px; }
 .model-card-heading p { margin: 0; color: var(--text-muted); font-size: 11px; }
-.file-dropzone { position: relative; display: grid; justify-items: center; gap: 7px; padding: 25px 14px; border: 1px dashed #3a5571; border-radius: 11px; background: #0a1420; text-align: center; cursor: pointer; transition: border-color .18s, background .18s; }
+.file-dropzone { position: relative; display: grid; justify-items: center; gap: 7px; padding: 25px 14px; border: 1px dashed #3a5571; border-radius: 11px; background: #0a1420; text-align: center; transition: border-color .18s, background .18s; }
 .file-dropzone:hover { border-color: #65c3a5; background: #0d1c29; }
 .file-dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.file-action { color: #7bd8ba; font-weight: 650; font-size: 13px; }
+.file-choices { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.file-action { padding: 5px 8px; border: 1px solid #34546b; border-radius: 5px; color: #7bd8ba; font-weight: 650; font-size: 13px; cursor: pointer; }
 .file-dropzone strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .file-dropzone small { color: var(--text-muted); font-size: 11px; }
 .transform-disclosure { margin-top: 13px; }

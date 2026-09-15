@@ -127,11 +127,18 @@ export interface HistoryItem {
 }
 
 export interface CreateSessionInput {
-  modelA: File;
-  modelB: File;
+  modelA: ModelUploadSelection;
+  modelB: ModelUploadSelection;
   modelATransform: TransformParameters;
   modelBTransform: TransformParameters;
   outputDirection: OutputDirection;
   movingModel: 'auto' | ModelId;
   workspaceId: string;
+}
+
+export interface ModelUploadSelection {
+  files: File[];
+  shape: 'file' | 'directory';
+  label: string;
+  bytes: number;
 }
