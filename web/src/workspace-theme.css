@@ -163,3 +163,66 @@
 .integrated-editor .view-cube .cube-corner { width: 10px; height: 10px; left: 25px; top: 25px; padding: 0; border: 1px solid #b1c4da; box-shadow: 0 1px 3px #0008; }
 .integrated-editor .projection-switch { gap: 4px; }
 .integrated-editor .projection-switch button { min-height: 30px; padding: 4px 6px; font-size: 12px; }
+
+/* Workflow-first layout: the canvas owns all remaining space. */
+.integrated-editor .integrated-workspace { grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); position: relative; }
+.integrated-editor .integrated-workspace.has-inspector { grid-template-columns: 300px minmax(0, 1fr); }
+.integrated-editor .workflow-panel { grid-row: 1; padding: 0; }
+.integrated-editor .workflow-panel > .dock-heading { margin: 0; padding: 12px 16px; }
+.integrated-editor .workflow-panel > .workflow-step { margin: 0; padding: 12px; border: 0; border-bottom: 1px solid #263448; border-radius: 0; background: transparent; }
+.integrated-editor .workflow-step h2 { margin-bottom: 8px; font-size: 14px; }
+.integrated-editor .workflow-step p { margin: 6px 0; font-size: 12px; }
+.integrated-editor .workflow-panel .role-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.integrated-editor .workflow-panel .parameter-label { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 6px; }
+.integrated-editor .workflow-panel .pose-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 6px; margin: 8px 0; }
+.integrated-editor .workflow-panel .field-grid { gap: 5px; margin: 0; }
+.integrated-editor .workflow-panel .axis-input input { padding-left: 5px; padding-right: 20px; font-size: 12px; }
+.integrated-editor .workflow-panel summary { margin-top: 6px; }
+.integrated-editor .coarse-reset { float: right; margin-top: -36px; padding: 4px 6px; font-size: 12px; }
+.integrated-editor .workflow-panel .registration-actions .primary { background: #24775f; border-color: #4dbb92; width: 100%; }
+.integrated-editor .workflow-panel .status { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 96px; margin: 6px 0; }
+.integrated-editor .result-summary > button { width: 100%; }
+.integrated-editor .result-summary .result-column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 12px; padding-left: 0; border-left: 0; }
+.integrated-editor .result-summary .result-matrix-group { min-width: 0; padding-top: 10px; border-top: 1px solid #29394e; }
+.integrated-editor .result-summary .result-matrix-group h3 { margin: 0 0 6px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.integrated-editor .result-summary .result-formula { font-size: 10px; line-height: 1.5; }
+.integrated-editor .result-summary .matrix { width: 100%; margin: 8px 0; padding: 8px; font-size: 9px; line-height: 1.55; }
+.integrated-editor .result-summary .result-column button { width: 100%; }
+.integrated-editor .result-summary #result-metrics { grid-row: 1; margin: 0; padding: 8px; border-radius: 6px; background: #0d1725; font-size: 11px; }
+.integrated-editor .inspector-panel {
+  position: absolute;
+  z-index: 7;
+  grid-column: unset;
+  grid-row: unset;
+  top: 12px;
+  right: 12px;
+  width: min(460px, calc(100% - 336px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #42516a;
+  border-radius: 10px;
+  background: #0d1521f5;
+  box-shadow: 0 12px 32px #0008;
+}
+.integrated-editor .inspector-panel > .inspector-tool { position: static; width: 100%; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; }
+.integrated-editor .viewport-toolbar { top: 12px; left: 12px; right: auto; width: max-content; max-width: calc(100% - 160px); flex-wrap: wrap; overflow: visible; gap: 5px; padding: 6px; border-radius: 12px; background: #0d1827eb; }
+.integrated-editor .viewport-tool-group { gap: 4px; flex-wrap: wrap; flex-shrink: 1; }
+.integrated-editor .viewport-tool-group + .viewport-tool-group { padding-left: 6px; }
+.integrated-editor .viewport-tool-group button { padding: 5px 7px; min-height: 36px; font-size: 12px; }
+.integrated-editor .tool-group-label { display: none; }
+.integrated-editor .has-inspector .viewport-toolbar { max-width: min(480px, calc(100% - 496px)); }
+.integrated-editor .has-inspector .view-gizmo { right: min(484px, calc(100% - 148px)); }
+@media (max-width: 1100px) {
+  .integrated-editor .viewport-toolbar { max-width: calc(100% - 24px); }
+  .integrated-editor .view-gizmo { top: auto; bottom: 70px; }
+}
+@media (max-width: 900px) {
+  .integrated-editor { height: 100vh; overflow: hidden; }
+  .integrated-editor .integrated-workspace, .integrated-editor .integrated-workspace.has-inspector { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; }
+  .integrated-editor .workflow-panel { grid-column: 1; grid-row: 1; overflow: auto; }
+  .integrated-editor .integrated-workspace > .viewport { grid-column: 2; grid-row: 1; }
+  .integrated-editor .inspector-panel { right: 8px; top: 8px; bottom: auto; width: min(460px, calc(100% - 276px)); max-height: calc(100% - 16px); }
+  .integrated-editor .has-inspector .viewport-toolbar { max-width: calc(100% - 472px); }
+  .integrated-editor .has-inspector .view-gizmo { right: min(480px, calc(100% - 140px)); }
+}

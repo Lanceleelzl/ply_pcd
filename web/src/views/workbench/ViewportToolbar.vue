@@ -12,7 +12,6 @@ const models = ['a', 'b'] as const;
   <div class="viewport-toolbar toolbar">
     <div class="viewport-tool-group" role="group" aria-label="配准与视图">
       <span class="tool-group-label">配准与视图</span>
-      <button id="reset" :disabled="state.locked" title="清除当前移动模型的平移和旋转，恢复到模型刚加载时的位置" @click="emit('command', { type: 'reset' })">重置</button>
       <button id="fit" @click="emit('command', { type: 'fit' })">适应全部</button>
       <button id="clipping-toggle" :class="{ active: state.clippingActive }" :aria-pressed="state.clippingActive" :title="state.clippingTitle" @click="emit('command', { type: 'clipping' })">剖切</button>
     </div>

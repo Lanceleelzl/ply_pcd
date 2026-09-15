@@ -127,36 +127,6 @@
   min-height: 0;
 }
 
-.result-drawer {
-  grid-column: 2;
-  grid-row: 2;
-  height: 116px;
-  min-height: 0;
-  overflow: auto;
-  padding: 10px 12px;
-  border-top: 1px solid #344155;
-  background: #0b131e;
-  transition: height .18s ease;
-}
-
-.result-drawer:has(#result:not([hidden])) {
-  height: min(290px, 38vh);
-}
-
-.result-drawer > .workflow-step {
-  margin: 0;
-}
-
-.result-drawer .result:not([hidden]) {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr));
-  gap: 10px;
-}
-
-.result-drawer #result-metrics {
-  grid-column: 1 / -1;
-}
-
 .workflow-title {
   display: flex;
   align-items: flex-start;
@@ -747,17 +717,8 @@
     grid-row: 2;
   }
 
-  .result-drawer {
-    grid-row: 4;
-  }
-
-  .integrated-workspace > .viewport,
-  .result-drawer {
+  .integrated-workspace > .viewport {
     grid-column: 1;
-  }
-
-  .result-drawer .result:not([hidden]) {
-    grid-template-columns: 1fr;
   }
 
   .viewport-toolbar {

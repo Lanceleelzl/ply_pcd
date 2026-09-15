@@ -23,6 +23,6 @@ const ratio = computed(() => props.diagonals[fixedModel.value] > 0
       <option value="auto">自动推荐（{{ recommended.toUpperCase() }}）</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option>
     </select></label>
   </div>
-  <p id="role-hint" class="step-hint">ICP：移动 {{ movingModel.toUpperCase() }}，固定 {{ fixedModel.toUpperCase() }}。预览与粗配准均使用业务坐标；数值为移动模型业务局部坐标 → 固定模型业务局部坐标。</p>
+  <p id="role-hint" class="step-hint" title="预览与粗配准均使用业务坐标；数值为移动模型业务局部坐标 → 固定模型业务局部坐标。">ICP：移动 {{ movingModel.toUpperCase() }}，固定 {{ fixedModel.toUpperCase() }} · 业务坐标</p>
   <p id="range-risk" class="range-risk" :hidden="ratio < 1.25">范围风险：移动模型 {{ movingModel.toUpperCase() }} 的包围盒对角线约为固定模型 {{ fixedModel.toUpperCase() }} 的 {{ ratio.toFixed(1) }} 倍。大范围点云匹配小范围点云容易落入错误位置；建议改为移动 {{ fixedModel.toUpperCase() }} 匹配 {{ movingModel.toUpperCase() }}。最终业务方向无需改变，系统返回的反向矩阵就是所需转换矩阵。</p>
 </template>

@@ -248,7 +248,7 @@ export async function initializeWorkbench(
     origins, businessMatrices: display.businessMatrices, diagonal: scene.baseDiagonal,
     localToDisplay: model => display.localToDisplay(model),
     signature: () => display.signature(),
-    setOriginal: original => { display.setOriginal(original); cameraController.fit(); },
+    setOriginal: original => { display.setOriginal(original); },
     setClippingInteractionActive: active => { clippingInteractionActive = active; },
     refreshTools: attach,
     visiblePoint: (model, point) => {

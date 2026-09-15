@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RegistrationSession } from '../../api/contracts';
 import ViewportToolbar from './ViewportToolbar.vue';
 import type { ToolbarCommand, ToolbarState } from './toolbar-state';
@@ -12,6 +12,8 @@ const props = defineProps<{ view: { roleSummary: string; initialMatrix: string; 
 const emit = defineEmits<{ newTask: []; toolbar: [command: ToolbarCommand] }>();
 const viewport = ref<HTMLElement | null>(null);
 const progressTop = ref(0);
+const resultOpen = ref(false);
+const inspectorOpen = computed(() => props.inspector.clipping || props.inspector.originPlanes || props.inspector.query);
 let progressResize: ResizeObserver | undefined;
 const positionProgress = () => {
   const toolbar = viewport.value?.querySelector<HTMLElement>('.viewport-toolbar');
@@ -49,15 +51,30 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
         <button id="new-task" @click="emit('newTask')">新建</button>
       </div>
     </header>
-    <div class="workspace integrated-workspace">
+    <div class="workspace integrated-workspace" :class="{ 'has-inspector': inspectorOpen }">
       <aside class="panel workflow-panel">
-        <header class="dock-heading"><span>01</span><div><strong>模型与坐标</strong><small>确认输入数据和业务场景矩阵</small></div></header>
+        <header class="dock-heading"><strong>配准流程</strong></header>
         <section class="workflow-step completed">
-          <h2><span>1</span> 模型</h2>
+          <h2><span>1</span> 模型与坐标</h2>
           <p>A：{{ session.metadata!.models.a.source_point_count.toLocaleString() }} 点<br>B：{{ session.metadata!.models.b.source_point_count.toLocaleString() }} 点</p>
           <p id="badge" class="model-role-summary">{{ view.roleSummary }}</p>
           <div id="business-transform-panel"><slot name="business" /></div>
           <p id="gaussian-status" class="gaussian-status" :class="{ error: gaussian.error }" :hidden="!gaussian.message">{{ gaussian.message }}</p>
+        </section>
+        <section class="workflow-step">
+          <h2><span>2</span> 方向与粗配准</h2>
+          <button id="reset" class="coarse-reset" :disabled="toolbar.locked" @click="emit('toolbar', { type: 'reset' })">重置粗配准</button><div id="registration-roles"><slot name="roles" /></div><div id="coarse-pose-form"><slot name="pose" /></div>
+          <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix">{{ view.initialMatrix }}</pre></details>
+        </section>
+        <section class="workflow-step"><h2><span>3</span> ICP 精配准</h2><details><summary>ICP 参数</summary><div id="icp-parameters"><slot name="icp" /></div></details><div id="registration-actions-host"><slot name="actions" /></div></section>
+        <section class="workflow-step result-summary">
+          <h2><span>4</span> 配准结果</h2>
+          <pre id="job-status" class="status timeline">{{ result.status }}</pre>
+          <p v-if="result.visible && result.result">RMS：{{ result.result.metrics.final_rms.toFixed(6) }} m</p>
+          <button type="button" :disabled="!result.visible" :aria-expanded="resultOpen" @click="resultOpen = !resultOpen">{{ resultOpen ? '收起结果矩阵' : '查看结果与复制矩阵' }}</button>
+          <section id="result" v-show="resultOpen && result.visible" class="result result-column">
+            <RegistrationResultPanel :result="result.result" :direction="result.direction" />
+          </section>
         </section>
       </aside>
       <section ref="viewport" class="viewport">
@@ -74,26 +91,11 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
         </div>
         <div id="viewport-help" class="viewport-help">{{ view.help }}</div>
       </section>
-      <aside class="inspector-panel">
-        <header class="dock-heading"><span>02</span><div><strong>工具与配准</strong><small>视图工具、粗配准姿态与 ICP 参数</small></div></header>
+      <aside v-show="inspectorOpen" class="inspector-panel">
         <section id="clipping-panel" class="clipping-panel inspector-tool" :hidden="!inspector.clipping"><slot name="clipping" /></section>
         <section class="origin-planes-panel inspector-tool" :hidden="!inspector.originPlanes"><slot name="originPlanes" /></section>
         <section class="coordinate-panel inspector-tool" :hidden="!inspector.query"><slot name="query" /></section>
-        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector">
-          <h2><span>2</span> 方向与粗配准</h2>
-          <div id="registration-roles"><slot name="roles" /></div><div id="coarse-pose-form"><slot name="pose" /></div>
-          <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix">{{ view.initialMatrix }}</pre></details>
-        </section>
-        <section v-show="!inspector.clipping && !inspector.originPlanes && !inspector.query" class="workflow-step registration-inspector"><h2><span>3</span> ICP 参数</h2><div id="icp-parameters"><slot name="icp" /></div><div id="registration-actions-host"><slot name="actions" /></div></section>
       </aside>
-      <section class="result-drawer">
-        <section class="workflow-step">
-          <h2><span>4</span> 结果</h2><pre id="job-status" class="status timeline">{{ result.status }}</pre>
-          <section id="result" class="result" :hidden="!result.visible">
-            <RegistrationResultPanel :result="result.result" :direction="result.direction" />
-          </section>
-        </section>
-      </section>
     </div>
   </main>
 </template>
