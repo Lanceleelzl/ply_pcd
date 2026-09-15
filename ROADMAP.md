@@ -22,6 +22,8 @@
 
 ### 最近验证
 
+- 2026-09-16（阶段 13 浏览器流式验收）：真实 Chrome 从首页选择包含 7 个文件的 Streamed SOG v1 目录作为模型 A、二进制 Gaussian PLY 作为模型 B，目录 multipart 上传返回 202，双方均解析为 4 点并进入工作台。首次点击 A 高斯暴露 Vite 未代理 `/gaussian-resources`，修复开发代理后 `lod-meta.json`、块 `meta.json` 和 5 个 WebP 资源全部返回 200，界面切换为“A：点云”并明确显示完整 Gaussian，控制台 0 error。保持 Gaussian 显示执行 ICP 成功，RMS 为 `0.000000 m`，证明显示切换未替代 XYZ 计算通道。截图：`output/playwright/stage13-streamed-sog.png`。类型检查、Web 构建及差异检查通过。
+
 - 2026-09-16（阶段 13 第三批）：LCC／LCC2 准备流程拆分为独立的计算与显示输出：计算固定选择 LOD 0 生成标准 PLY，显示另行转换为保留 LOD 的 Streamed SOG 资源树。显示转换失败时保留 `xyz_status=ready` 并设置 `gaussian_status=failed`，不阻断中心点预览、粗配准或 ICP；令牌资源路由支持转换后的资源树。专项覆盖流式转换成功、显示转换失败和子资源访问，服务回归 93／93、类型检查及差异检查通过。当前仍缺真实 LCC／LCC2 数据验证，不能以模拟转换回归宣称格式验收完成。
 
 - 2026-09-16（阶段 13 第二批）：首页为模型 A／B 增加独立的“选择文件／ZIP”和“选择数据集目录”入口，目录以重复 multipart 字段上传并保留浏览器提供的相对路径；服务端拒绝缺失、重复模式、越界路径和重复路径，将目录封装成内部 ZIP 后复用探测、对象归档与恢复链路。源释放新增清理 `datasets/`、`computed/`，恢复时若预览仍在但计算 PLY 缺失会重新排队生成。由 4 点二进制 Gaussian PLY 实际生成 Streamed SOG v1 目录，封装 ZIP 后成功识别入口、按 LOD 0 恢复标准 PLY并保留流式显示入口。服务 89／89、Web 108／108、Streamed SOG 集成 2／2、类型检查、Web 构建和差异检查通过；构建只有既有 PlayCanvas Worker 外部化与大包提示。
