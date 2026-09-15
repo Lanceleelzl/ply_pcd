@@ -36,7 +36,8 @@ def create_gaussian_resource_router(
             and root in path.parents
             and (
                 path == gaussian_file
-                or dataset.get("format") in {"sog", "streamed_sog"} and gaussian_file.parent in path.parents
+                or (dataset.get("format") in {"sog", "streamed_sog"} or dataset.get("gaussian_resource_tree"))
+                and gaussian_file.parent in path.parents
             )
             and path.is_file()
         )

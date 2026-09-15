@@ -78,3 +78,50 @@ class DatasetPreparationTest(unittest.TestCase):
                 self.session, "a", source.name,
                 DatasetProbe("sog", "sog", "meta.json", 2, True, True, False), ["node", "cli.mjs"], run=failed,
             )
+
+    def test_lcc_keeps_xyz_ready_when_streamed_display_conversion_fails(self):
+        source = self.session / "input" / "model-a.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("scene/meta.lcc", "{}")
+            archive.writestr("scene/Index.bin", b"index")
+            archive.writestr("scene/Data.bin", b"data")
+        calls = 0
+
+        def run(command, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                Path(command[-1]).write_bytes(b"ply")
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 2, "", "display conversion failed")
+
+        path, details = prepare_model_dataset(
+            self.session, "a", source.name,
+            DatasetProbe("lcc", "zip", "scene/meta.lcc", "5.0", True, True, True),
+            ["node", "cli.mjs"], run=run,
+        )
+        self.assertTrue(path.is_file())
+        self.assertIsNone(details["gaussian_path"])
+        self.assertEqual(details["gaussian_error"], "display conversion failed")
+        self.assertTrue(details["gaussian_resource_tree"])
+
+    def test_lcc_display_is_converted_to_streamed_sog_tree(self):
+        source = self.session / "input" / "model-a.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("meta.lcc", "{}")
+            archive.writestr("Index.bin", b"index")
+            archive.writestr("Data.bin", b"data")
+
+        def run(command, **kwargs):
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"output")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        _, details = prepare_model_dataset(
+            self.session, "a", source.name,
+            DatasetProbe("lcc", "zip", "meta.lcc", "5.0", True, True, True),
+            ["node", "cli.mjs"], run=run,
+        )
+        self.assertEqual(details["gaussian_path"], "datasets/model-a-streamed/lod-meta.json")
+        self.assertTrue(details["gaussian_resource_tree"])

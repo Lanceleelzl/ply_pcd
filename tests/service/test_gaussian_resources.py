@@ -42,3 +42,15 @@ class GaussianResourcesTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(token=token, model=model, path=path), self.assertRaises(HTTPException) as error:
                 await self.get("session", token, model, path)
             self.assertEqual(error.exception.status_code, 404)
+
+    async def test_serves_generated_lcc_streaming_tree(self):
+        resource = self.directory / "datasets" / "model-a-streamed" / "0_0" / "meta.json"
+        resource.parent.mkdir(parents=True)
+        resource.write_text("{}", encoding="utf-8")
+        self.status["inputs"]["model_a_dataset"] = {
+            "container": "zip", "format": "lcc",
+            "gaussian_path": "datasets/model-a-streamed/lod-meta.json",
+            "gaussian_resource_tree": True,
+        }
+        response = await self.get("session", "secret", "a", "datasets/model-a-streamed/0_0/meta.json")
+        self.assertEqual(Path(response.path), resource)

@@ -51,6 +51,15 @@ def _convert_to_ply(entrypoint: Path, destination: Path, converter: list[str], r
         raise DatasetFormatError("Dataset XYZ conversion produced no PLY file")
 
 
+def _convert_to_streamed_sog(entrypoint: Path, destination: Path, converter: list[str], run: RunCommand) -> str | None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    result = run([*converter, "--overwrite", str(entrypoint), str(destination)], capture_output=True,
+                 text=True, encoding="utf-8", errors="replace", timeout=1800, check=False)
+    if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
+        return result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+    return None
+
+
 def prepare_model_dataset(session_directory: Path, model: str, source_filename: str,
                           probe: DatasetProbe, converter: list[str], *,
                           run: RunCommand = subprocess.run) -> tuple[Path, dict[str, Any]]:
@@ -78,15 +87,23 @@ def prepare_model_dataset(session_directory: Path, model: str, source_filename: 
     elif probe.format in {"compressed_ply"}:
         gaussian_path = source
     elif probe.format in {"lcc", "lcc2"}:
-        gaussian_path = compute_path
+        gaussian_path = session_directory / "datasets" / f"model-{model}-streamed" / "lod-meta.json"
+        gaussian_error = _convert_to_streamed_sog(entrypoint, gaussian_path, converter, run)
+        if gaussian_error:
+            gaussian_path = None
     else:
         gaussian_path = None
-    return compute_path, {
+    prepared = {
         "compute_path": str(compute_path.relative_to(session_directory)).replace("\\", "/"),
         "gaussian_path": str(gaussian_path.relative_to(session_directory)).replace("\\", "/")
         if gaussian_path else None,
         "dataset_entrypoint": str(entrypoint.relative_to(session_directory)).replace("\\", "/"),
     }
+    if probe.format in {"lcc", "lcc2"}:
+        prepared["gaussian_resource_tree"] = True
+        if gaussian_error:
+            prepared["gaussian_error"] = gaussian_error
+    return compute_path, prepared
 
 
 def prepare_session_datasets(session_directory: Path, status: dict[str, Any],
@@ -101,10 +118,9 @@ def prepare_session_datasets(session_directory: Path, status: dict[str, Any],
                 if key in DatasetProbe.__dataclass_fields__
             }), converter,
         )
-        inputs[f"model_{model}_dataset"].update(
-            prepared,
-            xyz_status="ready",
-            gaussian_status="ready" if prepared.get("gaussian_path") else "not_available",
+        gaussian_status = "ready" if prepared.get("gaussian_path") else (
+            "failed" if prepared.get("gaussian_error") else "not_available"
         )
+        inputs[f"model_{model}_dataset"].update(prepared, xyz_status="ready", gaussian_status=gaussian_status)
         paths[model] = path
     return paths["a"], paths["b"]
