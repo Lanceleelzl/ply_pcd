@@ -256,10 +256,10 @@
 - 视口工具栏的「剖切」按钮以实际剖切模式为状态来源：`axis`／`box` 使用绿色激活态，`off` 恢复默认态；面板可关闭但不改变已启用的 GPU 预览剖切，因此按钮继续保持激活态。
 - 自定义拖动采用屏幕投影到目标轴的位移换算，拾取按面手柄、旋转、轴向／平面平移、相机导航的顺序处理。
 
-## 通用工作台完整 Gaussian 显示（第一版）
+## 通用工作台完整 Gaussian 显示
 
-- v2 会话继续使用已有 `gaussian_a_url`／`gaussian_b_url`，只有对应输入是包含 Gaussian 属性的 PLY 时才启用模型级显示切换。
-- 默认显示轻量中心点；用户按需切换后，PlayCanvas 直接以 `gsplat` 资源流式加载原始 PLY，并隐藏同一模型的中心点渲染，避免重复叠加。
+- v2 会话使用 `gaussian_a_url`／`gaussian_b_url`，二进制 Gaussian／compressed PLY、SOG、Streamed SOG 和成功转换显示资源的 LCC／LCC2 可启用模型级显示切换。
+- 默认显示轻量中心点；用户按需切换后，PlayCanvas 以 `gsplat` 加载单文件或 Streamed SOG 资源树，并隐藏同一模型的中心点渲染，避免重复叠加。显示资源与 ICP 使用的 XYZ 计算文件相互独立。
 - Gaussian 实体作为对应模型变换实体的子节点，以同一局部坐标继承人工粗配准、ICP 逐轮和最终矩阵；模型显示开关控制整个父实体。
 - 切回中心点时销毁 Gaussian 实体、卸载 Asset 并从资源注册表移除，释放 GPU 与浏览器内存；加载失败时保留中心点并提供明确错误状态。
 - 完整 Gaussian 使用 PlayCanvas `GSplatComponent.setWorkBufferModifier` 接入同一剖切状态。Modifier 接收 Work Buffer 阶段的世界坐标中心：坐标轴模式比较 `uClipMin／uClipMax`，长方体模式以 `uClipWorldToBox` 转入盒局部坐标并比较 `±0.5`，范围外将 Gaussian 尺度置零。

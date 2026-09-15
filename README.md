@@ -1,6 +1,6 @@
 # 通用点云双向 Registration Service
 
-本项目用于计算两个 PLY／PCD／LAS／LAZ 点云模型之间的双向坐标转换矩阵。Gaussian Splatting PLY 与无人机 SLAM 地图是首要业务场景，但格式不再决定模型角色或矩阵方向。
+本项目用于计算两个点云或 Gaussian 数据集之间的双向坐标转换矩阵。输入支持 PLY／compressed PLY／PCD／LAS／LAZ、SOG、Streamed SOG、LCC 和 LCC2；所有 Gaussian／LOD 格式先提取独立 XYZ 计算数据，格式不决定模型角色或矩阵方向。
 
 通用接口将业务输出方向和 ICP 角色分开：
 
@@ -15,7 +15,7 @@ ICP 角色：移动 A／固定 B，移动 B／固定 A，或自动推荐
 - Windows x64 一键本地安装和浏览器使用，普通用户不需要 Visual Studio 或 Python。
 - Visual Studio 2022 原生算法开发和自动 Worker 替换。
 - C++ 无界面点云配准 Worker。
-- 网页上传 PLY／PCD 并查看结果。
+- 网页上传单文件、数据集 ZIP 或完整数据集目录并查看结果。
 - Java、Python 等模块通过 HTTP API 调用。
 - Docker Desktop 本地测试。
 - Linux Docker 服务器部署。
@@ -41,13 +41,13 @@ pnpm install
 pnpm run dev
 ```
 
-开发模式浏览器打开 `http://localhost:5273`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5273/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las` 或 `.laz`；上传后页面会由 C++ Worker 解码并生成轻量预览，浏览器无需直接解析 LAZ。
+开发模式浏览器打开 `http://localhost:5273`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5273/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las`、`.laz`、`.sog`、数据集 ZIP 或包含 `meta.json`／`lod-meta.json`／`.lcc`／`.lcc2` 入口的完整目录。上传结构和版本白名单见 [docs/DATA_FORMAT_COMPATIBILITY.md](docs/DATA_FORMAT_COMPATIBILITY.md) 。
 
 如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 
 API 鉴权默认关闭。生产部署可设置 `REGISTRATION_AUTH_ENABLED=true`，并通过 `REGISTRATION_API_KEY_HASHES` 配置逗号分隔的 `key_id:user|admin:sha256` 记录；配置中只保存原始 Key 的 SHA-256 十六进制摘要。客户端在 `X-API-Key` 请求头传入原始 Key，网页可在首页顶部输入，Key 仅保存在当前浏览器会话。普通用户只能访问自己创建的会话、任务和历史，管理员可访问全部资源；启用鉴权前生成的无归属记录仅管理员可读。
 
-工作台采用顶部应用栏、左侧模型与业务矩阵、中央三维视口、右侧工具与配准检查器、底部结果区。剖切、原点平面和坐标查询停靠右侧；窄屏按纵向排列，参数和执行操作仍可访问。当前选定的移动模型可平移和旋转，粗配准不提供缩放，文件格式不决定模型角色。默认加载轻量中心点；包含完整 Gaussian 属性的模型可按需加载原始 Gaussian，切回中心点时卸载资源。
+工作台采用顶部应用栏、左侧模型与业务矩阵、中央三维视口、右侧工具与配准检查器、底部结果区。剖切、原点平面和坐标查询停靠右侧；窄屏按纵向排列，参数和执行操作仍可访问。当前选定的移动模型可平移和旋转，粗配准不提供缩放，文件格式不决定模型角色。默认加载轻量中心点；包含完整 Gaussian 属性的模型可按需加载 Gaussian，Streamed SOG 及由 LCC／LCC2 转换的数据保留流式 LOD，切回中心点时卸载显示资源。
 
 `pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
 

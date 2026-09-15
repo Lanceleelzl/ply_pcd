@@ -9,18 +9,19 @@
 
 ## 进行中
 
-- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、LOD 0 计算转换和衍生目录生命周期。当前继续补真实 LCC／LCC2 样本、LCC 原生流式显示转换、浏览器流式画面与 Docker Linux 验证；这些项目通过前不标记完整兼容。
+- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、LOD 0 计算转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。当前只剩真实 LCC／LCC2 场景包验收与 Docker Linux 验证；这些项目通过前不标记完整兼容。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
 
 - 2026-09-15：首页紧凑布局与矩阵双向编辑已实现并通过下述验证，用户已确认本轮效果并授权提交、推送。
 
-- 当前没有未完成的代码重构阶段，也没有已定义的阶段 13。
 - 外部 S3／MinIO 实例联调等待部署环境提供 endpoint、bucket 和凭据；代码与伪造客户端回归已经完成。
 - 生产鉴权等待部署时生成并配置真实 API Key 摘要；鉴权代码、资源隔离和浏览器接入已经完成。
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-16（阶段 13 文档与 OpenAPI 一致性）：README 已更新为普通／Gaussian／compressed PLY、PCD、LAS／LAZ、SOG、Streamed SOG、LCC、LCC2，以及单文件／ZIP／完整目录三种上传形态；API 文档明确 A／B 各自在单文件字段与重复目录字段之间二选一。直接读取当前 FastAPI OpenAPI，确认 `model_a`／`model_b` 为可空 binary，`model_a_files`／`model_b_files` 为可空 binary array，运行时负责条件必填校验。实施方案移除“仅 Gaussian PLY 可切换”的过期表述，路线图进行中事项收敛为真实 LCC／LCC2 样本和 Docker Linux 两项外部验收。
 
 - 2026-09-16（阶段 13 LCC 边界与 Docker 复核）：依据 XGRIDS 格式说明和锁定版 SplatTransform 读取实现，LCC 仅接收 Portable／Quality，Quality 强制要求 `Shcoef.bin`；解压后为 Linux 大小写敏感环境补齐读取器要求的 `index.bin`／`data.bin`／`shcoef.bin` 规范硬链接，避免官方文档首字母大写名称在容器内解析失败。LCC2 增加 `totalLevels`、`totalSplats`、`lodSplats` 一致性和 `.ply`／`.spz`／`.sog` 块编码白名单校验。服务回归 94／94、差异检查通过。公开检索未找到可合法下载的真实 LCC／LCC2 场景包，真实样本验收继续保留。Windows Docker Desktop 4.60.0 已通过安装程序启动，但 backend 日志确认在初始化 Inference manager 时因 `dockerInference` 本地监听文件不可访问而崩溃，daemon API 不可用；未删除 Docker 文件、重置 Desktop 或修改系统配置，Linux 镜像验证继续阻塞。
 
