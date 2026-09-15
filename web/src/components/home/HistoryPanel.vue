@@ -46,7 +46,7 @@ onMounted(load);
 <template>
   <section class="history-surface">
     <header class="section-heading">
-      <div><span class="eyebrow">RECENT</span><h2>历史结果</h2><p>按完成时间倒序排列</p></div>
+      <div><h2>历史结果</h2><p>按完成时间倒序排列</p></div>
       <button class="icon-button" type="button" :disabled="loading" @click="load">刷新</button>
     </header>
     <p v-if="error" class="inline-alert error">{{ error }}</p>
@@ -64,7 +64,8 @@ onMounted(load);
         <div class="history-actions-modern">
           <button type="button" :disabled="!item.recommended_matrix?.value" @click="copy(item)">复制矩阵</button>
           <button type="button" class="primary-subtle" :disabled="!item.restartable || busyId === item.session_id" @click="action(item, 'resume')">继续配准</button>
-          <details><summary>更多</summary><div class="history-more"><button type="button" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'retain')">再保留 24 小时</button><button type="button" class="danger-text" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'release')">释放源文件</button></div></details>
+          <button type="button" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'retain')">再保留 24 小时</button>
+          <button type="button" class="danger-text" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'release')">释放源文件</button>
         </div>
       </article>
     </div>

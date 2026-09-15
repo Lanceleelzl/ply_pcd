@@ -5,12 +5,21 @@ import HistoryPanel from '../components/home/HistoryPanel.vue';
 import { useRegistrationDraftStore } from '../stores/registration-draft-store';
 import { useWorkspaceStore } from '../stores/workspace-store';
 import { getApiKey, setApiKey } from '../api/api-auth';
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const draft = useRegistrationDraftStore();
 const apiKey = ref(getApiKey());
+const serviceState = ref('检测中');
+let healthTimer: ReturnType<typeof setInterval> | undefined;
+const healthAbort = new AbortController();
+async function checkHealth() {
+  try { const response = await fetch('/health', { signal: AbortSignal.any([healthAbort.signal, AbortSignal.timeout(5000)]) }); serviceState.value = response.ok ? '服务正常' : '服务异常'; }
+  catch { if (!healthAbort.signal.aborted) serviceState.value = '连接失败'; }
+}
+onMounted(() => { void checkHealth(); healthTimer = setInterval(checkHealth, 30000); });
+onUnmounted(() => { clearInterval(healthTimer); healthAbort.abort(); });
 
 async function openWorkspace(sessionId: string): Promise<void> {
   await router.push({ name: 'registration', params: { sessionId } });
@@ -25,21 +34,19 @@ async function submit(): Promise<void> {
 <template>
   <main class="home-app-shell">
     <header class="app-topbar">
-      <div class="brand-mark"><span class="brand-symbol">R</span><div><strong>Registration Studio</strong><small>点云坐标配准工作台</small></div></div>
-      <nav><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用时留空" @change="setApiKey(apiKey)" /></label><a href="/docs" target="_blank" rel="noreferrer">API 文档</a><span class="service-chip"><i />本地服务</span></nav>
+      <div class="brand-mark"><span class="brand-symbol">R</span><div><strong>点云坐标配准</strong><small>Registration Studio</small></div></div>
+      <nav><a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a><span class="service-chip" :class="{ offline: serviceState !== '服务正常' }"><i />{{ serviceState }}</span><details class="access-settings"><summary>访问设置</summary><div class="access-popover"><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用鉴权时留空" @change="setApiKey(apiKey)" /></label><p>用于本服务的访问鉴权与数据隔离。</p></div></details></nav>
     </header>
     <div class="home-content">
       <section class="hero-copy">
-        <span class="eyebrow">POINT CLOUD REGISTRATION</span>
-        <h1>建立两个点云世界之间<br>可靠的坐标关系</h1>
-        <p>支持 PLY、PCD、LAS 与 LAZ。业务矩阵方向和 ICP 移动模型独立配置，完整保留双精度坐标。</p>
+        <h1>建立两个世界之间的转换关系</h1>
+        <p>支持 PLY、PCD、LAS 与 LAZ，保留双精度坐标。</p>
       </section>
       <section class="task-composer">
-        <header class="section-heading"><div><span class="eyebrow">NEW TASK</span><h2>新建配准任务</h2><p>选择两个模型，并确认坐标与配准角色。</p></div><span class="step-chip">01 · 数据</span></header>
+        <header class="section-heading"><div><h2>新建配准任务</h2></div></header>
         <form @submit.prevent="submit">
           <div class="model-grid">
             <ModelUploadCard model="a" :file="draft.files.a" :transform="draft.transforms.a" @update:file="draft.files.a = $event" @update:transform="draft.transforms.a = $event" />
-            <div class="model-connector"><span>↔</span></div>
             <ModelUploadCard model="b" :file="draft.files.b" :transform="draft.transforms.b" @update:file="draft.files.b = $event" @update:transform="draft.transforms.b = $event" />
           </div>
           <div class="task-settings">
