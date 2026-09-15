@@ -22,6 +22,8 @@
 
 ### 最近验证
 
+- 2026-09-16（阶段 13 LCC 边界与 Docker 复核）：依据 XGRIDS 格式说明和锁定版 SplatTransform 读取实现，LCC 仅接收 Portable／Quality，Quality 强制要求 `Shcoef.bin`；解压后为 Linux 大小写敏感环境补齐读取器要求的 `index.bin`／`data.bin`／`shcoef.bin` 规范硬链接，避免官方文档首字母大写名称在容器内解析失败。LCC2 增加 `totalLevels`、`totalSplats`、`lodSplats` 一致性和 `.ply`／`.spz`／`.sog` 块编码白名单校验。服务回归 94／94、差异检查通过。公开检索未找到可合法下载的真实 LCC／LCC2 场景包，真实样本验收继续保留。Windows Docker Desktop 4.60.0 已通过安装程序启动，但 backend 日志确认在初始化 Inference manager 时因 `dockerInference` 本地监听文件不可访问而崩溃，daemon API 不可用；未删除 Docker 文件、重置 Desktop 或修改系统配置，Linux 镜像验证继续阻塞。
+
 - 2026-09-16（阶段 13 浏览器流式验收）：真实 Chrome 从首页选择包含 7 个文件的 Streamed SOG v1 目录作为模型 A、二进制 Gaussian PLY 作为模型 B，目录 multipart 上传返回 202，双方均解析为 4 点并进入工作台。首次点击 A 高斯暴露 Vite 未代理 `/gaussian-resources`，修复开发代理后 `lod-meta.json`、块 `meta.json` 和 5 个 WebP 资源全部返回 200，界面切换为“A：点云”并明确显示完整 Gaussian，控制台 0 error。保持 Gaussian 显示执行 ICP 成功，RMS 为 `0.000000 m`，证明显示切换未替代 XYZ 计算通道。截图：`output/playwright/stage13-streamed-sog.png`。类型检查、Web 构建及差异检查通过。
 
 - 2026-09-16（阶段 13 第三批）：LCC／LCC2 准备流程拆分为独立的计算与显示输出：计算固定选择 LOD 0 生成标准 PLY，显示另行转换为保留 LOD 的 Streamed SOG 资源树。显示转换失败时保留 `xyz_status=ready` 并设置 `gaussian_status=failed`，不阻断中心点预览、粗配准或 ICP；令牌资源路由支持转换后的资源树。专项覆盖流式转换成功、显示转换失败和子资源访问，服务回归 93／93、类型检查及差异检查通过。当前仍缺真实 LCC／LCC2 数据验证，不能以模拟转换回归宣称格式验收完成。

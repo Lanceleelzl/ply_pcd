@@ -111,6 +111,8 @@ scene/
 
 “LCC1”指第一代 LCC 数据组织，不表示元数据版本必须为 1。版本采用实测白名单；未知版本拒绝解析。Portable 模式允许没有 `Shcoef.bin`；Quality 模式声明高阶 SH 时必须提供该文件。
 
+首版接收 `fileType=Portable` 或 `fileType=Quality`；缺失或未知模式拒绝。Quality 必须包含 `Shcoef.bin`。
+
 计算通道依据 `Index.bin` 的 LOD 0 记录从 `Data.bin` 解码 XYZ，不读取 SH、环境或碰撞数据进入 ICP。
 
 显示通道在服务端转换为 Streamed SOG 资源树并保留原有 LOD，再由浏览器按相机加载；不会把供 ICP 使用的完整 LOD 0 PLY 当作 LOD 显示源。显示转换失败时只返回 `gaussian_status=failed`，已经成功生成的 XYZ 仍可预览和配准。
@@ -128,6 +130,8 @@ scene/
 ```
 
 首版目标基线为公开数据组织版本 0.0.3。入口引用的 PLY、SPZ、SOG 等块必须全部包含；块本身是多文件格式时，其递归依赖也必须完整。支持 LCC2 需要同时支持该数据集实际使用的块编码，未支持的块编码应明确拒绝。
+
+入口还必须提供正整数 `totalLevels`、非负整数 `totalSplats`，并使 `lodSplats` 长度与 `totalLevels` 一致。首版块编码白名单为 `.ply`、`.spz`、`.sog`，其他 `splatType` 明确拒绝。
 
 计算通道遍历完整 LOD 0 叶节点，只解码每块位置并去除清单定义的重复表示。网格、BVH、环境和显示提示不进入 ICP。
 

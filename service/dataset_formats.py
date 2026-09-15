@@ -131,6 +131,12 @@ def probe_zip(path: Path) -> DatasetProbe:
             version = metadata.get("version")
             if version != "5.0":
                 raise DatasetFormatError(f"Unsupported LCC version: {version}")
+            file_type = metadata.get("fileType")
+            if file_type not in {"Portable", "Quality"}:
+                raise DatasetFormatError(f"Unsupported LCC fileType: {file_type}")
+            shcoef = str(parent / "Shcoef.bin").lower()
+            if file_type == "Quality" and shcoef not in lower:
+                raise DatasetFormatError("LCC Quality dataset is missing required Shcoef.bin")
             return DatasetProbe("lcc", "zip", prefix + lcc_entries[0], version, True, True, True)
         if lcc2_entries:
             if len(lcc2_entries) != 1:
@@ -143,6 +149,16 @@ def probe_zip(path: Path) -> DatasetProbe:
             splat_files = root_metadata.get("splatFiles") if isinstance(root_metadata, dict) else None
             if not isinstance(splat_files, list) or not splat_files:
                 raise DatasetFormatError("LCC2 root.splatFiles must be a non-empty array")
+            if not isinstance(metadata.get("totalLevels"), int) or metadata["totalLevels"] <= 0:
+                raise DatasetFormatError("LCC2 totalLevels must be a positive integer")
+            if not isinstance(metadata.get("totalSplats"), int) or metadata["totalSplats"] < 0:
+                raise DatasetFormatError("LCC2 totalSplats must be a non-negative integer")
+            lod_splats = metadata.get("lodSplats")
+            if not isinstance(lod_splats, list) or len(lod_splats) != metadata["totalLevels"]:
+                raise DatasetFormatError("LCC2 lodSplats must match totalLevels")
+            splat_type = metadata.get("splatType", ".sog").lower()
+            if splat_type not in {".ply", ".spz", ".sog"}:
+                raise DatasetFormatError(f"Unsupported LCC2 splatType: {splat_type}")
             parent = PurePosixPath(lcc2_entries[0]).parent
             missing = [str(parent / name) for name in splat_files
                        if not isinstance(name, str) or str(parent / name) not in mapped]

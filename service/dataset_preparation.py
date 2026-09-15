@@ -4,6 +4,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import zipfile
+import os
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,22 @@ from service.dataset_formats import MAX_DATASET_FILES, MAX_DATASET_UNCOMPRESSED_
 
 
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _ensure_lcc_companion_names(entrypoint: Path, quality: bool) -> None:
+    expected = ["index.bin", "data.bin", *(["shcoef.bin"] if quality else [])]
+    siblings = {path.name.lower(): path for path in entrypoint.parent.iterdir() if path.is_file()}
+    for name in expected:
+        canonical = entrypoint.parent / name
+        source = siblings.get(name)
+        if canonical.is_file():
+            continue
+        if source is None:
+            raise DatasetFormatError(f"LCC dataset is missing required companion: {name}")
+        try:
+            os.link(source, canonical)
+        except OSError as error:
+            raise DatasetFormatError(f"Cannot create canonical LCC companion name: {name}") from error
 
 
 def _safe_extract(source: Path, destination: Path) -> None:
@@ -79,6 +97,9 @@ def prepare_model_dataset(session_directory: Path, model: str, source_filename: 
         entrypoint = source
     if not entrypoint.is_file():
         raise DatasetFormatError(f"Dataset entrypoint is missing: {probe.entrypoint}")
+    if probe.format == "lcc":
+        metadata = json.loads(entrypoint.read_text(encoding="utf-8"))
+        _ensure_lcc_companion_names(entrypoint, metadata.get("fileType") == "Quality")
     compute_path = session_directory / "computed" / f"model-{model}.ply"
     input_options = ["--select-lod", "0"] if probe.format in {"streamed_sog", "lcc", "lcc2"} else []
     _convert_to_ply(entrypoint, compute_path, converter, run, input_options)

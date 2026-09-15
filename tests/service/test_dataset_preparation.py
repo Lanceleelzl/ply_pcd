@@ -4,9 +4,10 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from service.dataset_formats import DatasetFormatError, DatasetProbe
-from service.dataset_preparation import prepare_model_dataset
+from service.dataset_preparation import _ensure_lcc_companion_names, prepare_model_dataset
 
 
 class DatasetPreparationTest(unittest.TestCase):
@@ -125,3 +126,25 @@ class DatasetPreparationTest(unittest.TestCase):
         )
         self.assertEqual(details["gaussian_path"], "datasets/model-a-streamed/lod-meta.json")
         self.assertTrue(details["gaussian_resource_tree"])
+
+    def test_lcc_companion_names_are_canonicalized_for_case_sensitive_hosts(self):
+        entrypoint = self.session / "input" / "meta.lcc"
+        index = entrypoint.parent / "Index.bin"
+        data = entrypoint.parent / "Data.bin"
+        entrypoint.write_text("{}", encoding="utf-8")
+        index.write_bytes(b"index")
+        data.write_bytes(b"data")
+        original_is_file = Path.is_file
+
+        def case_sensitive_is_file(path: Path) -> bool:
+            if path.name in {"index.bin", "data.bin"}:
+                return False
+            return original_is_file(path)
+
+        with patch.object(Path, "is_file", autospec=True, side_effect=case_sensitive_is_file), \
+             patch("service.dataset_preparation.os.link") as link:
+            _ensure_lcc_companion_names(entrypoint, quality=False)
+        self.assertEqual(
+            [(call.args[0].name, call.args[1].name) for call in link.call_args_list],
+            [("Index.bin", "index.bin"), ("Data.bin", "data.bin")],
+        )

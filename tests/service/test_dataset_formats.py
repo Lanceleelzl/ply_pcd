@@ -58,15 +58,26 @@ class DatasetFormatsTest(unittest.TestCase):
         self.assertTrue(result.streaming_capable)
 
     def test_probes_lcc_and_rejects_incomplete_dataset(self):
-        metadata = json.dumps({"version": "5.0"}).encode()
+        metadata = json.dumps({"version": "5.0", "fileType": "Portable"}).encode()
         valid = self.archive("scene.zip", {"meta.lcc": metadata, "Index.bin": b"i", "Data.bin": b"d"})
         self.assertEqual(probe_dataset(valid).format, "lcc")
         invalid = self.archive("broken.zip", {"meta.lcc": metadata, "Data.bin": b"d"})
         with self.assertRaisesRegex(DatasetFormatError, "index.bin"):
             probe_dataset(invalid)
 
+        quality = self.archive("quality.zip", {
+            "meta.lcc": json.dumps({"version": "5.0", "fileType": "Quality"}).encode(),
+            "Index.bin": b"i", "Data.bin": b"d",
+        })
+        with self.assertRaisesRegex(DatasetFormatError, "Shcoef.bin"):
+            probe_dataset(quality)
+
     def test_probes_lcc2_and_requires_declared_chunks(self):
-        metadata = {"version": "0.0.3", "root": {"splatFiles": ["data/3dgs/0.sog"]}}
+        metadata = {
+            "version": "0.0.3", "totalLevels": 1, "totalSplats": 1,
+            "lodSplats": [1], "splatType": ".sog",
+            "root": {"splatFiles": ["data/3dgs/0.sog"]},
+        }
         valid = self.archive("scene.zip", {
             "scene.lcc2": json.dumps(metadata).encode(), "data/3dgs/0.sog": b"chunk",
         })
@@ -74,6 +85,13 @@ class DatasetFormatsTest(unittest.TestCase):
         missing = self.archive("missing.zip", {"scene.lcc2": json.dumps(metadata).encode()})
         with self.assertRaisesRegex(DatasetFormatError, "missing referenced"):
             probe_dataset(missing)
+
+        unsupported = {**metadata, "splatType": ".ksplat"}
+        invalid_type = self.archive("invalid-type.zip", {
+            "scene.lcc2": json.dumps(unsupported).encode(), "data/3dgs/0.sog": b"chunk",
+        })
+        with self.assertRaisesRegex(DatasetFormatError, "splatType"):
+            probe_dataset(invalid_type)
 
     def test_rejects_unsafe_and_ambiguous_archives(self):
         unsafe = self.archive("unsafe.zip", {"../meta.json": b"{}"})
