@@ -36,7 +36,7 @@ class SplatTransformIntegrationTest(unittest.TestCase):
             self.assertEqual(probe_dataset(restored_compressed).format, "gaussian_ply")
             self.assertEqual(probe_dataset(restored_sog).format, "gaussian_ply")
 
-    def test_streamed_sog_directory_package_restores_lod0_xyz(self):
+    def test_streamed_sog_directory_package_restores_fixed_compute_lod_xyz(self):
         root = Path(__file__).resolve().parents[2]
         cli = root / "node_modules" / "@playcanvas" / "splat-transform" / "bin" / "cli.mjs"
         source = Path(__file__).with_name("gaussian-small-binary.ply")

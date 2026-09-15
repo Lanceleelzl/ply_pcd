@@ -61,7 +61,7 @@ scene/
 
 ## 5. Streamed SOG
 
-首版目标基线为 Streamed SOG version 1。上传目录或 ZIP 必须包含唯一的 `lod-meta.json`：
+首版目标基线为 SplatTransform Streamed SOG v1。该格式的版本由 `lodLevels`、`filenames`、`tree` 清单结构判定，真实 `lod-meta.json` 不要求顶层 `version` 字段。上传目录或 ZIP 必须包含唯一的 `lod-meta.json`：
 
 ```text
 scene/
@@ -84,14 +84,15 @@ scene/
 
 校验要求：
 
-- `lodLevels`、`counts`、`count` 一致，版本大于 1 时拒绝。
+- `lodLevels` 必须为正整数；`filenames` 必须是非空、无重复的相对路径数组。
+- 每个 `filenames` 项必须指向 SOG version 2 的块 `meta.json`，块内 WebP 引用必须完整。
 - 空间树内部节点必须有两个子节点；叶节点使用 `lods`，两者不能并存。
 - `file` 必须在 `filenames` 范围内，`offset/count` 必须落在对应 SOG 块内。
 - 同一块的引用区间不得重叠，并应覆盖块内有效 Gaussian。
 - 每个叶节点的 LOD 0 是最高精细表示；同一区域计算时只选择一个层级。
 - `environment` 若存在则必须完整；环境 Gaussian 默认仅显示，不参与 ICP。
 
-计算通道固定遍历所有叶节点的 LOD 0，按叶节点和区间顺序提取不重复 XYZ，再进入现有确定性采样。浏览器根据相机选择的层级只服务显示。
+计算通道固定选择数据集声明的最粗层，按叶节点和区间顺序提取不重复 XYZ，再进入现有确定性采样。选择结果记录为 `compute_lod`，不随相机或显示切换变化；ICP 输入仍是该层解码出的真实 XYZ。浏览器根据相机选择的层级只服务显示。这样避免先把亿级 LOD 0 展开为数 GB 中间 PLY，而后又在 ICP 中采样到默认 5 万点。
 
 没有受支持索引清单的 `lod0.ply/lod1.ply` 或 `tile_*.ply` 散装文件不作为 LOD 数据集接收。
 
@@ -113,9 +114,9 @@ scene/
 
 首版接收 `fileType=Portable` 或 `fileType=Quality`；缺失或未知模式拒绝。Quality 必须包含 `Shcoef.bin`。
 
-计算通道依据 `Index.bin` 的 LOD 0 记录从 `Data.bin` 解码 XYZ，不读取 SH、环境或碰撞数据进入 ICP。
+计算通道依据 `totalLevel - 1` 选择固定的最粗计算层，从 `Data.bin` 解码 XYZ，不读取 SH、环境或碰撞数据进入 ICP。该层选择与显示相机无关，并记录为 `compute_lod`。
 
-显示通道在服务端转换为 Streamed SOG 资源树并保留原有 LOD，再由浏览器按相机加载；不会把供 ICP 使用的完整 LOD 0 PLY 当作 LOD 显示源。显示转换失败时只返回 `gaussian_status=failed`，已经成功生成的 XYZ 仍可预览和配准。
+显示通道在服务端转换为 Streamed SOG 资源树并保留原有 LOD，再由浏览器按相机加载；不会把供 ICP 使用的计算 PLY 当作 LOD 显示源。显示转换失败时只返回 `gaussian_status=failed`，已经成功生成的 XYZ 仍可预览和配准。
 
 ## 7. LCC2
 
@@ -133,7 +134,7 @@ scene/
 
 入口还必须提供正整数 `totalLevels`、非负整数 `totalSplats`，并使 `lodSplats` 长度与 `totalLevels` 一致。首版块编码白名单为 `.ply`、`.spz`、`.sog`，其他 `splatType` 明确拒绝。
 
-计算通道遍历完整 LOD 0 叶节点，只解码每块位置并去除清单定义的重复表示。网格、BVH、环境和显示提示不进入 ICP。
+计算通道固定选择 `totalLevels - 1`，只解码该层每块位置并去除清单定义的重复表示。网格、BVH、环境和显示提示不进入 ICP；所选层记录为 `compute_lod`。
 
 显示通道同样转换为 Streamed SOG 资源树；转换失败与计算通道状态分开记录。
 

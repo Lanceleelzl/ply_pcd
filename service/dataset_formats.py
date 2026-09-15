@@ -64,6 +64,57 @@ def _json_from_zip(archive: zipfile.ZipFile, original_name: str) -> dict[str, An
     return value
 
 
+def _sog_references(metadata: dict[str, Any]) -> list[str]:
+    files: list[str] = []
+    for section in ("means", "scales", "quats", "sh0", "shN"):
+        value = metadata.get(section)
+        if isinstance(value, dict) and isinstance(value.get("files"), list):
+            files.extend(value["files"])
+    return files
+
+
+def _validate_stream_tree(tree: dict[str, Any], lod_levels: int,
+                          chunk_counts: list[int]) -> None:
+    intervals: list[list[tuple[int, int]]] = [[] for _ in chunk_counts]
+
+    def visit(node: Any) -> None:
+        if not isinstance(node, dict) or not isinstance(node.get("bound"), dict):
+            raise DatasetFormatError("Streamed SOG tree nodes must contain a bound object")
+        children = node.get("children")
+        lods = node.get("lods")
+        if children is not None:
+            if lods is not None or not isinstance(children, list) or len(children) != 2:
+                raise DatasetFormatError("Streamed SOG branch nodes must contain exactly two children")
+            for child in children:
+                visit(child)
+            return
+        if not isinstance(lods, dict) or not lods:
+            raise DatasetFormatError("Streamed SOG leaf nodes must contain lods")
+        for level, reference in lods.items():
+            try:
+                lod = int(level)
+            except (TypeError, ValueError) as error:
+                raise DatasetFormatError(f"Invalid Streamed SOG LOD level: {level}") from error
+            if not 0 <= lod < lod_levels or not isinstance(reference, dict):
+                raise DatasetFormatError(f"Invalid Streamed SOG LOD reference: {level}")
+            file_index = reference.get("file")
+            offset = reference.get("offset")
+            count = reference.get("count")
+            if (not isinstance(file_index, int) or not 0 <= file_index < len(chunk_counts)
+                    or not isinstance(offset, int) or offset < 0
+                    or not isinstance(count, int) or count <= 0
+                    or offset + count > chunk_counts[file_index]):
+                raise DatasetFormatError(f"Streamed SOG LOD range is out of bounds: {reference}")
+            intervals[file_index].append((offset, offset + count))
+
+    visit(tree)
+    for index, ranges in enumerate(intervals):
+        ordered = sorted(ranges)
+        if (not ordered or ordered[0][0] != 0 or ordered[-1][1] != chunk_counts[index]
+                or any(left[1] != right[0] for left, right in zip(ordered, ordered[1:]))):
+            raise DatasetFormatError(f"Streamed SOG chunk ranges must cover file {index} exactly once")
+
+
 def probe_zip(path: Path) -> DatasetProbe:
     try:
         archive = zipfile.ZipFile(path)
@@ -105,19 +156,43 @@ def probe_zip(path: Path) -> DatasetProbe:
         prefix = f"{root}/" if root else ""
         if lod_entries:
             metadata = _json_from_zip(archive, mapped[lod_entries[0]])
-            version = metadata.get("version")
-            if version != 1:
-                raise DatasetFormatError(f"Unsupported Streamed SOG version: {version}")
+            lod_levels = metadata.get("lodLevels")
+            if not isinstance(lod_levels, int) or lod_levels <= 0:
+                raise DatasetFormatError("Streamed SOG lodLevels must be a positive integer")
             filenames = metadata.get("filenames")
-            if not isinstance(filenames, list) or not filenames:
-                raise DatasetFormatError("Streamed SOG filenames must be a non-empty array")
+            if (not isinstance(filenames, list) or not filenames
+                    or any(not isinstance(name, str) for name in filenames)):
+                raise DatasetFormatError("Streamed SOG filenames must be a non-empty string array")
+            if len(set(filenames)) != len(filenames):
+                raise DatasetFormatError("Streamed SOG filenames must be unique")
+            if not isinstance(metadata.get("tree"), dict):
+                raise DatasetFormatError("Streamed SOG tree must be an object")
             parent = PurePosixPath(lod_entries[0]).parent
-            referenced = [str(parent / name) for name in filenames if isinstance(name, str)]
-            missing = [name for name in filenames if not isinstance(name, str)]
-            missing.extend(name for name in referenced if name not in mapped)
+            referenced = [str(parent / _safe_member(name)) for name in filenames]
+            missing = [name for name in referenced if name not in mapped]
+            chunk_counts: list[int] = []
+            for relative_name, archive_name in zip(referenced, filenames, strict=True):
+                if relative_name not in mapped:
+                    continue
+                chunk = _json_from_zip(archive, mapped[relative_name])
+                if chunk.get("version") != 2:
+                    raise DatasetFormatError(f"Unsupported streamed SOG chunk version: {chunk.get('version')}")
+                count = chunk.get("count")
+                if not isinstance(count, int) or count < 0:
+                    raise DatasetFormatError(f"Invalid streamed SOG chunk count: {archive_name}")
+                chunk_counts.append(count)
+                chunk_parent = PurePosixPath(relative_name).parent
+                for name in _sog_references(chunk):
+                    if not isinstance(name, str):
+                        missing.append(f"{archive_name}:<invalid reference>")
+                        continue
+                    resource = str(chunk_parent / _safe_member(name))
+                    if resource not in mapped:
+                        missing.append(resource)
             if missing:
                 raise DatasetFormatError(f"Streamed SOG is missing referenced entries: {missing}")
-            return DatasetProbe("streamed_sog", "zip", prefix + lod_entries[0], version, True, True, True)
+            _validate_stream_tree(metadata["tree"], lod_levels, chunk_counts)
+            return DatasetProbe("streamed_sog", "zip", prefix + lod_entries[0], 1, True, True, True)
         if lcc_entries:
             if len(lcc_entries) != 1:
                 raise DatasetFormatError("LCC dataset must contain exactly one .lcc entrypoint")
@@ -170,11 +245,7 @@ def probe_zip(path: Path) -> DatasetProbe:
             version = metadata.get("version")
             if version != 2:
                 raise DatasetFormatError(f"Unsupported SOG version: {version}")
-            files: list[str] = []
-            for section in ("means", "scales", "quats", "sh0", "shN"):
-                value = metadata.get(section)
-                if isinstance(value, dict) and isinstance(value.get("files"), list):
-                    files.extend(value["files"])
+            files = _sog_references(metadata)
             parent = PurePosixPath(meta_entries[0]).parent
             required = [str(parent / name) for name in files if isinstance(name, str)]
             missing = [name for name in required if name not in mapped]

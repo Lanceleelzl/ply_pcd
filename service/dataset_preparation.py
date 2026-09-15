@@ -78,6 +78,17 @@ def _convert_to_streamed_sog(entrypoint: Path, destination: Path, converter: lis
     return None
 
 
+def _compute_lod(entrypoint: Path, format_name: str) -> int | None:
+    if format_name not in {"streamed_sog", "lcc", "lcc2"}:
+        return None
+    metadata = json.loads(entrypoint.read_text(encoding="utf-8-sig"))
+    count_key = {"streamed_sog": "lodLevels", "lcc": "totalLevel", "lcc2": "totalLevels"}[format_name]
+    count = metadata.get(count_key)
+    if not isinstance(count, int) or count <= 0:
+        raise DatasetFormatError(f"Dataset {count_key} must be a positive integer")
+    return count - 1
+
+
 def prepare_model_dataset(session_directory: Path, model: str, source_filename: str,
                           probe: DatasetProbe, converter: list[str], *,
                           run: RunCommand = subprocess.run) -> tuple[Path, dict[str, Any]]:
@@ -101,7 +112,8 @@ def prepare_model_dataset(session_directory: Path, model: str, source_filename: 
         metadata = json.loads(entrypoint.read_text(encoding="utf-8"))
         _ensure_lcc_companion_names(entrypoint, metadata.get("fileType") == "Quality")
     compute_path = session_directory / "computed" / f"model-{model}.ply"
-    input_options = ["--select-lod", "0"] if probe.format in {"streamed_sog", "lcc", "lcc2"} else []
+    compute_lod = _compute_lod(entrypoint, probe.format)
+    input_options = ["--select-lod", str(compute_lod)] if compute_lod is not None else []
     _convert_to_ply(entrypoint, compute_path, converter, run, input_options)
     if probe.format in {"sog", "streamed_sog"}:
         gaussian_path = entrypoint
@@ -120,6 +132,8 @@ def prepare_model_dataset(session_directory: Path, model: str, source_filename: 
         if gaussian_path else None,
         "dataset_entrypoint": str(entrypoint.relative_to(session_directory)).replace("\\", "/"),
     }
+    if compute_lod is not None:
+        prepared["compute_lod"] = compute_lod
     if probe.format in {"lcc", "lcc2"}:
         prepared["gaussian_resource_tree"] = True
         if gaussian_error:

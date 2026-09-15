@@ -49,7 +49,7 @@ class DatasetPreparationTest(unittest.TestCase):
     def test_zip_is_extracted_and_entrypoint_is_converted(self):
         source = self.session / "input" / "model-b.zip"
         with zipfile.ZipFile(source, "w") as archive:
-            archive.writestr("scene/lod-meta.json", json.dumps({"version": 1}))
+            archive.writestr("scene/lod-meta.json", json.dumps({"lodLevels": 4}))
         observed = []
 
         def run(command, **kwargs):
@@ -67,8 +67,9 @@ class DatasetPreparationTest(unittest.TestCase):
             Path(observed[0][-2]),
             self.session / "datasets" / "model-b" / "scene" / "lod-meta.json",
         )
-        self.assertEqual(observed[0][3:5], ["--select-lod", "0"])
+        self.assertEqual(observed[0][3:5], ["--select-lod", "3"])
         self.assertEqual(details["gaussian_path"], "datasets/model-b/scene/lod-meta.json")
+        self.assertEqual(details["compute_lod"], 3)
 
     def test_conversion_failure_is_explicit(self):
         source = self.session / "input" / "model-a.sog"
@@ -83,7 +84,7 @@ class DatasetPreparationTest(unittest.TestCase):
     def test_lcc_keeps_xyz_ready_when_streamed_display_conversion_fails(self):
         source = self.session / "input" / "model-a.zip"
         with zipfile.ZipFile(source, "w") as archive:
-            archive.writestr("scene/meta.lcc", "{}")
+            archive.writestr("scene/meta.lcc", json.dumps({"totalLevel": 1}))
             archive.writestr("scene/Index.bin", b"index")
             archive.writestr("scene/Data.bin", b"data")
         calls = 0
@@ -109,7 +110,7 @@ class DatasetPreparationTest(unittest.TestCase):
     def test_lcc_display_is_converted_to_streamed_sog_tree(self):
         source = self.session / "input" / "model-a.zip"
         with zipfile.ZipFile(source, "w") as archive:
-            archive.writestr("meta.lcc", "{}")
+            archive.writestr("meta.lcc", json.dumps({"totalLevel": 1}))
             archive.writestr("Index.bin", b"index")
             archive.writestr("Data.bin", b"data")
 

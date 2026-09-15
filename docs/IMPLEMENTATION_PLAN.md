@@ -9,11 +9,11 @@
 1. 建立内容探测、数据集清单、ZIP／目录安全导入和独立 XYZ／Gaussian 能力状态。
 2. 扩展 PLY 族，保持普通 PLY 基线，并支持 Gaussian PLY 与 PlayCanvas compressed PLY 的 XYZ 提取和按需显示。
 3. 支持 bundled／unbundled SOG，以位置解码生成 ICP 所需 XYZ，以原始资源提供 Gaussian 显示。
-4. 支持 Streamed SOG v1，服务端固定从完整 LOD 0 提取 XYZ，浏览器独立执行相机驱动的流式显示。
-5. 以真实版本样本建立 LCC／LCC2 白名单，支持 LOD 0 XYZ 提取，并评估原生显示和转换为 Streamed SOG 两条路径。
+4. 支持 Streamed SOG v1，服务端从元数据声明的最粗层提取固定 XYZ 计算集，浏览器独立执行相机驱动的流式显示。
+5. 以真实版本样本建立 LCC／LCC2 白名单，支持固定计算 LOD 的 XYZ 提取，并将显示转换为 Streamed SOG。
 6. 完成格式单元测试、真实样本点数／包围盒、混合格式 ICP、Windows、Docker、资源上限和浏览器生命周期验收。
 
-不得以高斯渲染数据替代点云计算输入，不得让显示 LOD 或相机改变粗配准和 ICP 的 XYZ 集合。尚无真实样本或版本证据的格式只能记录为待验证，不能标记完成。
+不得以颜色、SH、尺度或旋转等高斯渲染属性替代点云计算输入，不得让显示 LOD 或相机改变粗配准和 ICP 的 XYZ 集合。计算 LOD 必须由数据集元数据确定并记录。尚无真实样本或版本证据的格式只能记录为待验证，不能标记完成。
 
 # Gaussian PLY／定位参考点云坐标配准服务实施方案
 

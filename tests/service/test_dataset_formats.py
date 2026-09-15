@@ -47,15 +47,26 @@ class DatasetFormatsTest(unittest.TestCase):
             probe_dataset(broken)
 
     def test_probes_streamed_sog_with_common_root(self):
-        lod = {"version": 1, "filenames": ["0_0/meta.json"]}
+        lod = {
+            "lodLevels": 1, "filenames": ["0_0/meta.json"],
+            "tree": {"bound": {}, "lods": {"0": {"file": 0, "offset": 0, "count": 1}}},
+        }
         path = self.archive("scene.zip", {
             "scene/lod-meta.json": json.dumps(lod).encode(),
-            "scene/0_0/meta.json": json.dumps({"version": 2}).encode(),
+            "scene/0_0/meta.json": json.dumps({"version": 2, "count": 1, "means": {"files": ["means.webp"]}}).encode(),
+            "scene/0_0/means.webp": b"means",
         })
         result = probe_dataset(path)
         self.assertEqual(result.format, "streamed_sog")
         self.assertEqual(result.entrypoint, "scene/lod-meta.json")
         self.assertTrue(result.streaming_capable)
+
+        broken = self.archive("broken-stream.zip", {
+            "lod-meta.json": json.dumps(lod).encode(),
+            "0_0/meta.json": json.dumps({"version": 2, "count": 1, "means": {"files": ["missing.webp"]}}).encode(),
+        })
+        with self.assertRaisesRegex(DatasetFormatError, "missing referenced"):
+            probe_dataset(broken)
 
     def test_probes_lcc_and_rejects_incomplete_dataset(self):
         metadata = json.dumps({"version": "5.0", "fileType": "Portable"}).encode()

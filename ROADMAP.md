@@ -9,7 +9,7 @@
 
 ## 进行中
 
-- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、LOD 0 计算转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。当前只剩真实 LCC／LCC2 场景包验收与 Docker Linux 验证；这些项目通过前不标记完整兼容。
+- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 解码与 C++ 点云读取验收；当前只剩 Docker Linux 验证。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
 
@@ -20,6 +20,8 @@
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-16（阶段 13 真实数据验收）：使用用户提供的 987,836,547 字节 Streamed SOG、LCC 5.0 Portable 和 LCC2 0.0.3 实测。修正 Streamed SOG 探测：真实 `lod-meta.json` 无顶层 `version`，现按 `lodLevels`／`filenames`／`tree` 识别，并递归校验二叉树、块 SOG v2、WebP 引用以及每个块区间无缺口且不重叠。计算转换改为选择元数据声明的最粗固定层，避免先展开 1.0～1.2 亿点的 LOD 0；该选择独立于 Gaussian 显示和相机，并记录 `compute_lod`。SplatTransform 3.4.2 分别生成 4,409,286 点、1,517,478 点、448,957 点 PLY，Windows `registration_worker inspect-ply` 全部确认无无效点并返回有效包围盒。服务回归 94／94、可由 Node 直接执行的 Web 回归 109／109、类型检查、Web 构建和 Windows CTest 1／1 通过；`coordinate-query-views.test.ts` 因既有无扩展名导入不能由 Node ESM 直接加载，仍由类型检查和 Vite 构建覆盖。用户提供的 LCC 路径实际目录名为 `LCC_Results`，已按定位后的真实路径完成验收。
 
 - 2026-09-16（阶段 13 文档与 OpenAPI 一致性）：README 已更新为普通／Gaussian／compressed PLY、PCD、LAS／LAZ、SOG、Streamed SOG、LCC、LCC2，以及单文件／ZIP／完整目录三种上传形态；API 文档明确 A／B 各自在单文件字段与重复目录字段之间二选一。直接读取当前 FastAPI OpenAPI，确认 `model_a`／`model_b` 为可空 binary，`model_a_files`／`model_b_files` 为可空 binary array，运行时负责条件必填校验。实施方案移除“仅 Gaussian PLY 可切换”的过期表述，路线图进行中事项收敛为真实 LCC／LCC2 样本和 Docker Linux 两项外部验收。
 
