@@ -41,7 +41,7 @@ pnpm install
 pnpm run dev
 ```
 
-开发模式浏览器打开 `http://localhost:5273`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5273/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las`、`.laz`、`.sog`、数据集 ZIP 或包含 `meta.json`／`lod-meta.json`／`.lcc`／`.lcc2` 入口的完整目录。上传结构和版本白名单见 [docs/DATA_FORMAT_COMPATIBILITY.md](docs/DATA_FORMAT_COMPATIBILITY.md) 。
+开发模式浏览器打开 `http://localhost:5273`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5273/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las`、`.laz`、`.sog`、数据集 ZIP 或包含 `meta.json`／`lod-meta.json`／`.lcc`／`.lcc2` 入口的完整目录。上传结构和版本白名单见 [数据格式兼容规范](docs/DATA_FORMAT_COMPATIBILITY.md) ，真实样本与跨平台结果见 [阶段 13 验收记录](docs/STAGE13_ACCEPTANCE.md) 。
 
 如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 

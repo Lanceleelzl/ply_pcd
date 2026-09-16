@@ -4,7 +4,7 @@
 
 ```text
 阶段 13：数据格式扩展
-状态：方案已确认，上传契约已固化，正在实施统一数据集接入
+状态：已完成，格式接入、真实样本、Windows、Docker Linux 和独立 Chrome 验收通过
 ```
 
 ## 进行中
@@ -20,6 +20,8 @@
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-16（阶段 13 交付收口）：新增 `docs/STAGE13_ACCEPTANCE.md`，集中记录格式白名单、单文件／ZIP／目录 multipart 契约、固定计算 LOD 与 Gaussian 显示隔离、真实 Streamed SOG／LCC／LCC2 点数、Windows／Docker Linux 一致性、容器 ICP 和独立 Chrome 结果。明确目录上传的内部 ZIP、解压目录、计算 PLY 和显示转换资源会同时占用峰值磁盘，部署容量必须按总量规划。阶段顶部状态更新为已完成。
 
 - 2026-09-16（阶段 13 Docker Linux 验收）：用户手动恢复 Docker Desktop 后确认 `desktop-linux` 为 Linux／amd64，当前分支镜像 `ply-pcd-registration:dev` 完整构建成功并由 compose 启动在 `127.0.0.1:8865`，首页与 OpenAPI 均返回 200。将三份真实数据以只读卷挂载到临时 Linux 容器，SplatTransform 3.4.2 按固定计算 LOD 分别解码 Streamed SOG 4,409,286 点、LCC 1,517,478 点、LCC2 448,957 点；镜像内 `registration_worker inspect-ply` 确认三者无效点均为 0，点数和包围盒与 Windows 结果一致。容器 API 完成 A／B 双角色业务坐标 ICP，RMS 分别为 `7.41627e-07` 和 `5.04159e-07`。独立 Playwright Chrome 打开容器首页，页面显示“服务正常”，文件／ZIP和数据集目录入口存在，控制台 0 error。compose 服务保持运行。
 
