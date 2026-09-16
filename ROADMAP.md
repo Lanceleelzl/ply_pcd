@@ -9,6 +9,10 @@
 
 ## 进行中
 
+- 2026-09-16：对 `source` 目录实际样本做兼容性复核，发现两个独立的 SPZ 单文件此前未纳入探测器；已补充 `spz` 单文件探测和独立 Gaussian 计算／显示通道。真实 `point_cloud_5.spz` 与 `point_cloud_5_SPZ3.spz` 均由 SplatTransform 3.4.2 转换为 3,059,456 点 PLY，无效点 0，包围盒一致；服务回归 96／96 通过。本轮临时输出已清理，未改动 `source`。
+
+- 2026-09-16：按用户要求释放全部历史任务数据、测试上传、当天格式验收副本及历史 Docker／阶段验证运行目录。清理前 `runtime` 约 13.54 GB，清理后仅保留可执行 Worker 所需的 `runtime/local`，约 1.17 MB；本地 API 和 Web 开发服务已停止，后续启动服务会重新创建任务与历史目录。
+
 - 2026-09-16：阶段 13 收口后的上传入口细化已完成。模型 A／B 的“选择文件／ZIP”和“选择数据集目录”按钮会显示当前选择态；目录入口补充 LCC／LCC2 必需结构提示，保留相对路径上传契约。`pnpm run typecheck:web`、`pnpm run build:web`、`pnpm run test:service`（94／94）及 `git diff --check` 通过；构建仅保留既有 PlayCanvas Worker 外部化和大包提示。
 
 - 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 与 Docker Linux 解码、C++ 点云读取及容器服务验收；数据格式扩展的既定开发和验证项已完成。

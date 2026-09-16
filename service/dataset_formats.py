@@ -286,6 +286,8 @@ def probe_dataset(path: Path) -> DatasetProbe:
                             result.gaussian_capable, result.streaming_capable)
     if suffix == ".ply":
         return _ply_probe(path)
+    if suffix == ".spz":
+        return DatasetProbe("spz", "file", path.name, None, True, True, False)
     if suffix in {".pcd", ".las", ".laz"}:
         return DatasetProbe(suffix[1:], "file", path.name, None, True, False, False)
     raise DatasetFormatError(f"Unsupported dataset extension: {suffix or '<none>'}")

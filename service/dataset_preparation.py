@@ -100,6 +100,14 @@ def prepare_model_dataset(session_directory: Path, model: str, source_filename: 
             if probe.gaussian_capable else None,
         }
 
+    if probe.format == "spz":
+        compute_path = session_directory / "computed" / f"model-{model}.ply"
+        _convert_to_ply(source, compute_path, converter, run)
+        return compute_path, {
+            "compute_path": str(compute_path.relative_to(session_directory)).replace("\\", "/"),
+            "gaussian_path": str(source.relative_to(session_directory)).replace("\\", "/"),
+        }
+
     workspace = session_directory / "datasets" / f"model-{model}"
     if probe.container == "zip":
         _safe_extract(source, workspace)

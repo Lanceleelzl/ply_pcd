@@ -37,6 +37,13 @@ class DatasetFormatsTest(unittest.TestCase):
         self.assertFalse(probe_dataset(plain).gaussian_capable)
         self.assertEqual(probe_dataset(compressed).format, "compressed_ply")
 
+    def test_probes_spz_as_standalone_gaussian_file(self):
+        path = self.write("model.spz", b"not decoded here")
+        result = probe_dataset(path)
+        self.assertEqual((result.format, result.container), ("spz", "file"))
+        self.assertTrue(result.xyz_capable)
+        self.assertTrue(result.gaussian_capable)
+
     def test_probes_bundled_sog_and_checks_references(self):
         metadata = {"version": 2, "means": {"files": ["means.webp"]}, "scales": {"files": ["scales.webp"]}}
         path = self.archive("scene.sog", {"meta.json": json.dumps(metadata).encode(), "means.webp": b"m", "scales.webp": b"s"})

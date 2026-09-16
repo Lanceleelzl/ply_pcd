@@ -46,6 +46,23 @@ class DatasetPreparationTest(unittest.TestCase):
         self.assertEqual(details["compute_path"], "computed/model-a.ply")
         self.assertEqual(details["gaussian_path"], "input/model-a.sog")
 
+    def test_spz_is_converted_for_compute_and_retained_for_display(self):
+        source = self.session / "input" / "model-a.spz"
+        source.write_bytes(b"spz")
+
+        def run(command, **kwargs):
+            Path(command[-1]).write_bytes(b"ply")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        path, details = prepare_model_dataset(
+            self.session, "a", source.name,
+            DatasetProbe("spz", "file", source.name, None, True, True, False),
+            ["node", "cli.mjs"], run=run,
+        )
+        self.assertEqual(path.read_bytes(), b"ply")
+        self.assertEqual(details["compute_path"], "computed/model-a.ply")
+        self.assertEqual(details["gaussian_path"], "input/model-a.spz")
+
     def test_zip_is_extracted_and_entrypoint_is_converted(self):
         source = self.session / "input" / "model-b.zip"
         with zipfile.ZipFile(source, "w") as archive:

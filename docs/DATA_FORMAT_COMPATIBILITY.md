@@ -16,7 +16,7 @@ ICP 始终以计算通道生成的 XYZ 点云为依据。Gaussian 属性、相�
 
 支持三种上传形态：
 
-1. 单文件：PLY、PCD、LAS、LAZ、bundled SOG。
+1. 单文件：PLY、PCD、LAS、LAZ、bundled SOG、SPZ。
 2. 完整目录：unbundled SOG、Streamed SOG、LCC、LCC2。
 3. ZIP 数据包：上述完整目录的 ZIP 表示，可直接包含入口，也可仅多一层共同根目录。
 
@@ -36,6 +36,7 @@ Web 首页为模型 A／B 分别提供“选择文件／ZIP”和“选择数据
 | PCD | `*.pcd` | 按现有受支持编码解析 XYZ | 不可用 |
 | LAS／LAZ | `*.las`、`*.laz` | 先以 float64 应用文件头 scale／offset，再生成局部 XYZ | 不可用 |
 | bundled SOG | `*.sog` | 从 SOG 位置数据解码 XYZ | 可用 |
+| SPZ v2–4 | `*.spz` | 解码为独立 XYZ PLY | 原文件 |
 
 格式必须按内容探测，扩展名仅用于候选筛选。普通二进制 PLY、compressed PLY 和 ZIP 压缩包是不同概念。
 

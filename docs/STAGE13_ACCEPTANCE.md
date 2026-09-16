@@ -2,7 +2,7 @@
 
 ## 1．结论
 
-阶段 13 已完成普通 PLY、Gaussian PLY、PlayCanvas compressed PLY、PCD、LAS／LAZ、SOG、Streamed SOG、LCC 5.0 和 LCC2 0.0.3 的接入、计算通道、显示通道及 Windows／Docker Linux 验收。
+阶段 13 已完成普通 PLY、Gaussian PLY、PlayCanvas compressed PLY、PCD、LAS／LAZ、SOG、SPZ、Streamed SOG、LCC 5.0 和 LCC2 0.0.3 的接入、计算通道、显示通道及 Windows／Docker Linux 验收。
 
 所有 Gaussian 格式只提供显示资源。粗配准和 ICP 始终读取独立解析出的 XYZ 点云，不读取颜色、SH、尺度、旋转、环境、网格或 BVH 数据参与计算。显示模式、相机和浏览器选择的 LOD 不会改变计算点集。
 
@@ -26,6 +26,7 @@
 | compressed PLY | 单个 `.ply` | 解码为 PLY | 原文件 | 否 |
 | PCD／LAS／LAZ | 单文件 | 原文件 | 不提供 | 否 |
 | bundled SOG v2 | 单个 `.sog` | 解码为 PLY | 原文件 | 否 |
+| SPZ v2–4 | 单个 `.spz` | 解码为 PLY | 原文件 | 否 |
 | Streamed SOG v1 | `lod-meta.json` | 固定最粗 LOD 解码为 PLY | 原资源树 | 是 |
 | LCC 5.0 | 一个 `.lcc`＋伴随二进制 | 固定 `totalLevel - 1` 解码为 PLY | 转换为 Streamed SOG | 是 |
 | LCC2 0.0.3 | 一个 `.lcc2`＋引用块 | 固定 `totalLevels - 1` 解码为 PLY | 转换为 Streamed SOG | 是 |
