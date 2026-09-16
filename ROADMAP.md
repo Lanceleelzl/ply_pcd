@@ -9,7 +9,7 @@
 
 ## 进行中
 
-- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 解码与 C++ 点云读取验收；当前只剩 Docker Linux 验证。
+- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 与 Docker Linux 解码、C++ 点云读取及容器服务验收；数据格式扩展的既定开发和验证项已完成。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
 
@@ -20,6 +20,8 @@
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-16（阶段 13 Docker Linux 验收）：用户手动恢复 Docker Desktop 后确认 `desktop-linux` 为 Linux／amd64，当前分支镜像 `ply-pcd-registration:dev` 完整构建成功并由 compose 启动在 `127.0.0.1:8865`，首页与 OpenAPI 均返回 200。将三份真实数据以只读卷挂载到临时 Linux 容器，SplatTransform 3.4.2 按固定计算 LOD 分别解码 Streamed SOG 4,409,286 点、LCC 1,517,478 点、LCC2 448,957 点；镜像内 `registration_worker inspect-ply` 确认三者无效点均为 0，点数和包围盒与 Windows 结果一致。容器 API 完成 A／B 双角色业务坐标 ICP，RMS 分别为 `7.41627e-07` 和 `5.04159e-07`。独立 Playwright Chrome 打开容器首页，页面显示“服务正常”，文件／ZIP和数据集目录入口存在，控制台 0 error。compose 服务保持运行。
 
 - 2026-09-16（阶段 13 真实数据验收）：使用用户提供的 987,836,547 字节 Streamed SOG、LCC 5.0 Portable 和 LCC2 0.0.3 实测。修正 Streamed SOG 探测：真实 `lod-meta.json` 无顶层 `version`，现按 `lodLevels`／`filenames`／`tree` 识别，并递归校验二叉树、块 SOG v2、WebP 引用以及每个块区间无缺口且不重叠。计算转换改为选择元数据声明的最粗固定层，避免先展开 1.0～1.2 亿点的 LOD 0；该选择独立于 Gaussian 显示和相机，并记录 `compute_lod`。SplatTransform 3.4.2 分别生成 4,409,286 点、1,517,478 点、448,957 点 PLY，Windows `registration_worker inspect-ply` 全部确认无无效点并返回有效包围盒。服务回归 94／94、可由 Node 直接执行的 Web 回归 109／109、类型检查、Web 构建和 Windows CTest 1／1 通过；`coordinate-query-views.test.ts` 因既有无扩展名导入不能由 Node ESM 直接加载，仍由类型检查和 Vite 构建覆盖。用户提供的 LCC 路径实际目录名为 `LCC_Results`，已按定位后的真实路径完成验收。
 
