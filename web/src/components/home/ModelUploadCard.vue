@@ -31,13 +31,13 @@ function choose(event: Event, shape: 'file' | 'directory'): void {
       <span class="model-letter">{{ model.toUpperCase() }}</span>
       <div>
         <h3>模型 {{ model.toUpperCase() }}</h3>
-        <p>PLY、PCD、LAS、LAZ、SOG 或数据集 ZIP</p>
+        <p>PLY、PCD、LAS、LAZ、SOG、SPZ 或数据集 ZIP</p>
       </div>
     </div>
     <div class="file-dropzone">
       <div class="file-choices">
         <label class="file-action" :class="{ active: file?.shape === 'file' }">
-          <input type="file" accept=".ply,.pcd,.las,.laz,.sog,.zip" @change="choose($event, 'file')">
+          <input type="file" accept=".ply,.pcd,.las,.laz,.sog,.spz,.zip" @change="choose($event, 'file')">
           选择文件／ZIP
         </label>
         <label class="file-action" :class="{ active: file?.shape === 'directory' }">

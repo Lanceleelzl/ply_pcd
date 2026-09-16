@@ -40,7 +40,7 @@ async function submit(): Promise<void> {
     <div class="home-content">
       <section class="hero-copy">
         <h1>建立两个世界之间的转换关系</h1>
-        <p>支持常见点云和高斯模型文件，也支持包含多个文件的数据集。上传后系统会自动准备配准所需的数据。</p>
+        <p>单文件支持 <code>PLY、PCD、LAS、LAZ、SOG、SPZ</code>；多文件数据集支持 <code>Streamed SOG（LOD 流式数据）、LCC、LCC2</code>，请选择完整目录或 ZIP。上传后系统会自动准备配准数据。</p>
       </section>
       <section class="task-composer">
         <header class="section-heading"><div><h2>新建配准任务</h2></div></header>
