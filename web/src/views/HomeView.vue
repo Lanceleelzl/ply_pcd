@@ -40,7 +40,7 @@ async function submit(): Promise<void> {
     <div class="home-content">
       <section class="hero-copy">
         <h1>建立两个世界之间的转换关系</h1>
-        <p>支持点云、Gaussian 单文件及带清单的数据集 ZIP，ICP 统一使用解析后的 XYZ。</p>
+        <p>支持常见点云和高斯模型文件，也支持包含多个文件的数据集。上传后系统会自动准备配准所需的数据。</p>
       </section>
       <section class="task-composer">
         <header class="section-heading"><div><h2>新建配准任务</h2></div></header>
