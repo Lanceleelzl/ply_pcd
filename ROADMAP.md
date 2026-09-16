@@ -9,6 +9,8 @@
 
 ## 进行中
 
+- 2026-09-16：阶段 13 收口后的上传入口细化已完成。模型 A／B 的“选择文件／ZIP”和“选择数据集目录”按钮会显示当前选择态；目录入口补充 LCC／LCC2 必需结构提示，保留相对路径上传契约。`pnpm run typecheck:web`、`pnpm run build:web`、`pnpm run test:service`（94／94）及 `git diff --check` 通过；构建仅保留既有 PlayCanvas Worker 外部化和大包提示。
+
 - 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 与 Docker Linux 解码、C++ 点云读取及容器服务验收；数据格式扩展的既定开发和验证项已完成。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
