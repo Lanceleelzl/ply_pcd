@@ -9,6 +9,11 @@ from service.object_storage import ObjectStorageSettings
 
 RUNTIME_ROOT = Path(os.getenv("REGISTRATION_RUNTIME_ROOT", "/data/runtime")).resolve()
 WORKER_PATH = os.getenv("REGISTRATION_WORKER_PATH", "/usr/local/bin/registration_worker")
+NODE_PATH = os.getenv("REGISTRATION_NODE_PATH", "node")
+SPLAT_TRANSFORM_PATH = os.getenv(
+    "REGISTRATION_SPLAT_TRANSFORM_PATH",
+    str(Path(__file__).resolve().parents[1] / "node_modules" / "@playcanvas" / "splat-transform" / "bin" / "cli.mjs"),
+)
 WORKER_TIMEOUT_SECONDS = int(os.getenv("REGISTRATION_WORKER_TIMEOUT_SECONDS", "1800"))
 MAX_CONCURRENT_JOBS = int(os.getenv("REGISTRATION_MAX_CONCURRENT_JOBS", "1"))
 RESULT_RETENTION_HOURS = int(os.getenv("REGISTRATION_RESULT_RETENTION_HOURS", "168"))

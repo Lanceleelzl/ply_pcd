@@ -96,14 +96,14 @@ export function renderHome(root: HTMLElement): void {
   const workspaceId = getWorkspaceId();
   root.innerHTML = `
     <main class="home">
-      <header class="home-header"><h1>通用点云双向配准</h1><p class="hint">模型 A、B 均支持 PLY、PCD、LAS、LAZ；业务矩阵方向与 ICP 移动模型可以独立选择。</p></header>
+      <header class="home-header"><h1>通用点云双向配准</h1><p class="hint">模型 A、B 支持 PLY、PCD、LAS、LAZ、SOG 与数据集 ZIP；ICP 统一使用解析后的 XYZ。</p></header>
       <div class="home-layout">
         <section class="card upload-card">
           <h2>新建配准任务</h2>
           <form id="upload-form">
-            <label>模型 A<input name="model_a" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+            <label>模型 A<input name="model_a" type="file" accept=".ply,.pcd,.las,.laz,.sog,.zip" required></label>
             ${transformEditor('a')}
-            <label>模型 B<input name="model_b" type="file" accept=".ply,.pcd,.las,.laz" required></label>
+            <label>模型 B<input name="model_b" type="file" accept=".ply,.pcd,.las,.laz,.sog,.zip" required></label>
             ${transformEditor('b')}
             <label>最终业务矩阵方向<select name="output_direction"><option value="a_to_b">模型 A → 模型 B</option><option value="b_to_a">模型 B → 模型 A</option></select></label>
             <label>ICP 移动模型<select name="moving_model"><option value="auto">自动推荐</option><option value="a">移动模型 A</option><option value="b">移动模型 B</option></select></label>

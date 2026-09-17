@@ -71,6 +71,12 @@ def cleanup_completed_jobs(
                     continue
             except HTTPException:
                 pass
+
+        # Derived preview/conversion data is reproducible from the retained input.
+        # Remove it as soon as no job is running so repeated sessions do not grow
+        # the runtime directory indefinitely.
+        for directory_name in ("preview", "datasets", "computed"):
+            shutil.rmtree(session_directory / directory_name, ignore_errors=True)
         source_expires = status.get("source_expires_at_unix")
         if (
             status.get("api_version") == "v2"

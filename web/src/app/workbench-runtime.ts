@@ -8,6 +8,7 @@ import type { InspectorState } from '../views/workbench/inspector-state';
 import type { WorkbenchPanels } from '../views/workbench/workbench-panels';
 import { createViewportToolbar } from '../views/workbench/viewport-toolbar';
 import { reactive, shallowReactive, watch } from 'vue';
+import { apiFetch } from '../api/api-auth';
 import * as pc from 'playcanvas';
 import { RegistrationEngine } from '../engine/core/RegistrationEngine';
 import { mountViewControls } from '../views/workbench/view-controls';
@@ -42,7 +43,7 @@ import { createWorkbenchCoarseRegistration } from './workbench-coarse-registrati
 export interface WorkbenchHost {
   signal: AbortSignal;
   navigateHome: () => void;
-  onStatus: (status: string) => void;
+  onStatus: (status: string, session?: import('../api/contracts').RegistrationSession) => void;
   mountLayout: (options: WorkbenchLayoutOptions) => Promise<void>;
 }
 
@@ -54,7 +55,7 @@ export async function initializeWorkbench(
   host: WorkbenchHost,
 ): Promise<void> {
   const loaded = await loadWorkbenchSession(sessionId, signal, host.onStatus);
-  const { session } = loaded;
+  const session = reactive(loaded.session);
   const cloudA = loaded.previews.a;
   const cloudB = loaded.previews.b;
   const context = createWorkbenchSessionContext(session);
@@ -154,6 +155,7 @@ export async function initializeWorkbench(
     app: application,
     entities,
     urls: context.gaussianUrls,
+    filenames: context.gaussianFilenames,
     origins,
     clippingEnabled: () => clippingState.enabled()
       || (['a', 'b'] as ModelId[]).some(model => originPlanes.clipSides(model).lengthSq() > 0),
@@ -163,6 +165,32 @@ export async function initializeWorkbench(
     statusChanged: (message, error) => { gaussianState.message = message; gaussianState.error = error; },
   });
   resources.add(() => gaussianController.destroy());
+  const refreshGaussianAvailability = async () => {
+    try {
+      if (signal.aborted) return;
+      const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}`, { signal });
+      if (!response.ok) return;
+      const next = await response.json() as typeof session;
+      Object.assign(session, next);
+      context.gaussianUrls.a = next.gaussian_a_url;
+      context.gaussianUrls.b = next.gaussian_b_url;
+      context.gaussianFilenames.a = next.gaussian_a_filename;
+      context.gaussianFilenames.b = next.gaussian_b_filename;
+    } catch (error) {
+      if (!signal.aborted) console.warn('Gaussian 后台状态刷新失败', error);
+    }
+  };
+  const gaussianPoll = setInterval(() => {
+    const inputs = session.inputs;
+    const cacheRunning = (['a', 'b'] as ModelId[]).some(model => {
+      const state = inputs?.[`model_${model}_dataset`]?.gaussian_cache_status;
+      return state === 'queued' || state === 'converting';
+    });
+    if (cacheRunning) {
+      void refreshGaussianAvailability();
+    }
+  }, 1000);
+  resources.add(() => clearInterval(gaussianPoll));
   resources.add(originPlaneRuntime.bindStatusRefresh(() => gaussianController.refreshStatus()));
 
   const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0] });

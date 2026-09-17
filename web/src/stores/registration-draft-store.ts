@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
 import { createSession } from '../api/registration-api';
-import type { ModelId, OutputDirection } from '../api/contracts';
+import type { ModelId, ModelUploadSelection, OutputDirection } from '../api/contracts';
 import type { TransformParameters } from '../coordinate-math';
 
 const defaultTransform = (): TransformParameters => ({
@@ -17,7 +17,7 @@ const validateTransform = (transform: TransformParameters): void => {
 };
 
 export const useRegistrationDraftStore = defineStore('registration-draft', () => {
-  const files = reactive<Record<ModelId, File | undefined>>({ a: undefined, b: undefined });
+  const files = reactive<Record<ModelId, ModelUploadSelection | undefined>>({ a: undefined, b: undefined });
   const transforms = reactive<Record<ModelId, TransformParameters>>({
     a: defaultTransform(),
     b: defaultTransform(),

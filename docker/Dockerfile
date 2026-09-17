@@ -45,9 +45,11 @@ RUN python3 -m venv /opt/registration-venv \
     && /opt/registration-venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/service-requirements.txt
 
 COPY --from=builder /opt/registration/bin/registration_worker /usr/local/bin/registration_worker
+COPY --from=web-builder /usr/local/bin/node /usr/local/bin/node
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/ply-pcd-registration/
 COPY LICENSES /usr/share/licenses/ply-pcd-registration/LICENSES
 COPY service /opt/registration-service/service
+COPY --from=web-builder /src/node_modules /opt/registration-service/node_modules
 COPY --from=web-builder /src/service/static /opt/registration-service/service/static
 RUN PYTHONPATH=/opt/registration-service /opt/registration-venv/bin/python -c "import service.app"
 

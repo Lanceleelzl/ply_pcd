@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 from service.auth import authorize_resource
 from service.schemas import CoarseRegistrationRequest
+from service.session_state import model_compute_path
 from service.transform_math import business_transforms, transform_matrix
 
 
@@ -81,8 +82,8 @@ def create_coarse_registration_router(
             result_directory.mkdir()
             command = [
                 worker_path, "coarse-register-models",
-                "--model-a", str(current_session_directory / "input" / session["model_a_filename"]),
-                "--model-b", str(current_session_directory / "input" / session["model_b_filename"]),
+                "--model-a", str(model_compute_path(current_session_directory, session, "a")),
+                "--model-b", str(model_compute_path(current_session_directory, session, "b")),
                 "--moving-model", request.moving_model,
                 "--output-dir", str(result_directory),
                 "--delta", str(request.delta), "--beta", str(request.beta),

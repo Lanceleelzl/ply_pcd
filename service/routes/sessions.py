@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from service.schemas import BusinessTransformsRequest, TransformParameters, WorkspaceRequest
 from service.auth import authorize_resource
+from service.session_state import model_compute_path, model_gaussian_path
 
 
 DirectoryResolver = Callable[[str], Path]
@@ -38,6 +39,7 @@ def create_session_router(
     worker_path: str,
     restore_sources: Callable[[Path, dict[str, Any]], bool],
     start_preview: Callable[[str, list[str]], Any],
+    start_gaussian_cache: Callable[[str, str], Any],
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v2/registration-sessions")
 
@@ -79,6 +81,25 @@ def create_session_router(
         status["source_available"] = source_available(directory, status)
         status["restartable"] = status["source_available"]
         return status
+
+    @router.post("/{session_id}/gaussian-cache/{model}", status_code=202)
+    async def create_gaussian_cache(session_id: str, model: str) -> dict[str, Any]:
+        if model not in {"a", "b"}:
+            raise HTTPException(status_code=404, detail="Model not found")
+        directory = session_directory(session_id)
+        status = read_status(directory)
+        authorize_resource(status)
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+        if dataset.get("format") not in {"gaussian_ply", "compressed_ply", "spz", "sog", "lcc", "lcc2"}:
+            raise HTTPException(status_code=409, detail="Only Gaussian models support streamed cache generation")
+        cache_status = dataset.get("gaussian_cache_status", "not_requested")
+        if cache_status in {"queued", "converting", "ready"}:
+            return {"model": model, "status": cache_status}
+        dataset.update(gaussian_cache_status="queued", gaussian_cache_progress=0)
+        dataset.pop("gaussian_cache_error", None)
+        write_status(directory, status)
+        start_gaussian_cache(session_id, model)
+        return {"model": model, "status": "queued"}
 
     def read_owned_session(session_id: str, workspace_id: str) -> tuple[Path, dict[str, Any]]:
         directory = session_directory(session_id)
@@ -125,7 +146,8 @@ def create_session_router(
             raise HTTPException(status_code=409, detail="Source model files have been cleaned")
         preview_directory = directory / "preview"
         preview_ready = all((preview_directory / name).is_file() for name in ("model-a-points.bin", "model-b-points.bin"))
-        if preview_ready and status.get("status") == "ready":
+        compute_ready = all(model_compute_path(directory, status, model).is_file() for model in ("a", "b"))
+        if preview_ready and compute_ready and status.get("status") == "ready":
             return {"session_id": session_id, "status": "ready", "editor_url": status["editor_url"]}
         if status.get("status") in {"queued", "preparing"}:
             return {"session_id": session_id, "status": status["status"], "editor_url": status["editor_url"]}
@@ -136,8 +158,8 @@ def create_session_router(
         write_status(directory, status)
         command = [
             worker_path, "prepare-model-preview",
-            "--model-a", str(directory / "input" / status["model_a_filename"]),
-            "--model-b", str(directory / "input" / status["model_b_filename"]),
+            "--model-a", str(model_compute_path(directory, status, "a")),
+            "--model-b", str(model_compute_path(directory, status, "b")),
             "--output-dir", str(preview_directory),
             "--model-a-limit", "300000", "--model-b-limit", "300000",
         ]
@@ -158,11 +180,11 @@ def create_session_router(
         elif model == "model-b":
             path = directory / "preview" / "model-b-points.bin"
             filename = "model-b-points.bin"
-        elif model == "gaussian-a" and status.get("metadata", {}).get("gaussian_a_available"):
-            path = directory / "input" / status["model_a_filename"]
+        elif model == "gaussian-a" and model_gaussian_path(directory, status, "a"):
+            path = model_gaussian_path(directory, status, "a")
             filename = status["model_a_filename"]
-        elif model == "gaussian-b" and status.get("metadata", {}).get("gaussian_b_available"):
-            path = directory / "input" / status["model_b_filename"]
+        elif model == "gaussian-b" and model_gaussian_path(directory, status, "b"):
+            path = model_gaussian_path(directory, status, "b")
             filename = status["model_b_filename"]
         else:
             raise HTTPException(status_code=404, detail="Preview not found")

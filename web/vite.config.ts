@@ -16,6 +16,7 @@ export default defineConfig({
     port: localConfig.web_port,
     proxy: {
       '/api': `http://127.0.0.1:${localConfig.port}`,
+      '/gaussian-resources': `http://127.0.0.1:${localConfig.port}`,
       '/health': `http://127.0.0.1:${localConfig.port}`,
       '/docs': `http://127.0.0.1:${localConfig.port}`,
       '/openapi.json': `http://127.0.0.1:${localConfig.port}`

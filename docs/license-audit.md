@@ -17,6 +17,7 @@ CloudCompare commit：da62b8e0155cee4237335476477cb1088c54c2f3
 | `libs/cloudcompare_core/extern/nanoflann` | 同名上游目录 | BSD | 未修改 |
 | `libs/cloudcompare_core/cmake` | 同名上游目录 | MIT | 未修改 |
 | `cpp/vendor/laszip` | LASzip 官方 tag `3.5.0`，commit `fa089bd8b2b4ca5631e199d257374c32a125f73f` | Apache-2.0 | 未修改 |
+| `node_modules/@playcanvas/splat-transform` | PlayCanvas SplatTransform `3.4.2` | MIT | 未修改，通过锁定的 npm 依赖引入 |
 
 ## 项目侧适配
 

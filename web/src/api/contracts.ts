@@ -4,6 +4,26 @@ export type ModelId = 'a' | 'b';
 export type OutputDirection = 'a_to_b' | 'b_to_a';
 export type Matrix4 = number[][];
 
+export interface DatasetInfo {
+  format: string;
+  container: 'file' | 'sog' | 'zip';
+  entrypoint: string;
+  version?: string | number;
+  xyz_capable: boolean;
+  gaussian_capable: boolean;
+  streaming_capable: boolean;
+  xyz_status: 'pending' | 'ready' | 'failed';
+  xyz_stage?: 'queued' | 'preparing_compute' | 'generating_preview' | 'ready' | 'failed';
+  xyz_progress?: number;
+  gaussian_status: 'pending' | 'ready' | 'failed' | 'not_available';
+  gaussian_stage?: 'waiting' | 'converting' | 'ready' | 'failed' | 'not_available';
+  gaussian_progress?: number | null;
+  gaussian_error?: string;
+  gaussian_cache_status?: 'not_requested' | 'queued' | 'converting' | 'ready' | 'failed';
+  gaussian_cache_progress?: number | null;
+  gaussian_cache_error?: string;
+}
+
 export interface RegistrationSession {
   status: string;
   error?: string;
@@ -13,7 +33,16 @@ export interface RegistrationSession {
   model_b_preview_url?: string;
   gaussian_a_url?: string;
   gaussian_b_url?: string;
-  inputs?: { model_a_bytes?: number; model_b_bytes?: number };
+  gaussian_a_filename?: string;
+  gaussian_b_filename?: string;
+  inputs?: {
+    model_a_original_filename?: string;
+    model_b_original_filename?: string;
+    model_a_bytes?: number;
+    model_b_bytes?: number;
+    model_a_dataset?: DatasetInfo;
+    model_b_dataset?: DatasetInfo;
+  };
   business_transforms?: Record<ModelId, TransformParameters>;
   registrations?: Array<{
     job_id: string;
@@ -97,6 +126,10 @@ export interface CoarseRegistrationResult {
 
 export interface HistoryItem {
   session_id: string;
+  status?: string;
+  has_registration_result?: boolean;
+  created_at_unix?: number;
+  updated_at_unix?: number;
   completed_at_unix?: number;
   source_expires_at_unix?: number;
   source_available: boolean;
@@ -105,14 +138,30 @@ export interface HistoryItem {
   models?: Record<ModelId, { filename?: string; format?: string; bytes?: number }>;
   recommended_matrix?: { name?: string; value?: number[][] };
   metrics?: { final_rms?: number; final_point_count?: number; elapsed_seconds?: number };
+  stream_caches?: Partial<Record<ModelId, {
+    status: 'not_requested' | 'queued' | 'converting' | 'ready' | 'failed' | 'unavailable';
+    available: boolean;
+    progress?: number | null;
+    error?: string;
+  }>>;
 }
 
 export interface CreateSessionInput {
-  modelA: File;
-  modelB: File;
+  modelA: ModelUploadSelection;
+  modelB: ModelUploadSelection;
   modelATransform: TransformParameters;
   modelBTransform: TransformParameters;
   outputDirection: OutputDirection;
   movingModel: 'auto' | ModelId;
   workspaceId: string;
+}
+
+export interface ModelUploadSelection {
+  files: File[];
+  shape: 'file' | 'directory';
+  label: string;
+  bytes: number;
+  streamCache?: boolean;
+  streamCacheEligible?: boolean;
+  paths?: string[];
 }

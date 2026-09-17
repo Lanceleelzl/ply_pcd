@@ -11,6 +11,33 @@ from typing import Any
 from fastapi import HTTPException
 
 
+def session_task_record(session_status: dict[str, Any]) -> dict[str, Any]:
+    metadata = session_status.get("metadata", {}).get("models", {})
+    inputs = session_status.get("inputs", {})
+    return {
+        "session_id": session_status["session_id"],
+        "workspace_id": session_status.get("workspace_id"),
+        "owner_id": session_status.get("owner_id"),
+        "status": session_status.get("status"),
+        "created_at_unix": session_status.get("created_at_unix"),
+        "updated_at_unix": session_status.get("updated_at_unix"),
+        "source_expires_at_unix": session_status.get("source_expires_at_unix"),
+        "output_direction": session_status.get("output_direction"),
+        "moving_model": session_status.get("moving_model"),
+        "models": {
+            model: {
+                "filename": inputs.get(f"model_{model}_original_filename", session_status.get(f"model_{model}_filename")),
+                "format": inputs.get(f"model_{model}_format"),
+                "bytes": inputs.get(f"model_{model}_bytes"),
+                "sha256": inputs.get(f"model_{model}_sha256"),
+                "point_count": metadata.get(model, {}).get("source_point_count"),
+            }
+            for model in ("a", "b")
+        },
+        "business_transforms": session_status.get("business_transforms"),
+    }
+
+
 def write_history(session_directory: Path, session_status: dict[str, Any], *, _job_directory: Callable[[str], Path], _history_path: Callable[[str, str], Path], _history_directory: Callable[[str], Path], SERVICE_VERSION: str) -> dict[str, Any] | None:
     workspace_id = session_status.get("workspace_id")
     if session_status.get("api_version") != "v2" or not workspace_id:
@@ -79,8 +106,8 @@ def release_source_data(session_directory: Path, session_status: dict[str, Any],
             if error.status_code == 409:
                 raise
     _write_v2_history(session_directory, session_status)
-    shutil.rmtree(session_directory / "input", ignore_errors=True)
-    shutil.rmtree(session_directory / "preview", ignore_errors=True)
+    for directory_name in ("input", "preview", "datasets", "computed"):
+        shutil.rmtree(session_directory / directory_name, ignore_errors=True)
     for filename in ("worker.stdout.log", "worker.stderr.log"):
         (session_directory / filename).unlink(missing_ok=True)
     for entry in [*session_status.get("registrations", []), *session_status.get("coarse_registrations", [])]:
@@ -101,18 +128,42 @@ def release_source_data(session_directory: Path, session_status: dict[str, Any],
 
 def history_view(record: dict[str, Any], *, _manual_session_directory: Callable[[str], Path], _read_status: Callable[[Path], dict[str, Any]], _v2_source_available: Callable[[Path, dict[str, Any]], bool]) -> dict[str, Any]:
     session_directory = _manual_session_directory(record["session_id"])
+    stream_caches = {
+        model: {"status": "unavailable", "available": False}
+        for model in ("a", "b")
+    }
     try:
         status = _read_status(session_directory)
         source_available = _v2_source_available(session_directory, status)
         source_expires = status.get("source_expires_at_unix")
+        for model in ("a", "b"):
+            dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+            cache_status = dataset.get("gaussian_cache_status", "not_requested")
+            relative = dataset.get("gaussian_cache_path")
+            available = False
+            if cache_status == "ready" and isinstance(relative, str):
+                entrypoint = (session_directory / relative).resolve()
+                try:
+                    entrypoint.relative_to(session_directory.resolve())
+                    available = entrypoint.is_file()
+                except ValueError:
+                    available = False
+            stream_caches[model] = {
+                "status": cache_status,
+                "available": available,
+                "progress": dataset.get("gaussian_cache_progress"),
+                "error": dataset.get("gaussian_cache_error"),
+            }
     except (HTTPException, OSError, json.JSONDecodeError):
         source_available = False
         source_expires = record.get("source_expires_at_unix")
     return {
         **record,
+        "has_registration_result": bool(record.get("recommended_matrix")),
         "source_available": source_available,
         "restartable": source_available,
         "source_expires_at_unix": source_expires,
+        "stream_caches": stream_caches,
     }
 
 

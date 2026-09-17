@@ -10,18 +10,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from service.background_tasks import BackgroundTasks
 from service.auth import ApiKeyAuthenticator, ApiKeyAuthMiddleware
-from service.history import write_history, release_source_data, history_view
+from service.history import history_view, release_source_data, session_task_record, write_history
 from service.cleanup import cleanup_completed_jobs, run_cleanup_loop
 from service.config import (
     CLEANUP_INTERVAL_SECONDS,
     API_KEY_HASHES,
     AUTH_ENABLED,
     MAX_CONCURRENT_JOBS,
+    NODE_PATH,
     OBJECT_STORAGE_SETTINGS,
     RESULT_RETENTION_HOURS,
     RUNTIME_ROOT,
     SERVICE_VERSION,
     SOURCE_RETENTION_HOURS,
+    SPLAT_TRANSFORM_PATH,
     WORKER_PATH,
     WORKER_TIMEOUT_SECONDS,
 )
@@ -35,7 +37,9 @@ from service.routes.coarse_registrations import create_coarse_registration_route
 from service.routes.sessions import create_session_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
+from service.routes.gaussian_resources import create_gaussian_resource_router
 from service.preview_tasks import run_preview_task
+from service.dataset_preparation import prepare_gaussian_cache, prepare_session_datasets
 from service.registration_tasks import run_registration_task
 from service.coarse_tasks import run_coarse_registration_task
 from service.registration_queue import recover_registration_queue, write_task_descriptor
@@ -44,7 +48,10 @@ from service.object_lifecycle import (
     archive_job_result, archive_session_sources, delete_session_objects, restore_job_result,
     restore_session_sources, source_available_locally_or_remotely,
 )
-from service.session_state import normalize_task_links, source_available, sync_coarse_session_job, sync_session_job
+from service.session_state import (
+    model_compute_path, normalize_task_links, reconcile_gaussian_caches, source_available,
+    sync_coarse_session_job, sync_session_job,
+)
 from service.storage import (
     history_directory as _storage_history_directory,
     history_path as _storage_history_path,
@@ -70,10 +77,22 @@ app.add_middleware(ApiKeyAuthMiddleware, authenticator=ApiKeyAuthenticator(AUTH_
 STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")
 _job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+_gaussian_cache_semaphore = asyncio.Semaphore(1)
 _manual_submission_lock = asyncio.Lock()
 _background_tasks = BackgroundTasks()
+_preview_tasks: dict[str, asyncio.Task[None]] = {}
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
 _object_storage = create_object_storage(OBJECT_STORAGE_SETTINGS)
+
+
+def _start_model_preview(session_id: str, command: list[str]) -> asyncio.Task[None]:
+    current = _preview_tasks.get(session_id)
+    if current is not None and not current.done():
+        return current
+    task = _background_tasks.start(_run_model_preview_with_caches(session_id, command))
+    _preview_tasks[session_id] = task
+    task.add_done_callback(lambda completed, key=session_id: _preview_tasks.pop(key, None))
+    return task
 
 
 def _job_directory(job_id: str) -> Path:
@@ -117,6 +136,7 @@ def _history_path(workspace_id: str, session_id: str) -> Path:
 
 
 app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _read_status))
+app.include_router(create_gaussian_resource_router(_manual_session_directory, _read_status))
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
@@ -133,7 +153,16 @@ def _history_view(record: dict[str, Any]) -> dict[str, Any]:
     return history_view(record, _manual_session_directory=_manual_session_directory, _read_status=_read_status, _v2_source_available=_v2_source_available)
 
 
-app.include_router(create_history_router(_history_directory, _history_path, _history_view, _workspace_id))
+app.include_router(create_history_router(
+    _history_directory,
+    _history_path,
+    _history_view,
+    _workspace_id,
+    _manual_session_directory,
+    lambda: RUNTIME_ROOT / "manual-sessions",
+    _read_status,
+    session_task_record,
+))
 app.include_router(create_session_router(
     _manual_session_directory,
     _job_directory,
@@ -147,7 +176,8 @@ app.include_router(create_session_router(
     SOURCE_RETENTION_HOURS,
     WORKER_PATH,
     _restore_sources,
-    lambda session_id, command: _background_tasks.start(_run_model_preview(session_id, command)),
+    _start_model_preview,
+    lambda session_id, model: _background_tasks.start(_run_gaussian_cache(session_id, model)),
 ))
 
 
@@ -201,7 +231,7 @@ app.include_router(create_coarse_registration_router(
 app.include_router(create_upload_router(
     _manual_session_directory, _write_status, WORKER_PATH, SOURCE_RETENTION_HOURS,
     lambda directory, status: archive_session_sources(_object_storage, directory, status),
-    lambda session_id, command: _background_tasks.start(_run_model_preview(session_id, command)),
+    _start_model_preview,
 ))
 
 
@@ -238,7 +268,51 @@ async def _run_model_preview(session_id: str, command: list[str]) -> None:
     await run_preview_task(
         session_id, command, _manual_session_directory, _read_status, _write_status,
         _job_semaphore, WORKER_TIMEOUT_SECONDS,
+        lambda directory, status, progress: prepare_session_datasets(
+            directory, status, [NODE_PATH, SPLAT_TRANSFORM_PATH], progress
+        ),
     )
+
+
+async def _run_model_preview_with_caches(session_id: str, command: list[str]) -> None:
+    await _run_model_preview(session_id, command)
+    directory = _manual_session_directory(session_id)
+    status = _read_status(directory)
+    if status.get("status") != "ready":
+        return
+    for model in ("a", "b"):
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+        if not dataset.get("gaussian_cache_requested"):
+            continue
+        cache_changed = reconcile_gaussian_caches(directory, status)
+        if cache_changed:
+            _write_status(directory, status)
+        if dataset.get("gaussian_cache_status") == "ready":
+            continue
+        dataset.update(gaussian_cache_status="queued", gaussian_cache_progress=0)
+        _write_status(directory, status)
+        await _run_gaussian_cache(session_id, model)
+
+
+async def _run_gaussian_cache(session_id: str, model: str) -> None:
+    async with _gaussian_cache_semaphore:
+        directory = _manual_session_directory(session_id)
+        status = _read_status(directory)
+        if reconcile_gaussian_caches(directory, status):
+            _write_status(directory, status)
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+        if dataset.get("gaussian_cache_status") == "ready":
+            return
+        persist = lambda: _write_status(directory, status)
+        try:
+            await asyncio.to_thread(
+                prepare_gaussian_cache, directory, status,
+                [NODE_PATH, SPLAT_TRANSFORM_PATH], model, persist,
+            )
+        except Exception as error:
+            dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+            dataset.update(gaussian_cache_status="failed", gaussian_cache_error=str(error))
+        _write_status(directory, status)
 
 
 def _cleanup_completed_jobs() -> None:
@@ -262,4 +336,34 @@ async def start_cleanup() -> None:
         sync_session_job=_sync_any_job,
         start_registration=lambda job_id, command: _background_tasks.start(_run_worker(job_id, command)),
     )
+    sessions_root = RUNTIME_ROOT / "manual-sessions"
+    if sessions_root.is_dir():
+        for directory in sessions_root.iterdir():
+            try:
+                status = _read_status(directory)
+            except (OSError, ValueError):
+                continue
+            cache_changed = reconcile_gaussian_caches(directory, status)
+            if cache_changed:
+                _write_status(directory, status)
+            if status.get("api_version") == "v2" and status.get("status") == "ready":
+                for model in ("a", "b"):
+                    dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+                    if (dataset.get("gaussian_cache_requested")
+                            and dataset.get("gaussian_cache_status") in {"queued", "converting"}):
+                        dataset.update(gaussian_cache_status="queued", gaussian_cache_progress=0)
+                        _write_status(directory, status)
+                        _background_tasks.start(_run_gaussian_cache(status["session_id"], model))
+            if status.get("api_version") != "v2" or status.get("status") not in {"queued", "preparing"}:
+                continue
+            preview_directory = directory / "preview"
+            preview_directory.mkdir(parents=True, exist_ok=True)
+            command = [
+                WORKER_PATH, "prepare-model-preview",
+                "--model-a", str(model_compute_path(directory, status, "a")),
+                "--model-b", str(model_compute_path(directory, status, "b")),
+                "--output-dir", str(preview_directory),
+                "--model-a-limit", "300000", "--model-b-limit", "300000",
+            ]
+            _start_model_preview(status["session_id"], command)
     _background_tasks.start(_cleanup_loop())

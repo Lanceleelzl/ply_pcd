@@ -3,22 +3,77 @@
 ## 当前阶段
 
 ```text
-阶段 8～12：整体重构与生产化基础
-状态：已验收并合并、推送到 main
+阶段 13：数据格式扩展
+状态：已完成，格式接入、真实样本、Windows、Docker Linux 和独立 Chrome 验收通过
 ```
 
 ## 进行中
+
+- 2026-09-16：首页上传说明明确列出单文件后缀 `PLY／PCD／LAS／LAZ／SOG／SPZ`，并解释多文件数据集是 `Streamed SOG（LOD 流式数据）／LCC／LCC2`，需要选择完整目录或 ZIP；文件选择器同步补充 `.spz`。
+
+- 2026-09-16：首页上传说明改为普通用户表述，去除 Gaussian、ZIP、ICP、XYZ 等内部术语，明确支持常见点云、高斯模型和多文件数据集，并由系统自动准备配准数据。Web 类型检查、生产构建及差异检查通过。
+
+- 2026-09-16：按用户要求将中间数据纳入自动释放策略。清理循环对无活动任务的终态会话立即删除可重建的 `preview`、`datasets`、`computed`，保留原始 `input` 直到既有保留期或用户主动释放；活动任务不清理。服务回归 96／96、差异检查通过。
+
+- 2026-09-16：对 `source` 目录实际样本做兼容性复核，发现两个独立的 SPZ 单文件此前未纳入探测器；已补充 `spz` 单文件探测和独立 Gaussian 计算／显示通道。真实 `point_cloud_5.spz` 与 `point_cloud_5_SPZ3.spz` 均由 SplatTransform 3.4.2 转换为 3,059,456 点 PLY，无效点 0，包围盒一致；服务回归 96／96 通过。本轮临时输出已清理，未改动 `source`。
+
+- 2026-09-16：按用户要求释放全部历史任务数据、测试上传、当天格式验收副本及历史 Docker／阶段验证运行目录。清理前 `runtime` 约 13.54 GB，清理后仅保留可执行 Worker 所需的 `runtime/local`，约 1.17 MB；本地 API 和 Web 开发服务已停止，后续启动服务会重新创建任务与历史目录。
+
+- 2026-09-16：阶段 13 收口后的上传入口细化已完成。模型 A／B 的“选择文件／ZIP”和“选择数据集目录”按钮会显示当前选择态；目录入口补充 LCC／LCC2 必需结构提示，保留相对路径上传契约。`pnpm run typecheck:web`、`pnpm run build:web`、`pnpm run test:service`（94／94）及 `git diff --check` 通过；构建仅保留既有 PlayCanvas Worker 外部化和大包提示。
+
+- 2026-09-16：阶段 13 已完成文件／ZIP／完整目录三种上传入口、服务端相对路径封装、格式探测、固定计算 LOD 的 XYZ 转换、Streamed SOG 浏览器流式显示和衍生目录生命周期。真实 Streamed SOG、LCC、LCC2 已完成 Windows 与 Docker Linux 解码、C++ 点云读取及容器服务验收；数据格式扩展的既定开发和验证项已完成。
 
 - 2026-09-15：工作台已按确认设计完成第一轮布局调整，用户已确认并授权提交、推送。
 
 - 2026-09-15：首页紧凑布局与矩阵双向编辑已实现并通过下述验证，用户已确认本轮效果并授权提交、推送。
 
-- 当前没有未完成的代码重构阶段，也没有已定义的阶段 13。
 - 外部 S3／MinIO 实例联调等待部署环境提供 endpoint、bucket 和凭据；代码与伪造客户端回归已经完成。
 - 生产鉴权等待部署时生成并配置真实 API Key 摘要；鉴权代码、资源隔离和浏览器接入已经完成。
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-17（流式缓存 ZIP 默认名称）：缓存下载的默认 ZIP 名称由会话 UUID 改为对应原文件或目录名称加本地下载时间，格式为 `原名-streamed-sog-YYYYMMDD-HHmmss.zip`；原扩展名不重复保留，Windows 非法字符会替换。服务回归 114／114、Web 类型检查和差异检查通过。
+
+- 2026-09-17（未完成 ICP 的历史任务与缓存下载）：首页由「历史结果」改为「历史任务」，合并当前工作区仍保留源数据的 v2 会话与已完成 ICP 的结果档案；进入工作台后直接返回首页的任务会显示「尚未完成精配准」，可继续配准，并在缓存完整时下载 Streamed SOG ZIP。下载接口不再要求先存在 ICP 结果档案。缓存状态为 `ready` 但文件缺失时自动重新排队；计算副本缺失时可从仍保留的 Gaussian 源文件重新生成。真实会话 `f6cc3ec4…` 已从缺失缓存恢复并重新生成到 `ready 100%`，Chrome 验证其位于历史任务首项，显示「尚未完成精配准」「模型 A 流式缓存：已完成」及「下载 A 流式缓存」。服务回归 114／114、Web 可执行回归 109／109、类型检查、生产构建和差异检查通过。
+
+- 2026-09-17（已完成流式缓存状态恢复）：修复服务重启或切换任务后，完整缓存仍停留在 `queued`／`converting` 并被任务中心误报或重复生成的问题。服务启动、预览完成和缓存执行前均校验现有 Streamed SOG 的入口、分块元数据、资源引用及 LOD 树区间；完整缓存直接校正为 `ready 100%` 并复用，只有请求过但不完整的缓存重新排队。真实会话 `30b90206…` 的模型 A，以及 `fe044e4c…` 的模型 A／B 均从陈旧状态恢复为 `ready 100%`，未重新转换。服务回归 111／111、Web 类型检查及差异检查通过。
+
+- 2026-09-16（流式缓存后台任务可见性）：用户勾选生成流式缓存后，首页上传卡片明确提示从顶部「后台任务」查看；提交后的会话在首页与工作台共用任务中心，按模型显示等待后台槽位、生成中、完成或失败，并通过浏览器本地记录在页面切换和刷新后继续跟踪。转换器未提供真实百分比时显示旋转状态，禁止伪造进度。历史结果显示 A／B 缓存最终状态、完成下载入口及失败重试；重试范围与上传能力统一为 Gaussian PLY、Compressed PLY、SPZ、SOG、LCC、LCC2。服务回归 108／108、可由 Node 直接执行的 Web 回归 109／109、类型检查、生产构建和差异检查通过；独立 Playwright 使用本机 Chrome 验证首页任务计数、生成中弹层、跨刷新恢复及控制台 0 error。
+
+- 2026-09-16（流式缓存提示文案）：上传区提示改为「勾选后会生成对应的流式缓存，不影响配准；缓存完成后将使用流式数据加载。」，明确勾选结果、配准独立性及缓存完成后的加载行为。
+
+- 2026-09-16（目录选择弹窗语义）：Chrome／Edge 的「选择数据集目录」改用 File System Access API 打开目录选择器，使系统确认动作表达为选择当前目录；不支持该 API 时回退到隐藏的 `webkitdirectory`。目录句柄递归遍历并显式保存根目录及子目录相对路径，multipart 上传继续保留完整结构。独立 Chrome 确认 `showDirectoryPicker` 可用，模拟 LCC2 根目录与 `data/` 子目录后页面显示正确目录名和 2 个文件，拦截 multipart 确认 `sample-lcc2/scene.lcc2` 与 `sample-lcc2/data/chunk.sog` 均保留。Web 回归 108／108、类型检查、生产构建及差异检查通过。
+
+- 2026-09-16（Windows 状态文件瞬时占用修复）：真实上传在准备阶段曾因 `status.json.tmp → status.json` 返回 `[WinError 5]` 被误判为 `preview_start_failed`；会话 ACL、只读属性和磁盘空间均正常，后续写入成功，确认为原子替换瞬时占用。状态持久化改为每次使用 UUID 唯一临时文件，`PermissionError` 最多重试 5 次并递增短等待，成功或最终失败均清理临时文件。新增瞬时两次拒绝后成功及持续拒绝无残留两项回归；服务回归 104／104、差异检查通过，开发服务已重启并健康。
+
+- 2026-09-16（全 Gaussian 流式缓存入口）：上传区的「生成流式缓存」改为复选框、标题和说明同一行，默认不勾选。浏览器读取 PLY 头区分普通点云与 Gaussian；Gaussian PLY、Compressed PLY、SPZ、SOG、LCC、LCC2 显示选项，普通 PLY／PCD／LAS／LAZ 不显示，已有 Streamed SOG 直接复用。单层 Gaussian 后台按原始点数生成 50％、25％、10％ LOD，至少保留 1 点并去重后打包为 Streamed SOG；LCC／LCC2 直接保留原有 LOD。真实 SplatTransform 3.4.2 用 4 点二进制 Gaussian PLY 生成缓存成功；服务回归 102／102、Web 回归 108／108、类型检查、生产构建及差异检查通过。独立 Chrome 验证 SPZ 与 LCC 显示单行选项且默认未选，合成普通 PLY 不显示，控制台 0 error；截图：`output/playwright/gaussian-stream-cache-option.png`。
+
+- 2026-09-16（历史任务数据清理）：通过服务自带的会话释放接口逐个释放 6 个终态历史会话，删除上传副本、解压数据集、计算文件与可重建缓存，保留每个会话的轻量状态记录；`runtime/manual-sessions` 从 17.86 GB 降至 0.03 MB。E 盘可用空间从 1.84 GB 恢复至 108.69 GB，`runtime/local` Worker 保留，服务重启后健康检查返回 `ok`。
+
+- 2026-09-16（SPZ／LCC 直接 Gaussian 与缓存入口纠正）：SPZ、LCC、LCC2 改为在工作台直接浏览器解码显示完整 Gaussian；修复 SPZ 无解析器与 LCC 相对资源地址无法构造 URL 的问题。工作台按钮恢复为「A／B：高斯」与「A／B：点云」，移除工作台缓存操作；仅在首页选择 LCC／LCC2 数据集目录时显示「生成流式缓存」复选框，默认不勾选，勾选后才在基础预览就绪后使用独立后台并发生成缓存。独立 Playwright Chrome 对真实 3,059,456 点 SPZ 与 588,826 点 LCC 同屏直载成功，按钮均切换为「点云」，控制台 0 error；截图：`output/playwright/spz-lcc-direct-gaussian.png`。服务回归 100／100、Web 回归 108／108、类型检查、生产构建及差异检查通过；构建保留既有 PlayCanvas Worker 外部化和大包提示。
+
+- 2026-09-16（Gaussian 转换按钮精简）：按用户确认保留按钮内旋转进度环和「A／B：转换中」状态，移除按钮后的重复后台转换说明，后台任务与状态轮询逻辑不变。
+
+- 2026-09-16（准备进度与 Gaussian 后台转换）：会话按模型记录 XYZ 阶段与进度，准备页用 A／B 双圆环显示；两份 XYZ 与轻量预览就绪后即可进入工作台，LCC／LCC2 的 Streamed SOG 显示资源继续后台转换。工作台轮询 Gaussian 状态，按钮区分「转换中」「加载高斯」「转换失败」「无高斯」，失败不阻断中心点预览、粗配准或 ICP。服务回归 97／97、Web 回归 109／109、类型检查、生产构建及差异检查通过。独立 Chrome 使用 245 MB Gaussian PLY 与 4.6 MB PCD 捕获双环 75% 状态，进入工作台后显示「A：加载高斯」「B：无高斯」，控制台 0 error。
+
+- 2026-09-16（阶段 13 交付收口）：新增 `docs/STAGE13_ACCEPTANCE.md`，集中记录格式白名单、单文件／ZIP／目录 multipart 契约、固定计算 LOD 与 Gaussian 显示隔离、真实 Streamed SOG／LCC／LCC2 点数、Windows／Docker Linux 一致性、容器 ICP 和独立 Chrome 结果。明确目录上传的内部 ZIP、解压目录、计算 PLY 和显示转换资源会同时占用峰值磁盘，部署容量必须按总量规划。阶段顶部状态更新为已完成。
+
+- 2026-09-16（阶段 13 Docker Linux 验收）：用户手动恢复 Docker Desktop 后确认 `desktop-linux` 为 Linux／amd64，当前分支镜像 `ply-pcd-registration:dev` 完整构建成功并由 compose 启动在 `127.0.0.1:8865`，首页与 OpenAPI 均返回 200。将三份真实数据以只读卷挂载到临时 Linux 容器，SplatTransform 3.4.2 按固定计算 LOD 分别解码 Streamed SOG 4,409,286 点、LCC 1,517,478 点、LCC2 448,957 点；镜像内 `registration_worker inspect-ply` 确认三者无效点均为 0，点数和包围盒与 Windows 结果一致。容器 API 完成 A／B 双角色业务坐标 ICP，RMS 分别为 `7.41627e-07` 和 `5.04159e-07`。独立 Playwright Chrome 打开容器首页，页面显示“服务正常”，文件／ZIP和数据集目录入口存在，控制台 0 error。compose 服务保持运行。
+
+- 2026-09-16（阶段 13 真实数据验收）：使用用户提供的 987,836,547 字节 Streamed SOG、LCC 5.0 Portable 和 LCC2 0.0.3 实测。修正 Streamed SOG 探测：真实 `lod-meta.json` 无顶层 `version`，现按 `lodLevels`／`filenames`／`tree` 识别，并递归校验二叉树、块 SOG v2、WebP 引用以及每个块区间无缺口且不重叠。计算转换改为选择元数据声明的最粗固定层，避免先展开 1.0～1.2 亿点的 LOD 0；该选择独立于 Gaussian 显示和相机，并记录 `compute_lod`。SplatTransform 3.4.2 分别生成 4,409,286 点、1,517,478 点、448,957 点 PLY，Windows `registration_worker inspect-ply` 全部确认无无效点并返回有效包围盒。服务回归 94／94、可由 Node 直接执行的 Web 回归 109／109、类型检查、Web 构建和 Windows CTest 1／1 通过；`coordinate-query-views.test.ts` 因既有无扩展名导入不能由 Node ESM 直接加载，仍由类型检查和 Vite 构建覆盖。用户提供的 LCC 路径实际目录名为 `LCC_Results`，已按定位后的真实路径完成验收。
+
+- 2026-09-16（阶段 13 文档与 OpenAPI 一致性）：README 已更新为普通／Gaussian／compressed PLY、PCD、LAS／LAZ、SOG、Streamed SOG、LCC、LCC2，以及单文件／ZIP／完整目录三种上传形态；API 文档明确 A／B 各自在单文件字段与重复目录字段之间二选一。直接读取当前 FastAPI OpenAPI，确认 `model_a`／`model_b` 为可空 binary，`model_a_files`／`model_b_files` 为可空 binary array，运行时负责条件必填校验。实施方案移除“仅 Gaussian PLY 可切换”的过期表述，路线图进行中事项收敛为真实 LCC／LCC2 样本和 Docker Linux 两项外部验收。
+
+- 2026-09-16（阶段 13 LCC 边界与 Docker 复核）：依据 XGRIDS 格式说明和锁定版 SplatTransform 读取实现，LCC 仅接收 Portable／Quality，Quality 强制要求 `Shcoef.bin`；解压后为 Linux 大小写敏感环境补齐读取器要求的 `index.bin`／`data.bin`／`shcoef.bin` 规范硬链接，避免官方文档首字母大写名称在容器内解析失败。LCC2 增加 `totalLevels`、`totalSplats`、`lodSplats` 一致性和 `.ply`／`.spz`／`.sog` 块编码白名单校验。服务回归 94／94、差异检查通过。公开检索未找到可合法下载的真实 LCC／LCC2 场景包，真实样本验收继续保留。Windows Docker Desktop 4.60.0 已通过安装程序启动，但 backend 日志确认在初始化 Inference manager 时因 `dockerInference` 本地监听文件不可访问而崩溃，daemon API 不可用；未删除 Docker 文件、重置 Desktop 或修改系统配置，Linux 镜像验证继续阻塞。
+
+- 2026-09-16（阶段 13 浏览器流式验收）：真实 Chrome 从首页选择包含 7 个文件的 Streamed SOG v1 目录作为模型 A、二进制 Gaussian PLY 作为模型 B，目录 multipart 上传返回 202，双方均解析为 4 点并进入工作台。首次点击 A 高斯暴露 Vite 未代理 `/gaussian-resources`，修复开发代理后 `lod-meta.json`、块 `meta.json` 和 5 个 WebP 资源全部返回 200，界面切换为“A：点云”并明确显示完整 Gaussian，控制台 0 error。保持 Gaussian 显示执行 ICP 成功，RMS 为 `0.000000 m`，证明显示切换未替代 XYZ 计算通道。截图：`output/playwright/stage13-streamed-sog.png`。类型检查、Web 构建及差异检查通过。
+
+- 2026-09-16（阶段 13 第三批）：LCC／LCC2 准备流程拆分为独立的计算与显示输出：计算固定选择 LOD 0 生成标准 PLY，显示另行转换为保留 LOD 的 Streamed SOG 资源树。显示转换失败时保留 `xyz_status=ready` 并设置 `gaussian_status=failed`，不阻断中心点预览、粗配准或 ICP；令牌资源路由支持转换后的资源树。专项覆盖流式转换成功、显示转换失败和子资源访问，服务回归 93／93、类型检查及差异检查通过。当前仍缺真实 LCC／LCC2 数据验证，不能以模拟转换回归宣称格式验收完成。
+
+- 2026-09-16（阶段 13 第二批）：首页为模型 A／B 增加独立的“选择文件／ZIP”和“选择数据集目录”入口，目录以重复 multipart 字段上传并保留浏览器提供的相对路径；服务端拒绝缺失、重复模式、越界路径和重复路径，将目录封装成内部 ZIP 后复用探测、对象归档与恢复链路。源释放新增清理 `datasets/`、`computed/`，恢复时若预览仍在但计算 PLY 缺失会重新排队生成。由 4 点二进制 Gaussian PLY 实际生成 Streamed SOG v1 目录，封装 ZIP 后成功识别入口、按 LOD 0 恢复标准 PLY并保留流式显示入口。服务 89／89、Web 108／108、Streamed SOG 集成 2／2、类型检查、Web 构建和差异检查通过；构建只有既有 PlayCanvas Worker 外部化与大包提示。
+
+- 2026-09-15（阶段 13 第一批）：建立内容探测和数据集准备层，区分普通／Gaussian／PlayCanvas compressed PLY、bundled／unbundled SOG、Streamed SOG v1、LCC 5.0 和 LCC2 0.0.3；ZIP 校验入口、引用、路径、符号链接、文件数、解压大小及压缩比。固定 `@playcanvas/splat-transform 3.4.2` 将高斯及 LOD 数据的 LOD 0 解码为独立标准 PLY，粗配准与 ICP 只引用该 XYZ 计算文件。原始 SOG 和 Streamed SOG 通过带会话随机令牌的资源树供 PlayCanvas 按需显示；点云／高斯状态独立。二进制 Gaussian 4 点样本完成 compressed PLY 和 SOG 往返，恢复文件均为 4 点、包围盒 `[0,0,0]～[1,1,1]`；SOG 恢复点与原始点完成 ICP，RMS `0`，正反矩阵为单位阵。服务 84／84、可执行 Web 回归 108／108、Windows CTest 1／1、类型检查、Web 构建及差异检查通过。Docker Desktop 启动未成功，当前 Linux engine pipe 不存在，镜像构建未执行。真实 LCC／LCC2／Streamed SOG 样本及浏览器流式画面仍待验证，不能标记为完整兼容。
 
 - 2026-09-15：按用户反馈将配准结果矩阵从视口底部浮层移至左侧第 4 步下方，指标、业务场景矩阵、原始模型坐标矩阵按单列顺序展示，左侧面板独立滚动；移除旧结果抽屉结构与样式。独立 Chrome 验证两组矩阵顺序、指标位于首项、旧抽屉不存在、展开前后三维视口保持 1140×842 且相机方向不变；左侧结果内容高度 1431 px，可在 842 px 可视区内独立滚动。截图：`output/playwright/workbench-result-column.png`。
 
@@ -119,6 +174,14 @@
 - 2026-09-12：结果状态新增 5 项回归，连同活动状态、历史恢复、业务矩阵状态共 21／21 通过；任务控制器、资源作用域、坐标数学及显示矩阵回归共 9／9 通过。类型检查、生产构建、差异检查通过。本轮没有启动浏览器或真实 ICP。
 
 ## 已完成
+
+- 2026-09-16（流式缓存下载中断保护）：历史缓存下载改为显式分块读取并写入 File System Access 交换文件，网络或写盘失败时中止交换文件，界面明确提示残缺文件未保存，并保留用户选择的文件句柄供从头重试；下载中显示已接收字节和源数据大小，成功关闭后才报告完成。流式 ZIP 在单次读取缓存文件时同步计算 SHA-256，归档内新增 `cache-manifest.json`，同时保留 ZIP CRC32；服务端继续不生成完整 ZIP 文件。网络中断／复用句柄重试专项通过，真实 Chrome 验证首次失败后出现「重新下载」、第二次成功且文件选择器只调用一次。服务回归 107／107、Web 可执行回归 109／109、类型检查、生产构建和差异检查通过。
+
+- 2026-09-16（LCC2 直接显示与流式缓存下载）：修复 LCC2 内 SOG WebP 解码依赖的 WASM 地址解析，加载器显式使用 Vite 输出的 `webp.wasm`，并延迟加载 LCC／LCC2 模块以保持 Node 回归可执行。真实 Chrome 在会话 `619cc31c-68a2-42e2-b786-d719ccebba46` 验证 B 模型 LCC2 成功切换为完整 Gaussian，WASM 返回 200、SOG 分块返回 206、页面错误 0。已完成历史任务按 A／B 显示仍保留的 Streamed SOG 缓存下载按钮；服务端边读缓存目录边输出 ZIP，Chrome 使用文件选择器边接收边写入，释放源数据后入口消失。服务回归 106／106、Web 可执行回归 108／108、类型检查、生产构建、差异检查及浏览器下载交互通过。
+
+- 2026-09-16（SPZ 单文件上传修复）：修正 v2 会话入口遗漏 `.spz` 的扩展名白名单，错误提示同步列出 SPZ；格式探测不再只凭后缀接受文件，现校验 `NGSP` 签名、GZIP 旧容器及 v2／v3／v4 版本头。资源目录真实 `point_cloud_5.spz` 确认为 v4、`point_cloud_5_SPZ3.spz` 确认为 v3，两者均被锁定版 SplatTransform 3.4.2 识别为包含 3,059,456 个 Gaussian，并通过服务探测。服务回归 100／100、类型检查、生产构建及差异检查通过。
+
+- 2026-09-16（LCC／LCC2 直接显示与可选缓存）：LCC／LCC2 不再自动转换为 Streamed SOG；会话准备完成后直接公开原始入口，浏览器按最多 2000 万个 Gaussian 选择可用 LOD 并生成 PlayCanvas Gaussian 资源。工作台为每个 LCC／LCC2 模型提供独立的「生成流式缓存」按钮，缓存任务使用单独的单并发执行槽，失败时继续保留原始 LCC／LCC2 显示。服务启动会恢复因进程重启停留在 queued／preparing 的预览任务；原先排队的 SOG／Streamed SOG 会话 `b21080cf-b688-4cfd-80dc-4fc22aaeec2a` 已恢复为 ready，A／B 均为 100%。真实 LCC2 入口 Range 请求返回 206、1024 字节及正确 `Content-Range`。服务回归 98／98、可由 Node 执行的 Web 回归 108／108、类型检查、生产构建及差异检查通过。Codex 浏览器因管理员策略拒绝访问本地地址，本轮未完成 Playwright Chrome 画面复验。
 
 - 2026-09-14：完成阶段 11 API 鉴权与工作区访问控制。服务端使用摘要配置和常量时间比较认证 `X-API-Key`，按用户／管理员身份隔离资源；Web 的常规请求、上传、下载、Gaussian 和 SSE 进度流均携带会话级 Key。默认关闭鉴权的本地兼容路径与启用鉴权的双角色端到端均通过。
 

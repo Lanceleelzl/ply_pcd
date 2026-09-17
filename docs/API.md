@@ -4,7 +4,7 @@
 
 ## 使用流程
 
-1. `POST /api/v2/registration-sessions` 上传 `model_a` 和 `model_b`，保存返回的 `workspace_id`。
+1. `POST /api/v2/registration-sessions` 为 A／B 各上传一个单文件或一组目录文件，保存返回的 `workspace_id`。
 2. 轮询会话状态，等待 `ready`，可通过业务矩阵接口更新预变换。
 3. 向会话的 `/register` 接口提交粗配准矩阵、移动模型、输出方向和 ICP 参数。
 4. 使用返回的 `status_url` 查询任务、`progress_url` 订阅 SSE。成功后读取 `result_url`。
@@ -45,13 +45,17 @@
 
 | 字段 | 类型 | 必填 |
 |---|---|---|
-| `model_a` | string | 是 |
-| `model_b` | string | 是 |
+| `model_a` | binary | 条件必填 |
+| `model_b` | binary | 条件必填 |
+| `model_a_files` | array<binary> | 条件必填 |
+| `model_b_files` | array<binary> | 条件必填 |
 | `output_direction` | string | 否 |
 | `moving_model` | string | 否 |
 | `workspace_id` | string | 否 |
 | `model_a_transform` | string | 否 |
 | `model_b_transform` | string | 否 |
+
+每个模型必须在单文件字段和目录字段之间二选一：A 使用 `model_a` 或重复的 `model_a_files`，B 使用 `model_b` 或重复的 `model_b_files`。目录 part 的 filename 必须保留从所选根目录开始的相对路径。支持格式、目录入口、版本白名单和安全限制见 [DATA_FORMAT_COMPATIBILITY.md](DATA_FORMAT_COMPATIBILITY.md) 。
 
 ### BusinessTransformsRequest
 

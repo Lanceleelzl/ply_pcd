@@ -76,4 +76,7 @@ class CleanupTest(unittest.TestCase):
             cleanup_completed_jobs(root, 24, lambda _: job, lambda path: statuses[path],
                                    lambda *_: True, release)
         release.assert_called_once_with(idle, statuses[idle])
-        remove.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in remove.call_args_list],
+            [idle / "preview", idle / "datasets", idle / "computed"],
+        )
