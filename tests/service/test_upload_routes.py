@@ -62,20 +62,59 @@ class UploadRoutesTest(unittest.IsolatedAsyncioTestCase):
             ) as save_directory, patch(
                 "service.routes.uploads._probe_dataset",
                 side_effect=[
-                    DatasetProbe("streamed_sog", "zip", "scene/lod-meta.json", 1, True, True, True),
+                    DatasetProbe("lcc", "zip", "scene/meta.lcc", "5.0", True, True, True),
                     DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
                 ],
             ):
-                await self.create(None, self.b, directory_files, None)
+                await self.create(None, self.b, directory_files, None, model_a_stream_cache=True)
             status = self.write.call_args.args[1]
             self.assertEqual(status["model_a_filename"], "model-a.zip")
             self.assertEqual(status["inputs"]["model_a_original_filename"], "scene")
             self.assertEqual(status["inputs"]["model_a_upload_shape"], "directory")
             self.assertEqual(status["inputs"]["model_b_upload_shape"], "file")
+            self.assertTrue(status["inputs"]["model_a_dataset"]["gaussian_cache_requested"])
             save_directory.assert_awaited_once()
         finally:
             for upload in directory_files:
                 await upload.close()
+
+    async def test_spz_single_file_is_accepted(self):
+        spz = UploadFile(filename="point_cloud_5.spz", file=io.BytesIO(b"spz"))
+        try:
+            with patch.object(Path, "mkdir"), patch(
+                "service.routes.uploads._save_upload_with_sha256",
+                new=AsyncMock(side_effect=[(3, "spz-hash"), (1, "b-hash")]),
+            ), patch(
+                "service.routes.uploads._probe_dataset",
+                side_effect=[
+                    DatasetProbe("spz", "file", "model-a.spz", None, True, True, False),
+                    DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
+                ],
+            ):
+                response = await self.create(spz, self.b, model_a_stream_cache=True)
+            status = self.write.call_args.args[1]
+            self.assertEqual(response["status"], "queued")
+            self.assertEqual(status["model_a_filename"], "model-a.spz")
+            self.assertEqual(status["inputs"]["model_a_format"], "spz")
+            self.assertTrue(status["inputs"]["model_a_dataset"]["gaussian_cache_requested"])
+        finally:
+            await spz.close()
+
+    async def test_rejects_stream_cache_for_plain_point_cloud(self):
+        with patch.object(Path, "mkdir"), patch(
+            "service.routes.uploads._save_upload_with_sha256",
+            new=AsyncMock(side_effect=[(1, "a-hash"), (1, "b-hash")]),
+        ), patch(
+            "service.routes.uploads._probe_dataset",
+            side_effect=[
+                DatasetProbe("ply", "file", "model-a.ply", None, True, False, False),
+                DatasetProbe("pcd", "file", "model-b.pcd", None, True, False, False),
+            ],
+        ):
+            with self.assertRaises(HTTPException) as error:
+                await self.create(self.a, self.b, model_a_stream_cache=True)
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertIn("Gaussian", error.exception.detail)
 
     async def test_rejects_missing_or_ambiguous_upload_shape(self):
         with self.assertRaises(HTTPException) as missing:

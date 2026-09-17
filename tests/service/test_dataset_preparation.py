@@ -7,7 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from service.dataset_formats import DatasetFormatError, DatasetProbe
-from service.dataset_preparation import _ensure_lcc_companion_names, prepare_model_dataset
+from service.dataset_preparation import (
+    _ensure_lcc_companion_names,
+    prepare_gaussian_cache,
+    prepare_model_dataset,
+)
 
 
 class DatasetPreparationTest(unittest.TestCase):
@@ -98,7 +102,7 @@ class DatasetPreparationTest(unittest.TestCase):
                 DatasetProbe("sog", "sog", "meta.json", 2, True, True, False), ["node", "cli.mjs"], run=failed,
             )
 
-    def test_lcc_keeps_xyz_ready_when_streamed_display_conversion_fails(self):
+    def test_lcc_keeps_direct_display_when_optional_cache_conversion_fails(self):
         source = self.session / "input" / "model-a.zip"
         with zipfile.ZipFile(source, "w") as archive:
             archive.writestr("scene/meta.lcc", json.dumps({"totalLevel": 1}))
@@ -120,11 +124,17 @@ class DatasetPreparationTest(unittest.TestCase):
             ["node", "cli.mjs"], run=run,
         )
         self.assertTrue(path.is_file())
-        self.assertIsNone(details["gaussian_path"])
-        self.assertEqual(details["gaussian_error"], "display conversion failed")
+        self.assertEqual(details["gaussian_path"], "datasets/model-a/scene/meta.lcc")
         self.assertTrue(details["gaussian_resource_tree"])
+        status = {
+            "session_id": "session", "preview_access_token": "token",
+            "inputs": {"model_a_dataset": {**details, "format": "lcc"}},
+        }
+        prepare_gaussian_cache(self.session, status, ["node", "cli.mjs"], "a", run=run)
+        self.assertEqual(status["inputs"]["model_a_dataset"]["gaussian_cache_status"], "failed")
+        self.assertEqual(status["inputs"]["model_a_dataset"]["gaussian_path"], "datasets/model-a/scene/meta.lcc")
 
-    def test_lcc_display_is_converted_to_streamed_sog_tree(self):
+    def test_lcc_display_uses_original_resource_tree(self):
         source = self.session / "input" / "model-a.zip"
         with zipfile.ZipFile(source, "w") as archive:
             archive.writestr("meta.lcc", json.dumps({"totalLevel": 1}))
@@ -142,8 +152,97 @@ class DatasetPreparationTest(unittest.TestCase):
             DatasetProbe("lcc", "zip", "meta.lcc", "5.0", True, True, True),
             ["node", "cli.mjs"], run=run,
         )
-        self.assertEqual(details["gaussian_path"], "datasets/model-a-streamed/lod-meta.json")
+        self.assertEqual(details["gaussian_path"], "datasets/model-a/meta.lcc")
         self.assertTrue(details["gaussian_resource_tree"])
+
+    def test_lcc_loads_directly_and_can_optionally_generate_streamed_cache(self):
+        source = self.session / "input" / "model-a.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("meta.lcc", json.dumps({"totalLevel": 1}))
+            archive.writestr("Index.bin", b"index")
+            archive.writestr("Data.bin", b"data")
+        calls: list[Path] = []
+
+        def run(command, **kwargs):
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"output")
+            calls.append(destination)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        _, details = prepare_model_dataset(
+            self.session, "a", source.name,
+            DatasetProbe("lcc", "zip", "meta.lcc", "5.0", True, True, True),
+            ["node", "cli.mjs"], run=run,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(details["gaussian_path"], "datasets/model-a/meta.lcc")
+        self.assertEqual(details["gaussian_cache_status"], "not_requested")
+        status = {
+            "session_id": "session", "preview_access_token": "token", "metadata": {},
+            "inputs": {"model_a_dataset": {**details, "format": "lcc", "gaussian_status": "ready"}},
+        }
+        prepare_gaussian_cache(
+            self.session, status, ["node", "cli.mjs"], "a", run=run,
+        )
+        dataset = status["inputs"]["model_a_dataset"]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(dataset["gaussian_cache_status"], "ready")
+        self.assertEqual(dataset["gaussian_cache_progress"], 100)
+        self.assertIn("/gaussian-resources/session/token/a/", status["gaussian_a_url"])
+
+    def test_single_level_gaussian_generates_decimated_streamed_cache(self):
+        source = self.session / "input" / "model-a.ply"
+        source.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 100\nend_header\n")
+        calls: list[list[str]] = []
+
+        def run(command, **kwargs):
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"output")
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        status = {
+            "session_id": "session", "preview_access_token": "token", "metadata": {},
+            "inputs": {"model_a_dataset": {
+                "format": "gaussian_ply", "compute_path": "input/model-a.ply",
+                "gaussian_path": "input/model-a.ply", "gaussian_status": "ready",
+            }},
+        }
+        prepare_gaussian_cache(self.session, status, ["node", "cli.mjs"], "a", run=run)
+        dataset = status["inputs"]["model_a_dataset"]
+        self.assertEqual(len(calls), 4)
+        self.assertEqual([call[-2] for call in calls[:3]], ["50", "25", "10"])
+        self.assertIn("--tag-lod", calls[-1])
+        self.assertEqual(dataset["gaussian_cache_status"], "ready")
+        self.assertEqual(dataset["gaussian_cache_path"], "datasets/model-a-streamed/lod-meta.json")
+        self.assertFalse((self.session / "datasets" / "model-a-streamed-build").exists())
+
+    def test_missing_compute_copy_falls_back_to_retained_gaussian_source(self):
+        source = self.session / "input" / "model-a.ply"
+        source.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 100\nend_header\n")
+        calls: list[list[str]] = []
+
+        def run(command, **kwargs):
+            destination = Path(command[-1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"output")
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        status = {
+            "session_id": "session", "preview_access_token": "token", "metadata": {},
+            "inputs": {"model_a_dataset": {
+                "format": "compressed_ply",
+                "compute_path": "computed/model-a.ply",
+                "dataset_entrypoint": "input/model-a.ply",
+                "gaussian_cache_requested": True,
+            }},
+        }
+        prepare_gaussian_cache(self.session, status, ["node", "cli.mjs"], "a", run=run)
+        self.assertIn(str(source), calls[0])
+        self.assertEqual(status["inputs"]["model_a_dataset"]["gaussian_cache_status"], "ready")
 
     def test_lcc_companion_names_are_canonicalized_for_case_sensitive_hosts(self):
         entrypoint = self.session / "input" / "meta.lcc"

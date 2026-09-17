@@ -95,17 +95,22 @@ export class GaussianDisplayController {
         display.objectUrl = URL.createObjectURL(await response.blob());
         assetUrl = display.objectUrl;
       }
-      const asset = new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian PLY`, 'gsplat', {
-        url: assetUrl,
-        filename: this.options.filenames[model] ?? `model-${model}-original-gaussian.ply`,
+      const filename = this.options.filenames[model] ?? `model-${model}-original-gaussian.ply`;
+      const direct = /\.(?:spz|lcc2?)$/i.test(filename)
+        ? await import('./direct-lcc-loader.ts').then(module => module.loadDirectGaussian(this.options.app, assetUrl, filename))
+        : null;
+      const asset = direct?.asset ?? new pc.Asset(`Model ${model.toUpperCase()} Original Gaussian`, 'gsplat', {
+        url: assetUrl, filename,
       });
       display.asset = asset;
-      this.options.app.assets.add(asset);
-      await new Promise<void>((resolve, reject) => {
-        asset.ready(() => resolve());
-        asset.once('error', reject);
-        this.options.app.assets.load(asset);
-      });
+      if (!direct) {
+        this.options.app.assets.add(asset);
+        await new Promise<void>((resolve, reject) => {
+          asset.ready(() => resolve());
+          asset.once('error', reject);
+          this.options.app.assets.load(asset);
+        });
+      }
       if (this.destroyed) {
         asset.unload();
         return;
@@ -113,7 +118,15 @@ export class GaussianDisplayController {
       const entity = new pc.Entity(`Model ${model.toUpperCase()} Original Gaussian`);
       entity.addComponent('gsplat', { asset });
       const origin = this.options.origins[model];
-      entity.setLocalPosition(-origin[0], -origin[1], -origin[2]);
+      entity.setLocalPosition(
+        (direct?.transform.translation.x ?? 0) - origin[0],
+        (direct?.transform.translation.y ?? 0) - origin[1],
+        (direct?.transform.translation.z ?? 0) - origin[2],
+      );
+      if (direct) {
+        entity.setLocalRotation(direct.transform.rotation);
+        entity.setLocalScale(direct.transform.scale, direct.transform.scale, direct.transform.scale);
+      }
       this.options.entities[model].addChild(entity);
       display.entity = entity;
       display.clipController = new GaussianClipController(entity.gsplat!);

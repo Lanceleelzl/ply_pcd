@@ -6,10 +6,13 @@ import { useRegistrationDraftStore } from '../stores/registration-draft-store';
 import { useWorkspaceStore } from '../stores/workspace-store';
 import { getApiKey, setApiKey } from '../api/api-auth';
 import { ref, onMounted, onUnmounted } from 'vue';
+import BackgroundTaskCenter from '../components/BackgroundTaskCenter.vue';
+import { useBackgroundCacheStore } from '../stores/background-cache-store';
 
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const draft = useRegistrationDraftStore();
+const backgroundTasks = useBackgroundCacheStore();
 const apiKey = ref(getApiKey());
 const serviceState = ref('检测中');
 let healthTimer: ReturnType<typeof setInterval> | undefined;
@@ -26,8 +29,12 @@ async function openWorkspace(sessionId: string): Promise<void> {
 }
 
 async function submit(): Promise<void> {
+  const labels = { a: draft.files.a?.label, b: draft.files.b?.label };
   const sessionId = await draft.submit(workspace.workspaceId);
-  if (sessionId) await openWorkspace(sessionId);
+  if (sessionId) {
+    backgroundTasks.track(sessionId, workspace.workspaceId, labels);
+    await openWorkspace(sessionId);
+  }
 }
 </script>
 
@@ -35,7 +42,7 @@ async function submit(): Promise<void> {
   <main class="home-app-shell">
     <header class="app-topbar">
       <div class="brand-mark"><span class="brand-symbol">R</span><div><strong>点云坐标配准</strong><small>Registration Studio</small></div></div>
-      <nav><a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a><span class="service-chip" :class="{ offline: serviceState !== '服务正常' }"><i />{{ serviceState }}</span><details class="access-settings"><summary>访问设置</summary><div class="access-popover"><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用鉴权时留空" @change="setApiKey(apiKey)" /></label><p>用于本服务的访问鉴权与数据隔离。</p></div></details></nav>
+      <nav><a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a><BackgroundTaskCenter /><span class="service-chip" :class="{ offline: serviceState !== '服务正常' }"><i />{{ serviceState }}</span><details class="access-settings"><summary>访问设置</summary><div class="access-popover"><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用鉴权时留空" @change="setApiKey(apiKey)" /></label><p>用于本服务的访问鉴权与数据隔离。</p></div></details></nav>
     </header>
     <div class="home-content">
       <section class="hero-copy">

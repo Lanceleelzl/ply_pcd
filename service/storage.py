@@ -47,9 +47,20 @@ def status_path(directory: Path) -> Path:
 
 def write_status(directory: Path, status: dict[str, Any]) -> None:
     status["updated_at_unix"] = time.time()
-    temporary = directory / "status.json.tmp"
+    temporary = directory / f"status.json.{uuid.uuid4().hex}.tmp"
+    target = status_path(directory)
     temporary.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(status_path(directory))
+    try:
+        for attempt in range(5):
+            try:
+                temporary.replace(target)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def read_status(directory: Path) -> dict[str, Any]:

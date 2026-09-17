@@ -2,9 +2,10 @@ import json
 import tempfile
 import unittest
 import zipfile
+import gzip
 from pathlib import Path
 
-from service.dataset_formats import DatasetFormatError, probe_dataset
+from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 
 
 class DatasetFormatsTest(unittest.TestCase):
@@ -38,11 +39,20 @@ class DatasetFormatsTest(unittest.TestCase):
         self.assertEqual(probe_dataset(compressed).format, "compressed_ply")
 
     def test_probes_spz_as_standalone_gaussian_file(self):
-        path = self.write("model.spz", b"not decoded here")
-        result = probe_dataset(path)
-        self.assertEqual((result.format, result.container), ("spz", "file"))
-        self.assertTrue(result.xyz_capable)
-        self.assertTrue(result.gaussian_capable)
+        for version in (2, 3, 4):
+            header = b"NGSP" + version.to_bytes(4, "little") + b"\x01\x00\x00\x00" + b"\x00" * (20 if version == 4 else 4)
+            content = gzip.compress(header) if version < 4 else header
+            result = probe_dataset(self.write(f"model-v{version}.spz", content))
+            self.assertEqual((result.format, result.container, result.version), ("spz", "file", version))
+            self.assertTrue(result.xyz_capable)
+            self.assertTrue(result.gaussian_capable)
+
+    def test_rejects_invalid_or_unsupported_spz_headers(self):
+        with self.assertRaisesRegex(DatasetFormatError, "signature"):
+            probe_dataset(self.write("invalid.spz", b"not an spz"))
+        unsupported = b"NGSP" + (5).to_bytes(4, "little") + b"\x00" * 24
+        with self.assertRaisesRegex(DatasetFormatError, "version: 5"):
+            probe_dataset(self.write("future.spz", unsupported))
 
     def test_probes_bundled_sog_and_checks_references(self):
         metadata = {"version": 2, "means": {"files": ["means.webp"]}, "scales": {"files": ["scales.webp"]}}
@@ -74,6 +84,23 @@ class DatasetFormatsTest(unittest.TestCase):
         })
         with self.assertRaisesRegex(DatasetFormatError, "missing referenced"):
             probe_dataset(broken)
+
+    def test_validates_materialized_streamed_sog_cache(self):
+        cache = self.root / "cache"
+        chunk = cache / "0_0"
+        chunk.mkdir(parents=True)
+        (cache / "lod-meta.json").write_text(json.dumps({
+            "lodLevels": 1, "filenames": ["0_0/meta.json"],
+            "tree": {"bound": {}, "lods": {"0": {"file": 0, "offset": 0, "count": 1}}},
+        }), encoding="utf-8")
+        (chunk / "meta.json").write_text(json.dumps({
+            "version": 2, "count": 1, "means": {"files": ["means.webp"]},
+        }), encoding="utf-8")
+        (chunk / "means.webp").write_bytes(b"means")
+        validate_streamed_sog_directory(cache / "lod-meta.json")
+        (chunk / "means.webp").unlink()
+        with self.assertRaisesRegex(DatasetFormatError, "missing referenced resource"):
+            validate_streamed_sog_directory(cache / "lod-meta.json")
 
     def test_probes_lcc_and_rejects_incomplete_dataset(self):
         metadata = json.dumps({"version": "5.0", "fileType": "Portable"}).encode()

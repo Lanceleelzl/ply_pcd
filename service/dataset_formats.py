@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+import gzip
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -113,6 +114,52 @@ def _validate_stream_tree(tree: dict[str, Any], lod_levels: int,
         if (not ordered or ordered[0][0] != 0 or ordered[-1][1] != chunk_counts[index]
                 or any(left[1] != right[0] for left, right in zip(ordered, ordered[1:]))):
             raise DatasetFormatError(f"Streamed SOG chunk ranges must cover file {index} exactly once")
+
+
+def validate_streamed_sog_directory(entrypoint: Path) -> None:
+    """Validate a materialized Streamed SOG cache before it is reused."""
+    try:
+        metadata = json.loads(entrypoint.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DatasetFormatError("Invalid Streamed SOG lod-meta.json") from error
+    if not isinstance(metadata, dict):
+        raise DatasetFormatError("Streamed SOG lod-meta.json must be an object")
+    lod_levels = metadata.get("lodLevels")
+    filenames = metadata.get("filenames")
+    if not isinstance(lod_levels, int) or lod_levels <= 0:
+        raise DatasetFormatError("Streamed SOG lodLevels must be a positive integer")
+    if (not isinstance(filenames, list) or not filenames
+            or any(not isinstance(name, str) for name in filenames)
+            or len(set(filenames)) != len(filenames)):
+        raise DatasetFormatError("Streamed SOG filenames must be a non-empty unique string array")
+    if not isinstance(metadata.get("tree"), dict):
+        raise DatasetFormatError("Streamed SOG tree must be an object")
+    root = entrypoint.parent.resolve()
+    chunk_counts: list[int] = []
+    for filename in filenames:
+        chunk_path = (root / Path(*_safe_member(filename).parts)).resolve()
+        try:
+            chunk_path.relative_to(root)
+            chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise DatasetFormatError(f"Invalid Streamed SOG chunk metadata: {filename}") from error
+        if not isinstance(chunk, dict) or chunk.get("version") != 2:
+            raise DatasetFormatError(f"Unsupported streamed SOG chunk version: {filename}")
+        count = chunk.get("count")
+        if not isinstance(count, int) or count < 0:
+            raise DatasetFormatError(f"Invalid streamed SOG chunk count: {filename}")
+        chunk_counts.append(count)
+        for reference in _sog_references(chunk):
+            if not isinstance(reference, str):
+                raise DatasetFormatError(f"Invalid Streamed SOG resource reference: {filename}")
+            resource = (chunk_path.parent / Path(*_safe_member(reference).parts)).resolve()
+            try:
+                resource.relative_to(root)
+            except ValueError as error:
+                raise DatasetFormatError(f"Unsafe Streamed SOG resource reference: {reference}") from error
+            if not resource.is_file():
+                raise DatasetFormatError(f"Streamed SOG is missing referenced resource: {reference}")
+    _validate_stream_tree(metadata["tree"], lod_levels, chunk_counts)
 
 
 def probe_zip(path: Path) -> DatasetProbe:
@@ -275,6 +322,24 @@ def _ply_probe(path: Path) -> DatasetProbe:
                         compressed or gaussian_properties and binary_little_endian, False)
 
 
+def _spz_probe(path: Path) -> DatasetProbe:
+    with path.open("rb") as stream:
+        prefix = stream.read(2)
+        stream.seek(0)
+        try:
+            header = gzip.GzipFile(fileobj=stream).read(32) if prefix == b"\x1f\x8b" else stream.read(32)
+        except (gzip.BadGzipFile, EOFError, OSError) as error:
+            raise DatasetFormatError("Invalid SPZ compressed stream") from error
+    if len(header) < 16 or header[:4] != b"NGSP":
+        raise DatasetFormatError("Invalid SPZ signature")
+    version = int.from_bytes(header[4:8], "little")
+    if version not in {2, 3, 4}:
+        raise DatasetFormatError(f"Unsupported SPZ version: {version}")
+    if version == 4 and len(header) < 32:
+        raise DatasetFormatError("Incomplete SPZ v4 header")
+    return DatasetProbe("spz", "file", path.name, version, True, True, False)
+
+
 def probe_dataset(path: Path) -> DatasetProbe:
     suffix = path.suffix.lower()
     if suffix in {".zip", ".sog"}:
@@ -287,7 +352,7 @@ def probe_dataset(path: Path) -> DatasetProbe:
     if suffix == ".ply":
         return _ply_probe(path)
     if suffix == ".spz":
-        return DatasetProbe("spz", "file", path.name, None, True, True, False)
+        return _spz_probe(path)
     if suffix in {".pcd", ".las", ".laz"}:
         return DatasetProbe(suffix[1:], "file", path.name, None, True, False, False)
     raise DatasetFormatError(f"Unsupported dataset extension: {suffix or '<none>'}")

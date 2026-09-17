@@ -53,7 +53,13 @@
   align-items: center;
   width: 100%;
   margin: 0;
+  min-width: 0;
+  gap: 16px;
 }
+
+.workbench-title-text { flex: 1; min-width: 0; }
+.workbench-model-names { display: flex; gap: 16px; }
+.workbench-model-names small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .workbench-topbar .workflow-title h1 {
   margin: 0 0 2px;
@@ -69,6 +75,8 @@
   background: #172233;
   color: #e8eef7;
 }
+.workbench-header-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; margin-left: auto; }
+.workbench-header-actions .background-task-center button { min-width: 0; min-height: 28px; }
 
 .workflow-panel {
   grid-column: 1;
@@ -731,6 +739,29 @@
   }
 }
 
+.preparation-screen {
+  width: min(820px, calc(100vw - 40px));
+  padding: 32px;
+  border: 1px solid #33445d;
+  border-radius: 18px;
+  background: #151f2f;
+  box-shadow: 0 24px 70px #0006;
+  text-align: center;
+}
+.preparation-screen header h2 { margin: 0 0 8px; font-size: 24px; }
+.preparation-screen header p { margin: 0; color: #a9b6ca; }
+.preparation-models { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 28px 0 20px; }
+.preparation-model { display: grid; justify-items: center; gap: 12px; padding: 22px; border: 1px solid #34445b; border-radius: 14px; background: #111a28; }
+.preparation-model h3 { margin: 0; font-size: 16px; }
+.preparation-model small { color: #8fa0b8; }
+.preparation-ring { --progress: 18deg; width: 144px; height: 144px; padding: 12px; border-radius: 50%; background: conic-gradient(#4f9cff var(--progress), #29374a 0); }
+.preparation-ring > div { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: #111a28; }
+.preparation-ring strong { font-size: 30px; }
+.preparation-overall { margin: 0; color: #b9c7db; }
+
+.gaussian-spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 2px solid #ffffff40; border-top-color: currentColor; border-radius: 50%; vertical-align: -2px; animation: gaussian-spin .8s linear infinite; }
+@keyframes gaussian-spin { to { transform: rotate(360deg); } }
+
 .integrated-editor .viewport-toolbar {
   max-width: calc(100% - 170px);
   flex-wrap: wrap;
@@ -776,6 +807,8 @@
 }
 
 @media (max-width: 600px) {
+  .preparation-models { grid-template-columns: 1fr; }
+  .preparation-ring { width: 120px; height: 120px; }
   .workbench-topbar { gap: 12px; padding: 8px 12px; }
   .workbench-brand small { display: none; }
   .integrated-editor .viewport-toolbar { max-width: calc(100% - 24px); }

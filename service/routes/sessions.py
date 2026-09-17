@@ -39,6 +39,7 @@ def create_session_router(
     worker_path: str,
     restore_sources: Callable[[Path, dict[str, Any]], bool],
     start_preview: Callable[[str, list[str]], Any],
+    start_gaussian_cache: Callable[[str, str], Any],
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v2/registration-sessions")
 
@@ -80,6 +81,25 @@ def create_session_router(
         status["source_available"] = source_available(directory, status)
         status["restartable"] = status["source_available"]
         return status
+
+    @router.post("/{session_id}/gaussian-cache/{model}", status_code=202)
+    async def create_gaussian_cache(session_id: str, model: str) -> dict[str, Any]:
+        if model not in {"a", "b"}:
+            raise HTTPException(status_code=404, detail="Model not found")
+        directory = session_directory(session_id)
+        status = read_status(directory)
+        authorize_resource(status)
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+        if dataset.get("format") not in {"gaussian_ply", "compressed_ply", "spz", "sog", "lcc", "lcc2"}:
+            raise HTTPException(status_code=409, detail="Only Gaussian models support streamed cache generation")
+        cache_status = dataset.get("gaussian_cache_status", "not_requested")
+        if cache_status in {"queued", "converting", "ready"}:
+            return {"model": model, "status": cache_status}
+        dataset.update(gaussian_cache_status="queued", gaussian_cache_progress=0)
+        dataset.pop("gaussian_cache_error", None)
+        write_status(directory, status)
+        start_gaussian_cache(session_id, model)
+        return {"model": model, "status": "queued"}
 
     def read_owned_session(session_id: str, workspace_id: str) -> tuple[Path, dict[str, Any]]:
         directory = session_directory(session_id)

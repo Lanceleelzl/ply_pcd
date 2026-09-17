@@ -77,10 +77,42 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .file-action:active { transform: translateY(1px); background: #1b453f; }
 .file-action:has(input:focus-visible) { outline: 2px solid #75d6b8; outline-offset: 2px; }
 .file-action.active { color: #07140f; border-color: #77e4c0; background: #63d7b3; box-shadow: 0 0 0 2px #45c39a2e; }
+.directory-input-fallback { display: none; }
 .file-dropzone strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .file-dropzone small { color: var(--text-muted); font-size: 11px; }
 .dataset-guidance { max-width: 560px; margin: 3px 0 0; color: #91a8c0; font-size: 11px; line-height: 1.55; }
 .dataset-guidance code { color: #b9eadb; font: 11px ui-monospace, Consolas, monospace; }
+.dataset-cache-option { grid-column: 1 / -1; display: flex; align-items: center; justify-self: start; gap: 8px; color: var(--text); text-align: left; cursor: pointer; }
+.file-dropzone .dataset-cache-option input { position: static; width: 16px; height: 16px; opacity: 1; accent-color: var(--accent); }
+.dataset-cache-option strong { font-size: 12px; }
+.dataset-cache-option small { font-size: 11px; }
+.dataset-cache-option .cache-tracking-hint { color: #79cdb1; }
+.background-task-center { position: relative; color: var(--text); }
+.background-task-center > summary { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; background: #102033; color: var(--text-soft); cursor: pointer; list-style: none; font-size: 12px; white-space: nowrap; }
+.background-task-center > summary::-webkit-details-marker { display: none; }
+.background-task-center > summary > i { width: 7px; height: 7px; border-radius: 50%; background: #60758d; }
+.background-task-center > summary > i.active { background: var(--accent); box-shadow: 0 0 0 4px #45c39a18; animation: cache-pulse 1.2s ease-in-out infinite; }
+.background-task-center > summary b { min-width: 18px; padding: 2px 5px; border-radius: 999px; background: #2a8068; color: #eafff8; text-align: center; font-size: 10px; }
+.background-task-popover { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: min(410px, calc(100vw - 24px)); padding: 12px; border: 1px solid var(--border-strong); border-radius: 9px; background: #0c1826; box-shadow: 0 18px 46px #000a; }
+.background-task-popover header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 9px; border-bottom: 1px solid var(--border); }
+.background-task-popover header button { min-height: 28px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; color: var(--text-soft); background: #14243a; cursor: pointer; }
+.background-task-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; padding: 10px 2px; border-bottom: 1px solid #1c3045; }
+.background-task-row > div { display: grid; gap: 3px; min-width: 0; }
+.background-task-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.background-task-row small { color: var(--text-muted); font-size: 10px; }
+.background-task-row > span { display: flex; align-items: center; gap: 6px; color: #8dd7bf; font-size: 11px; }
+.background-task-row.failed > span, .background-task-error { color: #ff9f9f !important; }
+.background-task-row > span i { width: 11px; height: 11px; border: 2px solid #426c62; border-top-color: #71dab8; border-radius: 50%; animation: cache-spin .8s linear infinite; }
+.background-task-row progress { grid-column: 1 / -1; width: 100%; height: 5px; accent-color: var(--accent); }
+.background-task-error { grid-column: 1 / -1; white-space: normal !important; }
+.background-task-empty, .background-task-popover footer { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; }
+.background-task-popover footer { padding-top: 9px; border-top: 1px solid var(--border); }
+.history-cache-statuses { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0; }
+.history-cache-statuses span { padding: 4px 7px; border-radius: 5px; background: #183046; color: #a9c9e4; font-size: 11px; }
+.history-cache-statuses span.ready { color: #89d9bd; background: #163b34; }
+.history-cache-statuses span.failed { color: #ffaaaa; background: #3b1d28; }
+@keyframes cache-spin { to { transform: rotate(360deg); } }
+@keyframes cache-pulse { 50% { opacity: .45; } }
 .transform-disclosure { margin-top: 13px; }
 .transform-disclosure summary { color: var(--text-soft); font-size: 12px; cursor: pointer; }
 .transform-disclosure > p { color: var(--text-muted); font-size: 11px; }

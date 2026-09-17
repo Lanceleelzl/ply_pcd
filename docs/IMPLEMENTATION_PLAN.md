@@ -10,7 +10,7 @@
 2. 扩展 PLY 族，保持普通 PLY 基线，并支持 Gaussian PLY 与 PlayCanvas compressed PLY 的 XYZ 提取和按需显示。
 3. 支持 bundled／unbundled SOG，以位置解码生成 ICP 所需 XYZ，以原始资源提供 Gaussian 显示。
 4. 支持 Streamed SOG v1，服务端从元数据声明的最粗层提取固定 XYZ 计算集，浏览器独立执行相机驱动的流式显示。
-5. 以真实版本样本建立 LCC／LCC2 白名单，支持固定计算 LOD 的 XYZ 提取，并将显示转换为 Streamed SOG。
+5. 以真实版本样本建立 LCC／LCC2 白名单，支持固定计算 LOD 的 XYZ 提取；浏览器默认直接读取 LCC／LCC2，用户可另行生成 Streamed SOG 流式缓存。
 6. 完成格式单元测试、真实样本点数／包围盒、混合格式 ICP、Windows、Docker、资源上限和浏览器生命周期验收。
 
 不得以颜色、SH、尺度或旋转等高斯渲染属性替代点云计算输入，不得让显示 LOD 或相机改变粗配准和 ICP 的 XYZ 集合。计算 LOD 必须由数据集元数据确定并记录。尚无真实样本或版本证据的格式只能记录为待验证，不能标记完成。
@@ -921,3 +921,12 @@ T_ply_to_reference_world = Translate(reference_origin) × inverse(T_reference_lo
 - 逐轮状态显示在三维视口工具栏下方；当前移动／固定模型和颜色说明显示在左侧第 1 步“模型”区域。当移动模型包围盒对角线达到固定模型的 `1.25` 倍时，前端显式提示大范围点云移动匹配小范围点云的局部最优风险，并建议交换 ICP 角色，不改变用户选择的业务输出方向。
 - 视口左上角第一排粗配准工具栏末尾提供模型 A、B 的独立显示开关；隐藏只设置 PlayCanvas 实体可见性，不修改点云或矩阵，隐藏移动模型时同步卸载其变换手柄，ICP 运行期间仍允许切换。
 - 验证必须证明开启与关闭进度输出时最终矩阵和 RMS 完全一致，并覆盖 SSE、取消和前端控件恢复。
+
+## 阶段 13 补充：准备进度与可选 Gaussian 流式缓存
+
+- 模型 A／B 分别记录 `xyz_stage`、`xyz_progress`、`gaussian_status`、`gaussian_stage`；准备页以两个圆形进度环展示计算数据准备进度。
+- 会话 `ready` 的门槛只包含两份确定性的 XYZ 计算输入和两份轻量点云预览。普通 PLY／PCD／LAS／LAZ／Gaussian PLY 直接复用源文件；SPZ、compressed PLY、SOG、Streamed SOG、LCC、LCC2 的解码或 LOD 选择继续在准备阶段完成。
+- Gaussian PLY、Compressed PLY、SPZ、SOG、LCC／LCC2 在会话 `ready` 后直接提供原始入口；LCC／LCC2 由浏览器按最多 2000 万个 Gaussian 选择最精细可用 LOD。上传区对所有已识别的非流式 Gaussian 输入单行显示 Streamed SOG 缓存复选项并由用户主动勾选：单层格式先生成 50％、25％、10％三个降采样 LOD，LCC／LCC2 保留原有 LOD，已有 Streamed SOG 直接复用。缓存状态独立为 `not_requested／queued／converting／ready／failed`，使用独立低优先级执行槽；工作台只保留「高斯／点云」显示切换。普通 PLY、PCD、LAS、LAZ 不显示；无论缓存状态如何，都不得阻塞准备数据、粗配准、ICP 或原始格式直接显示。
+- 百分比只表示可验证的阶段进度；不伪造转换器内部的逐点精确进度。长时间转换阶段使用旋转指示器和明确阶段文字。
+- 验证覆盖：准备阶段状态写入、XYZ 就绪后会话先进入工作台、后台 Gaussian 成功／失败降级、A／B 双环显示、按钮状态轮询、服务与 Web 回归及浏览器验收。
+- 已完成任务中保留了生成成功的 Streamed SOG 缓存时，历史列表按模型显示下载入口。服务端从缓存目录实时生成 ZIP 流并在归档末尾写入逐文件大小与 SHA-256 清单，浏览器使用 File System Access API 将响应流直接写入用户选择的交换文件；网络或写盘失败时中止交换文件并允许复用保存位置从头重试，成功关闭后才报告完成。释放源数据后入口消失。

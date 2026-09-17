@@ -1,8 +1,10 @@
 import unittest
+import json
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from service.session_state import normalize_task_links, source_available, sync_session_job
+from service.session_state import normalize_task_links, reconcile_gaussian_caches, source_available, sync_session_job
 
 
 class SessionStateTest(unittest.TestCase):
@@ -102,3 +104,49 @@ class SessionStateTest(unittest.TestCase):
                 self.assertEqual(source_available(self.directory, status), len(existing) == 2)
         with patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path.name == "a.ply"):
             self.assertFalse(source_available(self.directory, {"model_a_filename": "a.ply"}))
+
+    def test_complete_cache_repairs_interrupted_status_without_rebuild(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            cache = directory / "datasets" / "model-a-streamed"
+            chunk = cache / "0_0"
+            chunk.mkdir(parents=True)
+            (cache / "lod-meta.json").write_text(json.dumps({
+                "lodLevels": 1, "filenames": ["0_0/meta.json"],
+                "tree": {"bound": {}, "lods": {"0": {"file": 0, "offset": 0, "count": 1}}},
+            }), encoding="utf-8")
+            (chunk / "meta.json").write_text(json.dumps({
+                "version": 2, "count": 1, "means": {"files": ["means.webp"]},
+            }), encoding="utf-8")
+            (chunk / "means.webp").write_bytes(b"means")
+            status = {"session_id": "session", "preview_access_token": "token", "inputs": {
+                "model_a_dataset": {"gaussian_cache_status": "converting"},
+            }}
+            self.assertTrue(reconcile_gaussian_caches(directory, status))
+            dataset = status["inputs"]["model_a_dataset"]
+            self.assertEqual(dataset["gaussian_cache_status"], "ready")
+            self.assertEqual(dataset["gaussian_cache_progress"], 100)
+            self.assertEqual(dataset["gaussian_cache_path"], "datasets/model-a-streamed/lod-meta.json")
+
+    def test_incomplete_converting_cache_returns_to_queue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status = {"inputs": {"model_b_dataset": {
+                "gaussian_cache_status": "converting", "gaussian_cache_progress": None,
+            }}}
+            self.assertTrue(reconcile_gaussian_caches(Path(temporary), status))
+            dataset = status["inputs"]["model_b_dataset"]
+            self.assertEqual(dataset["gaussian_cache_status"], "queued")
+            self.assertEqual(dataset["gaussian_cache_progress"], 0)
+
+    def test_missing_ready_requested_cache_returns_to_queue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status = {"inputs": {"model_a_dataset": {
+                "gaussian_cache_requested": True,
+                "gaussian_cache_status": "ready",
+                "gaussian_cache_progress": 100,
+                "gaussian_cache_path": "datasets/model-a-streamed/lod-meta.json",
+            }}}
+            self.assertTrue(reconcile_gaussian_caches(Path(temporary), status))
+            dataset = status["inputs"]["model_a_dataset"]
+            self.assertEqual(dataset["gaussian_cache_status"], "queued")
+            self.assertEqual(dataset["gaussian_cache_progress"], 0)

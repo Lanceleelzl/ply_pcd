@@ -44,7 +44,7 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
 export async function waitForSession(
   sessionId: string,
   signal: AbortSignal,
-  onStatus: (status: string) => void,
+  onStatus: (status: string, session?: RegistrationSession) => void,
 ): Promise<RegistrationSession> {
   while (true) {
     signal.throwIfAborted();
@@ -54,7 +54,7 @@ export async function waitForSession(
     if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
     if (typeof body.status !== 'string') throw new Error('会话响应缺少预览状态');
     const session = body as unknown as RegistrationSession;
-    onStatus(session.status);
+    onStatus(session.status, session);
     if (session.status === 'ready') return session;
     if (session.status === 'failed') throw new Error(session.error ?? '预览生成失败');
     await waitForPoll(signal);
@@ -76,12 +76,95 @@ export async function listHistory(workspaceId: string): Promise<HistoryItem[]> {
   return (body.items ?? []) as HistoryItem[];
 }
 
+export async function loadRegistrationSession(sessionId: string, signal?: AbortSignal): Promise<RegistrationSession> {
+  const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}`, { signal });
+  const body = await responseBody(response);
+  if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+  return body as unknown as RegistrationSession;
+}
+
+interface StreamCacheWritableFile {
+  write(data: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+}
+export interface StreamCacheDownloadHandle {
+  createWritable(): Promise<StreamCacheWritableFile>;
+}
+type SaveFilePicker = (options: {
+  suggestedName: string;
+  types: Array<{ description: string; accept: Record<string, string[]> }>;
+}) => Promise<StreamCacheDownloadHandle>;
+
+export interface StreamCacheDownloadProgress {
+  receivedBytes: number;
+  sourceBytes: number;
+  fileCount: number;
+}
+
+export async function downloadStreamCache(
+  sessionId: string,
+  model: ModelId,
+  workspaceId: string,
+  options: {
+    handle?: StreamCacheDownloadHandle;
+    onHandle?(handle: StreamCacheDownloadHandle): void;
+    onProgress?(progress: StreamCacheDownloadProgress): void;
+  } = {},
+): Promise<StreamCacheDownloadHandle> {
+  const picker = (window as typeof window & { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+  if (!options.handle && !picker) throw new Error('当前浏览器不支持流式保存，请使用 Chrome 或 Edge');
+  const filename = `${sessionId}-model-${model}-streamed-sog.zip`;
+  const handle = options.handle ?? await picker!({
+    suggestedName: filename,
+    types: [{ description: 'ZIP 压缩包', accept: { 'application/zip': ['.zip'] } }],
+  });
+  options.onHandle?.(handle);
+  const response = await apiFetch(
+    `/api/v2/registration-history/${encodeURIComponent(sessionId)}/stream-cache/${model}?workspace_id=${encodeURIComponent(workspaceId)}`,
+  );
+  if (!response.ok) {
+    const body = await responseBody(response);
+    throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+  }
+  if (!response.body) throw new Error('下载响应不支持流式读取');
+  const sourceBytes = Number(response.headers.get('X-Cache-Source-Bytes')) || 0;
+  const fileCount = Number(response.headers.get('X-Cache-File-Count')) || 0;
+  let receivedBytes = 0;
+  options.onProgress?.({ receivedBytes, sourceBytes, fileCount });
+  const writable = await handle.createWritable();
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      await writable.write(value);
+      receivedBytes += value.byteLength;
+      options.onProgress?.({ receivedBytes, sourceBytes, fileCount });
+    }
+    await writable.close();
+    return handle;
+  } catch (error) {
+    await reader.cancel(error).catch(() => {});
+    await writable.abort(error).catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function runSessionAction(sessionId: string, action: 'retain' | 'release' | 'resume', workspaceId: string): Promise<void> {
   const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspace_id: workspaceId }),
   });
+  const body = await responseBody(response);
+  if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
+}
+
+export async function requestStreamCache(sessionId: string, model: ModelId): Promise<void> {
+  const response = await apiFetch(`/api/v2/registration-sessions/${encodeURIComponent(sessionId)}/gaussian-cache/${model}`, { method: 'POST' });
   const body = await responseBody(response);
   if (!response.ok) throw new Error(String(body.detail ?? `HTTP ${response.status}`));
 }
@@ -131,13 +214,15 @@ export function createSession(input: CreateSessionInput, onProgress: (percent: n
       if (selection.shape === 'file') {
         data.append(`model_${model}`, selection.files[0]);
       } else {
-        for (const file of selection.files) {
-          data.append(`model_${model}_files`, file, file.webkitRelativePath || file.name);
+        for (const [index, file] of selection.files.entries()) {
+          data.append(`model_${model}_files`, file, selection.paths?.[index] || file.webkitRelativePath || file.name);
         }
       }
     }
     data.append('output_direction', input.outputDirection);
     data.append('moving_model', input.movingModel);
+    data.append('model_a_stream_cache', String(Boolean(input.modelA.streamCache)));
+    data.append('model_b_stream_cache', String(Boolean(input.modelB.streamCache)));
     data.append('workspace_id', input.workspaceId);
     data.append('model_a_transform', JSON.stringify(input.modelATransform));
     data.append('model_b_transform', JSON.stringify(input.modelBTransform));

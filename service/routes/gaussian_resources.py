@@ -29,15 +29,17 @@ def create_gaussian_resource_router(
         root = directory.resolve()
         path = (directory / relative).resolve()
         dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
-        gaussian_path = dataset.get("gaussian_path")
-        gaussian_file = (directory / gaussian_path).resolve() if gaussian_path else None
+        gaussian_paths = [dataset.get("gaussian_path"), dataset.get("gaussian_direct_path"), dataset.get("gaussian_cache_path")]
+        gaussian_files = [(directory / value).resolve() for value in gaussian_paths if value]
         allowed = bool(
-            gaussian_file
+            gaussian_files
             and root in path.parents
-            and (
+            and any(
                 path == gaussian_file
-                or (dataset.get("format") in {"sog", "streamed_sog"} or dataset.get("gaussian_resource_tree"))
-                and gaussian_file.parent in path.parents
+                or (
+                    dataset.get("format") in {"sog", "streamed_sog"} or dataset.get("gaussian_resource_tree")
+                ) and gaussian_file.parent in path.parents
+                for gaussian_file in gaussian_files
             )
             and path.is_file()
         )

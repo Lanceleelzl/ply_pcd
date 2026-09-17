@@ -38,6 +38,8 @@ def create_upload_router(
         model_b_files: Annotated[list[UploadFile] | None, File(description="Model B dataset directory files")] = None,
         output_direction: Annotated[str, Form()] = "a_to_b",
         moving_model: Annotated[str, Form()] = "auto",
+        model_a_stream_cache: Annotated[bool, Form()] = False,
+        model_b_stream_cache: Annotated[bool, Form()] = False,
         workspace_id: Annotated[str, Form()] = "",
         model_a_transform: Annotated[str, Form()] = "",
         model_b_transform: Annotated[str, Form()] = "",
@@ -79,6 +81,10 @@ def create_upload_router(
                 dataset_b = _probe_dataset(path_b)
             except DatasetFormatError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            cache_formats = {"gaussian_ply", "compressed_ply", "spz", "sog", "streamed_sog", "lcc", "lcc2"}
+            for requested, dataset in ((model_a_stream_cache, dataset_a), (model_b_stream_cache, dataset_b)):
+                if requested and dataset.format not in cache_formats:
+                    raise HTTPException(status_code=400, detail="Streamed cache is only available for Gaussian models")
         except Exception:
             shutil.rmtree(session_directory, ignore_errors=True)
             raise
@@ -107,11 +113,17 @@ def create_upload_router(
                 "model_a_sha256": sha256_a, "model_b_sha256": sha256_b,
                 "model_a_dataset": {
                     **dataset_a.to_dict(), "xyz_status": "pending",
+                    "xyz_stage": "queued", "xyz_progress": 10,
                     "gaussian_status": "pending" if dataset_a.gaussian_capable else "not_available",
+                    "gaussian_stage": "waiting" if dataset_a.gaussian_capable else "not_available",
+                    "gaussian_cache_requested": model_a_stream_cache and dataset_a.format != "streamed_sog",
                 },
                 "model_b_dataset": {
                     **dataset_b.to_dict(), "xyz_status": "pending",
+                    "xyz_stage": "queued", "xyz_progress": 10,
                     "gaussian_status": "pending" if dataset_b.gaussian_capable else "not_available",
+                    "gaussian_stage": "waiting" if dataset_b.gaussian_capable else "not_available",
+                    "gaussian_cache_requested": model_b_stream_cache and dataset_b.format != "streamed_sog",
                 },
             },
             "editor_url": f"/?session={session_id}&api=v2",

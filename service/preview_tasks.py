@@ -24,7 +24,7 @@ async def run_preview_task(
     write_status: StatusWriter,
     semaphore: asyncio.Semaphore,
     timeout_seconds: int,
-    prepare_datasets: Callable[[Path, dict[str, Any]], tuple[Path, Path]] | None = None,
+    prepare_datasets: Callable[[Path, dict[str, Any], Callable[[], None]], tuple[Path, Path]] | None = None,
 ) -> None:
     directory = session_directory(session_id)
     status = read_status(directory)
@@ -34,7 +34,8 @@ async def run_preview_task(
         write_status(directory, status)
         try:
             if prepare_datasets is not None:
-                model_a, model_b = await asyncio.to_thread(prepare_datasets, directory, status)
+                persist = lambda: write_status(directory, status)
+                model_a, model_b = await asyncio.to_thread(prepare_datasets, directory, status, persist)
                 command[command.index("--model-a") + 1] = str(model_a)
                 command[command.index("--model-b") + 1] = str(model_b)
                 write_status(directory, status)
@@ -58,6 +59,7 @@ async def run_preview_task(
                     for model in ("a", "b"):
                         dataset = status.get("inputs", {}).get(f"model_{model}_dataset")
                         if dataset is not None:
+                            dataset.update(xyz_stage="ready", xyz_progress=100)
                             metadata[f"gaussian_{model}_available"] = bool(dataset.get("gaussian_path"))
                     status.update(status="ready", metadata=metadata)
                     status.update(
@@ -78,6 +80,7 @@ async def run_preview_task(
                             if gaussian_path else f"/api/v2/registration-sessions/{session_id}/preview/gaussian-b"
                         )
                         status["gaussian_b_filename"] = Path(gaussian_path).name if gaussian_path else status["model_b_filename"]
+                    write_status(directory, status)
         except DatasetFormatError as error:
             for model in ("a", "b"):
                 dataset = status.get("inputs", {}).get(f"model_{model}_dataset")

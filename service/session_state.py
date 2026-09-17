@@ -6,6 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from service.dataset_formats import DatasetFormatError, validate_streamed_sog_directory
+
 
 def normalize_task_links(status: dict[str, Any]) -> dict[str, Any]:
     # Normalize persisted task links without rewriting historical files.
@@ -14,7 +16,71 @@ def normalize_task_links(status: dict[str, Any]) -> dict[str, Any]:
             value = record.get(field)
             if isinstance(value, str) and value.startswith("/api/v1/registrations/"):
                 record[field] = value.replace("/api/v1/registrations/", "/api/v2/registrations/", 1)
+    for model in ("a", "b"):
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset", {})
+        if dataset.get("format") not in {"lcc", "lcc2"}:
+            continue
+        gaussian_path = dataset.get("gaussian_path")
+        if not gaussian_path:
+            gaussian_path = dataset.get("dataset_entrypoint")
+            dataset.update(
+                gaussian_path=gaussian_path,
+                gaussian_direct_path=gaussian_path,
+                gaussian_status="ready",
+                gaussian_stage="ready",
+            )
+        if not dataset.get("gaussian_cache_status"):
+            cached = str(gaussian_path).endswith("lod-meta.json") and "-streamed/" in str(gaussian_path)
+            dataset["gaussian_cache_status"] = "ready" if cached else "not_requested"
+        if gaussian_path and status.get("preview_access_token"):
+            status[f"gaussian_{model}_url"] = (
+                f"/gaussian-resources/{status['session_id']}/{status['preview_access_token']}/{model}/{gaussian_path}"
+            )
+            status[f"gaussian_{model}_filename"] = Path(gaussian_path).name
     return status
+
+
+def reconcile_gaussian_caches(session_directory: Path, status: dict[str, Any]) -> bool:
+    """Repair persisted cache state after an interrupted process without rebuilding valid data."""
+    changed = False
+    for model in ("a", "b"):
+        dataset = status.get("inputs", {}).get(f"model_{model}_dataset")
+        if not isinstance(dataset, dict):
+            continue
+        cache_status = dataset.get("gaussian_cache_status", "not_requested")
+        if cache_status not in {"queued", "converting", "ready"}:
+            continue
+        relative = dataset.get("gaussian_cache_path") or f"datasets/model-{model}-streamed/lod-meta.json"
+        entrypoint = (session_directory / relative).resolve()
+        try:
+            entrypoint.relative_to(session_directory.resolve())
+            validate_streamed_sog_directory(entrypoint)
+            complete = True
+        except (ValueError, DatasetFormatError):
+            complete = False
+        if complete:
+            normalized = str(entrypoint.relative_to(session_directory.resolve())).replace("\\", "/")
+            values = {
+                "gaussian_cache_status": "ready", "gaussian_cache_progress": 100,
+                "gaussian_cache_path": normalized, "gaussian_path": normalized,
+            }
+            if any(dataset.get(key) != value for key, value in values.items()):
+                dataset.update(values)
+                dataset.pop("gaussian_cache_error", None)
+                changed = True
+            token = status.get("preview_access_token")
+            if token:
+                url = f"/gaussian-resources/{status['session_id']}/{token}/{model}/{normalized}"
+                if status.get(f"gaussian_{model}_url") != url:
+                    status[f"gaussian_{model}_url"] = url
+                    status[f"gaussian_{model}_filename"] = entrypoint.name
+                    changed = True
+        elif cache_status == "converting" or (
+            cache_status == "ready" and dataset.get("gaussian_cache_requested")
+        ):
+            dataset.update(gaussian_cache_status="queued", gaussian_cache_progress=0)
+            changed = True
+    return changed
 
 
 def source_available(session_directory: Path, status: dict[str, Any]) -> bool:
