@@ -136,7 +136,7 @@ onMounted(load);
           <button v-for="model in (['a', 'b'] as const)" v-show="item.stream_caches?.[model]?.status === 'failed' && item.source_available" :key="`retry-${model}`" type="button" :disabled="busyId === item.session_id" @click="retryCache(item, model)">重新生成 {{ model.toUpperCase() }} 缓存</button>
           <button type="button" class="primary-subtle" :disabled="!item.restartable || busyId === item.session_id" @click="action(item, 'resume')">继续配准</button>
           <button type="button" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'retain')">再保留 24 小时</button>
-          <button type="button" class="danger-text" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'release')">释放源文件</button>
+          <button type="button" class="danger-text" :disabled="!item.source_available || busyId === item.session_id" @click="action(item, 'release')">{{ item.source_available ? '释放源文件' : '源文件已释放' }}</button>
         </div>
       </article>
     </div>

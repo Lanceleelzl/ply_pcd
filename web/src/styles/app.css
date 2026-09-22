@@ -137,6 +137,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .history-surface { margin-top: 24px; padding: 26px 28px; }
 .history-surface > .section-heading { padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .icon-button, .history-actions-modern button { min-height: 34px; padding: 7px 11px; border: 1px solid var(--border-strong); border-radius: 7px; color: var(--text-soft); background: #122238; cursor: pointer; }
+.icon-button:not(:disabled):hover, .history-actions-modern button:not(:disabled):hover { border-color: #73a9d0; color: #f0f7ff; background: #1c344e; }
+.history-actions-modern .primary-subtle:not(:disabled):hover { border-color: #65cba6; color: #c8f7e6; background: #183d3a; }
+.history-actions-modern .danger-text:not(:disabled):hover { border-color: #d77e83; color: #ffd4d4; background: #462630; }
+.icon-button:disabled, .history-actions-modern button:disabled { border-color: #344354; color: #77879a; background: #1b2633; cursor: not-allowed; }
 .history-table { display: grid; }
 .history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; padding: 19px 0; border-bottom: 1px solid #20344a; }
 .history-row:last-child { border-bottom: 0; }
@@ -155,6 +159,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .history-more { position: absolute; right: 0; top: 40px; z-index: 3; display: grid; gap: 6px; width: 150px; padding: 8px; border: 1px solid var(--border); border-radius: 9px; background: #0c1826; box-shadow: 0 14px 34px #0008; }
 .history-more button { width: 100%; }
 .history-actions-modern .danger-text { color: #ff9a9a; }
+.history-actions-modern .danger-text:disabled, .history-actions-modern .primary-subtle:disabled { border-color: #344354; color: #77879a; background: #1b2633; }
 .empty-state { padding: 32px 0 12px; color: var(--text-muted); text-align: center; font-size: 13px; }
 .inline-alert { padding: 10px 12px; border-radius: 8px; font-size: 12px; }
 .inline-alert.error { color: #ffc0c0; background: #3b1d28; }
