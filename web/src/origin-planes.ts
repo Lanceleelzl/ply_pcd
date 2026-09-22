@@ -39,7 +39,7 @@ export class OriginPlaneController {
         if (plane.id === 'yoz') visual.setLocalEulerAngles(0, 0, 90);
         const material = new pc.StandardMaterial();
         material.diffuse = plane.color; material.emissive = plane.color.clone().mulScalar(0.25);
-        material.opacity = 0.18; material.blendType = pc.BLEND_NORMAL; material.depthWrite = false;
+        material.opacity = 0.36; material.blendType = pc.BLEND_NORMAL; material.depthWrite = false;
         material.cull = pc.CULLFACE_NONE; material.update();
         visual.render!.meshInstances.forEach(instance => { instance.material = material; });
         frame.addChild(visual); visual.enabled = false; this.visuals[model][plane.id] = visual;
