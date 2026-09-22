@@ -10,6 +10,11 @@
   cursor: grabbing;
 }
 
+.view-cube-scale {
+  transform: translateY(-3px) scale(.8);
+  transform-style: preserve-3d;
+}
+
 .view-cube {
   width: 60px;
   height: 60px;
@@ -27,6 +32,7 @@
   box-shadow: inset 0 0 12px #d9e4f21c;
   opacity: 1;
   transform-style: preserve-3d;
+  clip-path: polygon(16.667% 0, 83.333% 0, 100% 16.667%, 100% 83.333%, 83.333% 100%, 16.667% 100%, 0 83.333%, 0 16.667%);
 }
 
 .cube-face-label {
@@ -63,18 +69,33 @@
   transform: rotateY(180deg) translateZ(30px);
 }
 
-.cube-corner {
-  left: 24px;
-  top: 24px;
-  width: 12px;
-  height: 12px;
-  border: 1px solid #dbe5f2;
-  border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, #f7fbff 0 14%, #9eb0c7 34%, #50627b 72%, #26354a 100%) !important;
-  box-shadow: 0 1px 3px #050b13cc, 0 0 0 1px #152033;
-  transform: translate3d(calc(var(--cx) * 30px), calc(var(--cy) * -30px), calc(var(--cz) * 30px));
+.view-cube .cube-corner {
+  left: 22px;
+  top: 22px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  transform-style: preserve-3d;
+  box-shadow: none;
 }
 
-.cube-corner:hover {
-  background: #ffd76a !important;
+.view-cube .cube-corner[hidden] { display: none; }
+.view-cube .cube-corner:hover { background: transparent !important; }
+.view-cube .cube-corner-facet {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(145deg, #dcecff, #789abc);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  transform-origin: 0 0;
+  backface-visibility: hidden;
+}
+.view-cube .cube-corner-facet:last-child { background: #526d8a; }
+.view-cube .cube-corner:is(:hover, :focus-visible) .cube-corner-facet {
+  background: #91cbff;
 }

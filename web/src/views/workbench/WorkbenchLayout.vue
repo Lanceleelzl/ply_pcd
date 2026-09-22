@@ -38,8 +38,7 @@ const faces = [
 ];
 const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
   direction: `${x},${y},${z}`,
-  style: { '--cx': x, '--cy': y, '--cz': z },
-  title: `等轴视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z`,
+  title: `斜视角 ${x > 0 ? '+' : '−'}X ${y > 0 ? '+' : '−'}Y ${z > 0 ? '+' : '−'}Z`,
 }))));
 </script>
 
@@ -91,10 +90,10 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
         <div id="iteration-progress" class="viewport-progress" :class="{ completed: result.progressCompleted }" :style="{ top: `${progressTop}px` }"
           role="status" aria-live="polite" :hidden="!result.progressVisible">{{ result.progressText }}</div>
         <div class="view-gizmo" aria-label="快速视角">
-          <div class="view-cube-scene"><div class="view-cube">
+          <div class="view-cube-scene"><div class="view-cube-scale"><div class="view-cube">
             <button v-for="face in faces" :key="face.axis" class="cube-face" :class="`face-${face.axis}`" :data-direction="face.direction" :title="face.title">{{ face.label }}</button>
-            <button v-for="corner in corners" :key="corner.direction" class="cube-corner" :data-direction="corner.direction" :style="corner.style" :title="corner.title"></button>
-          </div></div>
+            <button v-for="corner in corners" :key="corner.direction" class="cube-corner" :data-direction="corner.direction" :title="corner.title"><span v-for="facet in 4" :key="facet" class="cube-corner-facet" aria-hidden="true"></span></button>
+          </div></div></div>
           <div class="projection-switch"><button data-projection="orthographic">正交</button><button data-projection="perspective" class="active">透视</button></div>
         </div>
         <div id="viewport-help" class="viewport-help">{{ view.help }}</div>

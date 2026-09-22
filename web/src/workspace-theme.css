@@ -160,7 +160,7 @@
 .integrated-editor .view-cube :is(.face-y, .face-ny) { color: #a3e3bf; background: linear-gradient(135deg, #35554f, #253e3a); }
 .integrated-editor .view-cube :is(.face-z, .face-nz) { color: #b0d2ff; background: linear-gradient(135deg, #3e5877, #283c56); }
 .integrated-editor .view-cube .cube-face:hover { background: #446887; border-color: #d6e9ff; color: #fff; }
-.integrated-editor .view-cube .cube-corner { width: 10px; height: 10px; left: 25px; top: 25px; padding: 0; border: 1px solid #b1c4da; box-shadow: 0 1px 3px #0008; }
+.integrated-editor .view-cube .cube-corner { border: 0; }
 .integrated-editor .projection-switch { gap: 4px; }
 .integrated-editor .projection-switch button { min-height: 30px; padding: 4px 6px; font-size: 12px; }
 
