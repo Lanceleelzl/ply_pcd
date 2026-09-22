@@ -3,7 +3,9 @@ import { defineStore } from 'pinia';
 import { loadRegistrationSession } from '../api/registration-api';
 import type { ModelId } from '../api/contracts';
 
-const STORAGE_KEY = 'ply-pcd-stream-cache-sessions';
+// V2 excludes sessions submitted without a cache request. Do not migrate the old
+// key because it tracked every upload and surfaces unrelated historical failures.
+const STORAGE_KEY = 'ply-pcd-stream-cache-sessions-v2';
 type CacheStatus = 'queued' | 'converting' | 'ready' | 'failed';
 interface TrackedSession { sessionId: string; workspaceId: string; labels?: Partial<Record<ModelId, string>> }
 export interface CacheTask {

@@ -32,7 +32,9 @@ async function submit(): Promise<void> {
   const labels = { a: draft.files.a?.label, b: draft.files.b?.label };
   const sessionId = await draft.submit(workspace.workspaceId);
   if (sessionId) {
-    backgroundTasks.track(sessionId, workspace.workspaceId, labels);
+    if (draft.files.a?.streamCache || draft.files.b?.streamCache) {
+      backgroundTasks.track(sessionId, workspace.workspaceId, labels);
+    }
     await openWorkspace(sessionId);
   }
 }

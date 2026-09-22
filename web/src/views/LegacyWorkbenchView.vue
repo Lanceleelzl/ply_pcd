@@ -19,7 +19,6 @@ const lifecycle = new AbortController();
 let dispose: (() => void) | undefined;
 
 onMounted(async () => {
-  backgroundTasks.track(props.sessionId, workspace.workspaceId);
   if (!host.value) return;
   try {
     const module = await import('../pages/generic-registration');
@@ -30,7 +29,19 @@ onMounted(async () => {
       {
         signal: lifecycle.signal,
         navigateHome: () => { void router.push({ name: 'home' }); },
-        onStatus: (status, session) => { loadingStatus.value = status; if (session) preparingSession.value = session; },
+        onStatus: (status, session) => {
+          loadingStatus.value = status;
+          if (!session) return;
+          preparingSession.value = session;
+          const inputs = session.inputs;
+          if (inputs?.model_a_dataset?.gaussian_cache_requested
+            || inputs?.model_b_dataset?.gaussian_cache_requested) {
+            backgroundTasks.track(props.sessionId, workspace.workspaceId, {
+              a: inputs.model_a_original_filename,
+              b: inputs.model_b_original_filename,
+            });
+          }
+        },
         mountLayout: async options => {
           lifecycle.signal.throwIfAborted();
           layout.value = options;

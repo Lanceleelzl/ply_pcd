@@ -20,6 +20,7 @@ export interface DatasetInfo {
   gaussian_progress?: number | null;
   gaussian_error?: string;
   gaussian_cache_status?: 'not_requested' | 'queued' | 'converting' | 'ready' | 'failed';
+  gaussian_cache_requested?: boolean;
   gaussian_cache_progress?: number | null;
   gaussian_cache_error?: string;
 }
