@@ -265,13 +265,22 @@
   color: #fff;
 }
 
-.model-role-summary {
-  margin-top: 8px !important;
+.model-info-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.model-info-item {
+  min-width: 0;
   padding: 7px 8px;
   border-radius: 6px;
   background: #0d1725;
   color: #cbd5e1;
 }
+
+.model-info-item small { display: block; color: #9dacbf; }
 
 .viewport-progress {
   position: absolute;

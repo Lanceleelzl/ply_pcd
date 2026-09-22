@@ -15,6 +15,7 @@ const viewport = ref<HTMLElement | null>(null);
 const progressTop = ref(0);
 const resultOpen = ref(false);
 const inspectorOpen = computed(() => props.inspector.clipping || props.inspector.originPlanes || props.inspector.query);
+const movingModel = computed(() => props.view.roleSummary.match(/^移动 ([AB])/)?.[1]?.toLowerCase());
 let progressResize: ResizeObserver | undefined;
 const positionProgress = () => {
   const toolbar = viewport.value?.querySelector<HTMLElement>('.viewport-toolbar');
@@ -63,8 +64,12 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
         <header class="dock-heading"><strong>配准流程</strong></header>
         <section class="workflow-step completed">
           <h2><span>1</span> 模型与坐标</h2>
-          <p>A：{{ session.metadata!.models.a.source_point_count.toLocaleString() }} 点<br>B：{{ session.metadata!.models.b.source_point_count.toLocaleString() }} 点</p>
-          <p id="badge" class="model-role-summary">{{ view.roleSummary }}</p>
+          <div id="badge" class="model-info-row" :aria-label="view.roleSummary">
+            <div v-for="model in (['a', 'b'] as const)" :key="model" class="model-info-item">
+              <span>{{ model.toUpperCase() }}：{{ session.metadata!.models[model].source_point_count.toLocaleString() }} 点</span>
+              <small v-if="movingModel">{{ movingModel === model ? '移动（黄色）' : '固定（灰色）' }}</small>
+            </div>
+          </div>
           <div id="business-transform-panel"><slot name="business" /></div>
           <p id="gaussian-status" class="gaussian-status" :class="{ error: gaussian.error }" :hidden="!gaussian.message">{{ gaussian.message }}</p>
         </section>
