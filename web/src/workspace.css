@@ -336,7 +336,7 @@
 
 .origin-plane-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 116px;
+  grid-template-columns: 110px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   margin-top: 6px;
@@ -348,8 +348,15 @@
   gap: 6px;
 }
 
-.origin-plane-row select {
-  min-height: 32px !important;
+.origin-plane-sides {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.origin-plane-sides label {
+  white-space: nowrap;
 }
 
 .model-visibility button.gaussian-toggle.available:not(.active) {

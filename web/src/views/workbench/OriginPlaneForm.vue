@@ -23,11 +23,14 @@ const planes = [
       <label><input type="checkbox" :checked="state[model][plane.id].visible"
         :aria-label="`模型 ${model.toUpperCase()} 显示 ${plane.id.toUpperCase()}`"
         @change="emit('visible', model, plane.id, ($event.target as HTMLInputElement).checked)">显示 {{ plane.id.toUpperCase() }}</label>
-      <select :aria-label="`模型 ${model.toUpperCase()} ${plane.id.toUpperCase()} 剖切`"
-        :value="state[model][plane.id].side"
-        @change="emit('side', model, plane.id, Number(($event.target as HTMLSelectElement).value))">
-        <option :value="0">不剖切</option><option :value="1">保留 +{{ plane.normal }}</option><option :value="-1">保留 −{{ plane.normal }}</option>
-      </select>
+      <div class="origin-plane-sides" role="radiogroup" :aria-label="`模型 ${model.toUpperCase()} ${plane.id.toUpperCase()} 剖切`">
+        <label v-for="side in [0, 1, -1]" :key="side">
+          <input type="radio" :name="`origin-plane-${model}-${plane.id}`" :value="side"
+            :checked="state[model][plane.id].side === side"
+            @change="emit('side', model, plane.id, side)">
+          {{ side === 0 ? '不剖切' : `${side > 0 ? '+' : '−'}${plane.normal}` }}
+        </label>
+      </div>
     </div>
   </fieldset>
   <button class="full-width" @click="emit('clear')">全部关闭</button>

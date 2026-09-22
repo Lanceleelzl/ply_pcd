@@ -78,6 +78,7 @@
 }
 .integrated-editor :is(input, select):disabled { opacity: .5; cursor: not-allowed; }
 .integrated-editor input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: #4dbb92; flex-shrink: 0; vertical-align: middle; }
+.integrated-editor .origin-plane-sides input[type="radio"] { width: 16px; height: 16px; margin: 0; accent-color: #4dbb92; flex-shrink: 0; }
 .integrated-editor :is(.parameter-label, .icp-grid label, .field-grid label) {
   display: grid; gap: 6px; color: var(--ui-muted); font-size: var(--ui-body);
 }
