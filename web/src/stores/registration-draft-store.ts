@@ -27,6 +27,16 @@ export const useRegistrationDraftStore = defineStore('registration-draft', () =>
   const submitting = ref(false);
   const status = ref('');
 
+  const reset = (): void => {
+    files.a = undefined;
+    files.b = undefined;
+    transforms.a = defaultTransform();
+    transforms.b = defaultTransform();
+    outputDirection.value = 'a_to_b';
+    movingModel.value = 'auto';
+    status.value = '';
+  };
+
   const submit = async (workspaceId: string): Promise<string | undefined> => {
     if (submitting.value) return;
     if (!files.a || !files.b) {
@@ -57,5 +67,5 @@ export const useRegistrationDraftStore = defineStore('registration-draft', () =>
     }
   };
 
-  return { files, transforms, outputDirection, movingModel, submitting, status, submit };
+  return { files, transforms, outputDirection, movingModel, submitting, status, submit, reset };
 });

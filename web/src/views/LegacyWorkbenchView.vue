@@ -5,11 +5,13 @@ import { WorkbenchContent, type WorkbenchLayoutOptions } from './workbench/mount
 import type { DatasetInfo, ModelId, RegistrationSession } from '../api/contracts';
 import { useWorkspaceStore } from '../stores/workspace-store';
 import { useBackgroundCacheStore } from '../stores/background-cache-store';
+import { useRegistrationDraftStore } from '../stores/registration-draft-store';
 
 const props = defineProps<{ sessionId: string; apiVersion: 'v2' }>();
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const backgroundTasks = useBackgroundCacheStore();
+const draft = useRegistrationDraftStore();
 const host = ref<HTMLDivElement>();
 const loadError = ref('');
 const loadingStatus = ref('queued');
@@ -28,7 +30,7 @@ onMounted(async () => {
       props.sessionId,
       {
         signal: lifecycle.signal,
-        navigateHome: () => { void router.push({ name: 'home' }); },
+        navigateHome: () => { draft.reset(); void router.push({ name: 'home' }); },
         onStatus: (status, session) => {
           loadingStatus.value = status;
           if (!session) return;
