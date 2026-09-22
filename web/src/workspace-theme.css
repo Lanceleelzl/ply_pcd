@@ -196,7 +196,7 @@
   grid-row: unset;
   top: 12px;
   right: 12px;
-  width: min(460px, calc(100% - 336px));
+  width: min(380px, calc(100% - 336px));
   max-height: calc(100% - 24px);
   overflow: auto;
   padding: 12px;
@@ -211,8 +211,8 @@
 .integrated-editor .viewport-tool-group + .viewport-tool-group { padding-left: 6px; }
 .integrated-editor .viewport-tool-group button { padding: 5px 7px; min-height: 36px; font-size: 12px; }
 .integrated-editor .tool-group-label { display: none; }
-.integrated-editor .has-inspector .viewport-toolbar { max-width: min(480px, calc(100% - 496px)); }
-.integrated-editor .has-inspector .view-gizmo { right: min(484px, calc(100% - 148px)); }
+.integrated-editor .has-inspector .viewport-toolbar { max-width: calc(100% - 552px); }
+.integrated-editor .has-inspector .view-gizmo { right: min(404px, calc(100% - 148px)); }
 @media (max-width: 1100px) {
   .integrated-editor .viewport-toolbar { max-width: calc(100% - 24px); }
   .integrated-editor .view-gizmo { top: auto; bottom: 70px; }
@@ -222,7 +222,7 @@
   .integrated-editor .integrated-workspace, .integrated-editor .integrated-workspace.has-inspector { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; }
   .integrated-editor .workflow-panel { grid-column: 1; grid-row: 1; overflow: auto; }
   .integrated-editor .integrated-workspace > .viewport { grid-column: 2; grid-row: 1; }
-  .integrated-editor .inspector-panel { right: 8px; top: 8px; bottom: auto; width: min(460px, calc(100% - 276px)); max-height: calc(100% - 16px); }
-  .integrated-editor .has-inspector .viewport-toolbar { max-width: calc(100% - 472px); }
-  .integrated-editor .has-inspector .view-gizmo { right: min(480px, calc(100% - 140px)); }
+  .integrated-editor .inspector-panel { right: 8px; top: 8px; bottom: auto; width: min(380px, calc(100% - 276px)); max-height: calc(100% - 16px); }
+  .integrated-editor .has-inspector .viewport-toolbar { max-width: calc(100% - 392px); }
+  .integrated-editor .has-inspector .view-gizmo { right: min(400px, calc(100% - 140px)); }
 }
