@@ -1,6 +1,6 @@
 # 通用点云双向 Registration Service
 
-本项目用于计算两个点云或 Gaussian 数据集之间的双向坐标转换矩阵。输入支持 PLY／compressed PLY／PCD／LAS／LAZ、SOG、Streamed SOG、LCC 和 LCC2；所有 Gaussian／LOD 格式先提取独立 XYZ 计算数据，格式不决定模型角色或矩阵方向。
+本项目提供高斯数据工具箱：首页分别进入双模型 ICP 配准和单模型流式数据处理。配准计算两个点云或 Gaussian 数据集之间的双向坐标转换矩阵；流式工具导入单个 Gaussian、完整数据集或用户确认顺序的 LOD 文件组，预览后生成并下载 Streamed SOG。
 
 通用接口将业务输出方向和 ICP 角色分开：
 
@@ -16,6 +16,7 @@ ICP 角色：移动 A／固定 B，移动 B／固定 A，或自动推荐
 - Visual Studio 2022 原生算法开发和自动 Worker 替换。
 - C++ 无界面点云配准 Worker。
 - 网页上传单文件、数据集 ZIP 或完整数据集目录并查看结果。
+- 独立的单模型三维预览、业务矩阵、坐标查询、坐标轴剖切及 Streamed SOG 生成和下载。
 - Java、Python 等模块通过 HTTP API 调用。
 - Docker Desktop 本地测试。
 - Linux Docker 服务器部署。
@@ -42,6 +43,10 @@ pnpm run dev
 ```
 
 开发模式浏览器打开 `http://localhost:5273`；API 服务运行在 `http://localhost:8865`，OpenAPI 文档可从 `http://localhost:5273/docs` 打开。模型 A、模型 B 均可选择 `.ply`、`.pcd`、`.las`、`.laz`、`.sog`、数据集 ZIP 或包含 `meta.json`／`lod-meta.json`／`.lcc`／`.lcc2` 入口的完整目录。上传结构和版本白名单见 [数据格式兼容规范](docs/DATA_FORMAT_COMPATIBILITY.md) ，真实样本与跨平台结果见 [阶段 13 验收记录](docs/STAGE13_ACCEPTANCE.md) 。
+
+首页的流式处理入口位于 `/streaming`。单文件使用 PLY／SPZ／SOG，目录数据集应选择完整目录或 ZIP；Chrome／Edge 的目录按钮直接选择当前目录，其他浏览器使用目录文件输入回退。已有 LOD 文件组首版接收两份及以上 Gaussian PLY，页面按自然编号预排，LOD 0 表示最精细层，提交前可调整顺序。业务矩阵和剖切只影响预览，不写入输出。任务完成后可在中心点、原始 Gaussian 和生成缓存之间切换，并流式保存 ZIP；下载失败后可从头重试，继续使用已选择的保存位置。
+
+流式任务的源文件、计算文件和预览也使用 `source_retention_hours`。页面可延长保留或主动释放；到期清理保留已生成的 Streamed SOG 输出，并跳过正在准备、生成或下载的任务。
 
 如需修改端口或 v2 会话源文件保留时间，编辑 `config/local.json` 中的 `port`（API）、`web_port`（开发页面）和 `source_retention_hours` 后重新启动服务，无需设置系统或终端环境变量。
 
@@ -93,6 +98,20 @@ GET  /api/v2/registrations/{job_id}/files/{filename}
 GET  /health
 ```
 
+独立流式任务接口：
+
+```text
+POST /api/v2/streaming-tasks
+GET  /api/v2/streaming-tasks?workspace_id={workspace_id}
+GET  /api/v2/streaming-tasks/{task_id}
+PUT  /api/v2/streaming-tasks/{task_id}/business-transform
+POST /api/v2/streaming-tasks/{task_id}/generate
+POST /api/v2/streaming-tasks/{task_id}/retain
+POST /api/v2/streaming-tasks/{task_id}/release
+GET  /api/v2/streaming-tasks/{task_id}/preview
+GET  /api/v2/streaming-tasks/{task_id}/download
+```
+
 调用顺序：上传模型创建会话，等待会话就绪，提交配准，再通过响应中的状态和结果链接读取任务。已有历史矩阵档案保留，旧任务链接在读取时转换为 v2。
 
 ## Docker 部署与验证
@@ -107,6 +126,8 @@ pnpm run docker:up
 ```
 
 Docker 与本地服务默认都使用 `8865` 端口，切换前先停止另一种运行方式。
+
+Docker 构建继续使用官方 npm 源。依赖安装先使用 Node 默认 TLS；失败后自动限定 TLS 1.2 重试一次，仍失败则终止构建。重试保留锁定版本、冻结锁文件、证书及完整性校验，仅作用于依赖下载命令，不改变运行容器的 TLS 设置。APT 下载与安装也采用有限重试，无需调整本机 VPN 或代理。
 
 检查默认 PCD：
 

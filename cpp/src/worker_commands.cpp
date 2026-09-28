@@ -539,6 +539,29 @@ int runModelPreview(const ModelPreviewArguments& arguments)
     return 0;
 }
 
+int runSingleModelPreview(const SingleModelPreviewArguments& arguments)
+{
+    std::filesystem::create_directories(arguments.outputDirectory);
+    const auto model = registration::ReferenceCloudReader().read(arguments.model);
+    const auto preview = registration::PointCloudPreview().write(
+        model.cloud, arguments.pointLimit, arguments.outputDirectory / "model-points.bin");
+    std::ofstream metadata(arguments.outputDirectory / "metadata.json");
+    if (!metadata) throw std::runtime_error("Cannot create preview metadata");
+    metadata << std::fixed << std::setprecision(12);
+    metadata << "{\n  \"format\": \"PCPV0001\",\n"
+             << "  \"model\": {\"format\": \"" << model.format
+             << "\", \"source_point_count\": " << preview.sourcePointCount
+             << ", \"preview_point_count\": " << preview.previewPointCount
+             << ", \"origin\": [" << model.origin[0] << ", " << model.origin[1] << ", " << model.origin[2]
+             << "], \"bounds\": {\"min\": [" << preview.bounds.min[0] << ", "
+             << preview.bounds.min[1] << ", " << preview.bounds.min[2] << "], \"max\": ["
+             << preview.bounds.max[0] << ", " << preview.bounds.max[1] << ", "
+             << preview.bounds.max[2] << "]}}\n}\n";
+    std::cout << "{\"status\":\"success\",\"output_dir\":\""
+              << arguments.outputDirectory.generic_string() << "\"}\n";
+    return 0;
+}
+
 int runInspectPly(const std::filesystem::path& path)
 {
     const auto result = PlyReader().read(path);

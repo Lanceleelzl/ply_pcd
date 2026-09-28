@@ -2,19 +2,30 @@ FROM node:22-bookworm-slim AS web-builder
 
 WORKDIR /src
 COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile --ignore-scripts
+RUN corepack enable \
+    && (pnpm install --frozen-lockfile --ignore-scripts \
+        || (echo 'Dependency installation failed; retrying official npm with TLS 1.2' >&2 \
+            && NODE_OPTIONS=--tls-max-v1.2 pnpm install --frozen-lockfile --ignore-scripts))
 COPY web web
 COPY config config
 RUN pnpm run build:web
 
 FROM ubuntu:24.04 AS builder
 
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        cmake \
-        ninja-build \
+RUN for attempt in 1 2 3; do \
+        apt-get -o Acquire::Retries=3 update && break; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        sleep 2; \
+    done \
+    && for attempt in 1 2 3; do \
+        DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            cmake \
+            ninja-build && break; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        sleep 2; \
+    done \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -28,12 +39,20 @@ RUN cmake -S . -B build -G Ninja \
 
 FROM ubuntu:24.04 AS runtime
 
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates \
-        libstdc++6 \
-        python3 \
-        python3-venv \
+RUN for attempt in 1 2 3; do \
+        apt-get -o Acquire::Retries=3 update && break; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        sleep 2; \
+    done \
+    && for attempt in 1 2 3; do \
+        DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            ca-certificates \
+            libstdc++6 \
+            python3 \
+            python3-venv && break; \
+        if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+        sleep 2; \
+    done \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system registration \
     && useradd --system --create-home --gid registration --home-dir /var/lib/registration registration \

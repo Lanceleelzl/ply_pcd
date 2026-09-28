@@ -71,7 +71,7 @@ def _convert_to_ply(entrypoint: Path, destination: Path, converter: list[str], r
 
 def _convert_to_streamed_sog(entrypoint: Path, destination: Path, converter: list[str], run: RunCommand) -> str | None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    result = run([*converter, "--overwrite", str(entrypoint), str(destination)], capture_output=True,
+    result = run([*converter, "--overwrite", "--gpu", "cpu", str(entrypoint), str(destination)], capture_output=True,
                  text=True, encoding="utf-8", errors="replace", timeout=1800, check=False)
     if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
         return result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
@@ -107,12 +107,12 @@ def _generate_streamed_sog(source: Path, destination: Path, converter: list[str]
     try:
         for target, path in lods:
             result = run(
-                [*converter, "--overwrite", str(source), "--decimate", target, str(path)],
+                [converter[0], str(Path(__file__).with_name("decimate_cpu.mjs")), str(source), target, str(path)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, check=False,
             )
             if result.returncode != 0 or not path.is_file() or path.stat().st_size == 0:
                 return result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
-        command = [*converter, "--overwrite", str(source), "--tag-lod", "0"]
+        command = [*converter, "--overwrite", "--gpu", "cpu", str(source), "--tag-lod", "0"]
         for level, (_, path) in enumerate(lods, start=1):
             command.extend([str(path), "--tag-lod", str(level)])
         command.append(str(destination))

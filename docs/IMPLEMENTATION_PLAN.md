@@ -1,5 +1,9 @@
 > 2026-09-09 实施变更：用户确认移除 v1 API 和旧版手工配准页面。当前使用 v2 会话创建与配准入口，任务状态、SSE、取消、结果和下载统一为 `/api/v2/registrations`。保留历史矩阵档案；本文后续 v1 兼容描述仅作为历史设计记录，不再执行。
 
+## 阶段 14：高斯工具箱与独立流式处理
+
+2026-09-22 用户已确认方案并授权实施，使用独立分支 `codex/gaussian-toolkit`。完整执行顺序、范围、验证和续作断点见 `docs/GAUSSIAN_TOOLKIT_TASKS.md`。规范优先级以 `CLAUDE.md` 的阶段 14 决策为准；下方旧实施记录中配准页面的缓存入口改由独立流式工具承担。
+
 ## 阶段 13：数据格式扩展
 
 用户已确认传统 PLY、Gaussian PLY、PlayCanvas compressed PLY、SOG、Streamed SOG、LCC 和 LCC2 的兼容方向。上传文件结构、LOD 约束和拒收边界统一遵循 `docs/DATA_FORMAT_COMPATIBILITY.md`。

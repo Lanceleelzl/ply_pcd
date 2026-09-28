@@ -12,6 +12,7 @@ int runModelRegistration(const ModelRegisterArguments& arguments);
 int runCoarseRegistration(const CoarseRegisterArguments& arguments);
 int runPreview(const PreviewArguments& arguments);
 int runModelPreview(const ModelPreviewArguments& arguments);
+int runSingleModelPreview(const SingleModelPreviewArguments& arguments);
 int runInspectPly(const std::filesystem::path& path);
 int runInspectReference(const std::filesystem::path& path);
 int runInvertMatrix(const std::filesystem::path& path);

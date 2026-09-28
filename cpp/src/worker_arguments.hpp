@@ -67,10 +67,18 @@ struct ModelPreviewArguments
     std::size_t modelBLimit = 300000;
 };
 
+struct SingleModelPreviewArguments
+{
+    std::filesystem::path model;
+    std::filesystem::path outputDirectory;
+    std::size_t pointLimit = 300000;
+};
+
 void printUsage();
 PreviewArguments parsePreviewArguments(int argc, char** argv);
 RegisterArguments parseRegisterArguments(int argc, char** argv);
 ModelRegisterArguments parseModelRegisterArguments(int argc, char** argv);
 CoarseRegisterArguments parseCoarseRegisterArguments(int argc, char** argv);
 ModelPreviewArguments parseModelPreviewArguments(int argc, char** argv);
+SingleModelPreviewArguments parseSingleModelPreviewArguments(int argc, char** argv);
 } // namespace registration::worker

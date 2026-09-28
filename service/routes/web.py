@@ -34,6 +34,18 @@ def create_web_router(
     async def index() -> Response:
         return web_index()
 
+    @router.get("/registration")
+    async def registration_home() -> Response:
+        return web_index()
+
+    @router.get("/streaming")
+    async def streaming_home() -> Response:
+        return web_index()
+
+    @router.get("/streaming/{task_id}")
+    async def streaming_task_page(task_id: str) -> Response:
+        return web_index()
+
     @router.get("/registration/{session_id}")
     async def model_registration_page(session_id: str) -> Response:
         status = read_status(session_directory(session_id))

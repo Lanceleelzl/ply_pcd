@@ -40,6 +40,7 @@ void printUsage()
         << "  registration_worker register-models --model-a <file> --model-b <file> --moving-model <auto|a|b> --output-direction <a_to_b|b_to_a> --output-dir <dir> [options]\n\n"
         << "  registration_worker coarse-register-models --model-a <file> --model-b <file> --moving-model <a|b> --output-dir <dir> [options]\n\n"
         << "  registration_worker prepare-model-preview --model-a <file> --model-b <file> --output-dir <dir> [options]\n\n"
+        << "  registration_worker prepare-single-model-preview --model <file> --output-dir <dir> [--point-limit <count>]\n\n"
         << "Register options:\n"
         << "  --min-rms-decrease <value>  Default: 1e-5\n"
         << "  --max-iterations <count>     Default: RMS convergence\n"
@@ -205,6 +206,24 @@ ModelPreviewArguments parseModelPreviewArguments(int argc, char** argv)
         throw std::runtime_error("prepare-model-preview requires --model-a, --model-b and --output-dir");
     if (result.modelALimit < 3 || result.modelBLimit < 3)
         throw std::runtime_error("Preview point limits must be at least 3");
+    return result;
+}
+
+SingleModelPreviewArguments parseSingleModelPreviewArguments(int argc, char** argv)
+{
+    SingleModelPreviewArguments result;
+    for (int index = 2; index < argc; ++index)
+    {
+        const std::string option = argv[index];
+        if (option == "--model") result.model = nextValue(index, argc, argv, option);
+        else if (option == "--output-dir") result.outputDirectory = nextValue(index, argc, argv, option);
+        else if (option == "--point-limit") result.pointLimit = std::stoull(nextValue(index, argc, argv, option));
+        else throw std::runtime_error("Unknown prepare-single-model-preview option: " + option);
+    }
+    if (result.model.empty() || result.outputDirectory.empty())
+        throw std::runtime_error("prepare-single-model-preview requires --model and --output-dir");
+    if (result.pointLimit < 3)
+        throw std::runtime_error("Preview point limit must be at least 3");
     return result;
 }
 } // namespace registration::worker

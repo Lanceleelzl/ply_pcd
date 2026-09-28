@@ -35,6 +35,7 @@ from service.routes.jobs import create_job_router
 from service.routes.registrations import create_registration_router
 from service.routes.coarse_registrations import create_coarse_registration_router
 from service.routes.sessions import create_session_router
+from service.routes.streaming import StreamingTasks, create_streaming_resource_router, create_streaming_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.routes.gaussian_resources import create_gaussian_resource_router
@@ -83,6 +84,7 @@ _background_tasks = BackgroundTasks()
 _preview_tasks: dict[str, asyncio.Task[None]] = {}
 _running_processes: dict[str, asyncio.subprocess.Process] = {}
 _object_storage = create_object_storage(OBJECT_STORAGE_SETTINGS)
+_streaming_tasks = StreamingTasks(RUNTIME_ROOT, [NODE_PATH, SPLAT_TRANSFORM_PATH], WORKER_PATH, SOURCE_RETENTION_HOURS)
 
 
 def _start_model_preview(session_id: str, command: list[str]) -> asyncio.Task[None]:
@@ -137,6 +139,8 @@ def _history_path(workspace_id: str, session_id: str) -> Path:
 
 app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _read_status))
 app.include_router(create_gaussian_resource_router(_manual_session_directory, _read_status))
+app.include_router(create_streaming_resource_router(_streaming_tasks))
+app.include_router(create_streaming_router(_streaming_tasks))
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
@@ -321,6 +325,7 @@ def _cleanup_completed_jobs() -> None:
         _v2_source_available, _release_v2_source_data,
         preserve_job_status=_object_storage.enabled,
     )
+    _streaming_tasks.cleanup_expired()
 
 
 async def _cleanup_loop() -> None:
@@ -329,6 +334,7 @@ async def _cleanup_loop() -> None:
 
 @app.on_event("startup")
 async def start_cleanup() -> None:
+    _streaming_tasks.recover()
     recover_registration_queue(
         RUNTIME_ROOT,
         read_status=_read_status,

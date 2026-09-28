@@ -214,6 +214,9 @@ class DatasetPreparationTest(unittest.TestCase):
         dataset = status["inputs"]["model_a_dataset"]
         self.assertEqual(len(calls), 4)
         self.assertEqual([call[-2] for call in calls[:3]], ["50", "25", "10"])
+        self.assertTrue(all(Path(call[1]).name == "decimate_cpu.mjs" for call in calls[:3]))
+        self.assertIn("--gpu", calls[-1])
+        self.assertEqual(calls[-1][calls[-1].index("--gpu") + 1], "cpu")
         self.assertIn("--tag-lod", calls[-1])
         self.assertEqual(dataset["gaussian_cache_status"], "ready")
         self.assertEqual(dataset["gaussian_cache_path"], "datasets/model-a-streamed/lod-meta.json")

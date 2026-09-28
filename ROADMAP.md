@@ -3,11 +3,55 @@
 ## 当前阶段
 
 ```text
-阶段 13：数据格式扩展
-状态：已完成，格式接入、真实样本、Windows、Docker Linux 和独立 Chrome 验收通过
+阶段 14：高斯工具箱与独立流式处理
+状态：阶段 14 主流程与官方源构建修复已完成并通过新镜像端到端验收，独立分支 codex/gaussian-toolkit
+执行清单与续作断点：docs/GAUSSIAN_TOOLKIT_TASKS.md
+前置阶段 13：已完成，保留以下历史验证记录
 ```
 
 ## 进行中
+
+- 2026-09-28（续作健康复查）：Docker Desktop 按规范启动一次，Engine 29.2.0 恢复；隔离容器 `ply-pcd-stage14-official-safe-20260927` 启动后运行状态正常、重启次数 0，`127.0.0.1:8895/health` 返回 `ok`。运行时 `NODE_OPTIONS` 为空、Node TLS 上限为默认 1.3；备用候选 Dockerfile 与补丁均保留，`git diff --check` 通过。
+
+- 2026-09-28（阶段 14 构建收口）：正式 `docker/Dockerfile` 保持官方 npm 源，依赖安装优先使用 Node 默认 TLS，失败时仅该命令用 TLS 1.2 重试一次；APT 索引更新和安装分别最多尝试三次。一次无缓存构建中，官方源 pnpm 10.33.0 与 69 个冻结锁文件依赖安装、Web 构建通过；APT 临时 502 后将索引和安装重试分开，最终 Dockerfile 构建成功，镜像 `ply-pcd-registration:stage14-official-safe-20260927`（最终构建复用前一轮已验证的 Web 下载层）。新镜像运行环境仅有 PATH，Node 默认 TLS 上限为 1.3、无 `NODE_OPTIONS`。隔离服务在 `127.0.0.1:8895` 完成单文件、显式 LOD、ZIP 再导入与真实 3,059,456 点全流程，真实 ZIP 68,624,389 bytes、73 个文件 CRC／SHA-256 全通过；合成 ICP A／B RMS 为 `7.41627e-07`／`5.04159e-07`，真实 PLY／PCD B 移动 RMS 为 `0.457745013019`。下载分支测试覆盖正常、回退成功及持续失败退出。构建日志 `runtime/stage14-official-safe-complete-20260927.log`，验收日志 `runtime/stage14-official-safe-streaming-20260927.log`、`runtime/stage14-official-safe-icp-20260927.log`、`runtime/stage14-official-safe-icp-real-20260927.log`。备用镜像源候选文件和补丁保留，未切换默认源。9 月 28 日续作时 Docker Engine 已停止，按规范启动一次后复查当前服务状态。
+
+- 2026-09-27（官方 npm 源再次验证）：按用户要求保留官方默认源及备用候选 Dockerfile／补丁。Docker Engine 29.2.0 可用，使用正式 `docker/Dockerfile` 执行 `docker build --no-cache --progress plain -f docker/Dockerfile -t ply-pcd-registration:stage14-official-retry-20260927 .`。Corepack 成功取得 pnpm 10.33.0，部分依赖下载成功，但默认重试后 `@babel/helper-string-parser` 仍在 TLS 建连前收到 `ECONNRESET`，pnpm 安装阶段退出 1，完整镜像未产出。日志：`runtime/stage14-official-retry-20260927.log`。正式构建配置未改；备用 `runtime/stage14-registry-option.Dockerfile` 和 `runtime/stage14-registry-option.patch` 均保留，未切换默认源。
+
+- 2026-09-27（阶段 14 构建候选验收完成）：候选 `runtime/stage14-registry-option.Dockerfile` 显式使用 `NPM_REGISTRY=https://registry.npmmirror.com` 完成完整 `--no-cache` 构建，镜像为 `ply-pcd-registration:stage14-registry-option-20260926`。默认仍为官方源，Corepack 与 pnpm 共用参数，版本及锁文件不变。APT 文件下载重试加安装命令最多三次尝试，间隔两秒；确定性复现验证恢复成功及持续失败退出，两个 RUN 段语法检查通过。新镜像在 `127.0.0.1:8894` 完成单文件、显式 LOD、ZIP 再导入、真实 3,059,456 点流式全流程；真实 ZIP 68,624,389 bytes、73 个清单文件 CRC／SHA-256 全通过。ICP 合成 A／B 角色 RMS 为 `7.41627e-07`／`5.04159e-07`，真实 PLY／PCD B 移动 RMS 为 `0.457745013019`。续作时确认容器运行且重启数 0。服务 128／128、Web 流式专项 10／10、类型检查、生产构建、Windows CTest 1／1 已通过。构建与端到端日志分别为 `runtime/stage14-registry-option-final-build-20260926.log`、`runtime/stage14-final-streaming-e2e-20260926.log`、`runtime/stage14-final-icp-synthetic-20260926.log`、`runtime/stage14-final-icp-real-20260926.log`。正式 Dockerfile／README 的候选补丁待用户确认落地；官方 npm 直连恢复未获验证。
+
+- 2026-09-24（阶段 14 构建网络对照与镜像复验）：Windows 主机访问 npm 官方源与 `registry.npmmirror.com` 均返回 200；Docker Node 容器无代理环境变量，直接 `fetch` 官方源复现 TLS `ECONNRESET`，访问国内镜像返回 200。仅在忽略的临时 Dockerfile 中为 Web 构建步骤指定 `COREPACK_NPM_REGISTRY` 和 `npm_config_registry`，保留项目锁定的 pnpm 10.33.0、锁文件及其余 Dockerfile 指令；完整 `--no-cache` 构建成功，产出 `ply-pcd-registration:stage14-mirror-probe-20260924`。新镜像容器 `ply-pcd-stage14-mirror-probe-20260924`（`127.0.0.1:8893`）健康、小样本单文件／LOD／ZIP 再导入通过；真实 3,059,456 点模型生成 ZIP 68,624,389 bytes，73 个清单文件 CRC／SHA-256 全通过；ICP A／B 两角色 RMS `7.41627e-07`／`5.04159e-07`。项目原版 Dockerfile 未改；原版直连 npm 冷构建仍失败，原因限定为当前 Docker 构建网络路径，不归因于 VPN 本身。
+
+- 2026-09-24（阶段 14 完整冷构建复验）：再次执行项目原版 `docker build --no-cache --progress plain -f docker/Dockerfile -t ply-pcd-registration:stage14-full-20260924 .`，在 `RUN corepack enable && pnpm install --frozen-lockfile --ignore-scripts` 阶段访问 `registry.npmjs.org:443` 时收到 TLS `ECONNRESET`，未进入 Web／原生项目编译，完整镜像仍未产出。现有最新代码验收容器持续运行、健康检查为 `ok`、重启数 0；保留此前 Docker Linux 端到端通过的结论，不将其等同于完整冷构建通过。
+
+- 2026-09-24（阶段 14 Docker 手动恢复后续验）：用户手动启动 Docker Desktop 后确认 Linux Engine 29.2.0 可用；此前崩溃日志定位在 Inference manager 访问 `dockerInference` 端点，未清理 Docker 内部文件。基于锁定运行时镜像覆盖最新代码构建 `ply-pcd-registration:stage14-closeout-20260924`，隔离容器 `ply-pcd-stage14-closeout-20260924` 在 `127.0.0.1:8892` 健康及流式 OpenAPI 通过。单文件、显式 LOD、流式 ZIP 再导入和真实 3,059,456 点模型在容器中完成上传、预览、生成、下载；真实 ZIP 68,624,389 bytes，73 个清单文件 CRC／SHA-256 全通过。流式任务转换期间，ICP 合成 A／B 两角色 RMS `7.41627e-07`／`5.04159e-07`，容器重启数 0。完整 Dockerfile 冷构建已越过此前 Ubuntu DNS 问题，但 `corepack`／pnpm 下载时遭遇 `registry.npmjs.org` TLS `ECONNRESET`；降低 pnpm 并发的临时构建也在 corepack 阶段失败，项目 Dockerfile 未改，冷构建继续待网络恢复。
+
+- 2026-09-24（阶段 14 缺陷收口）：修复已有 Streamed SOG 成果随源目录释放而丢失、并发读取占用提前解除、资源路由越界、生成完成后重启重复转换；修复单模型业务平移显示、文件原点平面、剖切拾取及 Gaussian 失败／迟到资源释放。流式页面补全目录选择、真实／不确定生成进度、下载失败后复用已选位置；ZIP 建议名加时间并过滤非法字符。服务回归 128／128、Web 相关专项 14／14、类型检查、生产构建、Windows CTest 1／1、差异检查通过。隔离 Windows 服务完成单文件、LOD 文件组、流式 ZIP 再导入和真实 3,059,456 点模型的上传、预览、生成、下载，真实 ZIP 68,624,389 bytes、73 个清单文件 CRC／SHA-256 全通过；Playwright CLI 大模型原始 Gaussian 与缓存切换、刷新任务恢复通过，控制台 0 error／0 warning。Docker 完整冷构建复试实际失败于 Ubuntu 软件源 DNS；引擎随后停止，按规范只启动 Docker Desktop 一次，最新代码容器复验仍待完成。
+
+- 2026-09-24（阶段 14 Docker Linux 运行验收）：SplatTransform 3.4.2 CLI 的 `--decimate` 即使指定 `--gpu cpu` 仍尝试创建 WebGPU 设备，容器缺 Vulkan 时失败；改用已锁定库 API 的 CPU 降采样，不新增依赖，流式读写并支持中间代磁盘暂存。基于既有锁定运行时镜像覆盖当前服务代码构建 `stage14-cpu-verify`，容器健康和流式接口通过。4 点样本及真实 3,059,456 点 Compressed PLY 均完成上传、预览、生成、下载；真实 ZIP 68,624,389 bytes，73 个清单文件的 CRC 与 SHA-256 全部通过，最终 `ready 100%`。服务测试 121／121。完整 Dockerfile 冷构建仍因 Ubuntu／npm 软件源 DNS 不可用而待补，当前镜像运行验收已完成。
+
+- 2026-09-23（阶段 14 公共手柄收口）：单模型长方体复用配准工作台的平移／旋转 Gizmo 与输入冲突仲裁，中心平移、旋转和六面手柄共存；坐标查询开启时隐藏手柄，退出后恢复。浏览器在真实 299,851 点预览中，中心 X 拖动由 -109.3578 更新到 -65.4748，坐标轴范围保持原值；旋转后再修改中心为 -60，长方体姿态保留，控制台 0 error／0 warning。Web 类型检查、生产构建和公共输入／Gizmo 仲裁／相机／配准场景测试 4／4 通过。原点平面固定于模型原点，不提供平移手柄；当前剩余阻塞为 Docker 软件源 DNS 与容器生成复测。
+
+- 2026-09-23（阶段 14 长方体状态同步）：单模型长方体剖切的数值路径改为从 PlayCanvas 实体计算完整逆变换，保留实体已有旋转。Web 类型检查、生产构建、旋转盒逆矩阵几何检查及公共输入／相机／配准场景测试 3／3 通过。Playwright CLI 在真实 299,851 点预览中启用长方体并修改中心值，剖切框正常显示，控制台 0 error／0 warning。当前公共手柄只有六面拖拽，尚无旋转手柄，浏览器未验证旋转交互。Docker 软件源 DNS 仍超时。
+
+- 2026-09-23（阶段 14 Docker 续验）：Docker Desktop Linux Engine 29.2.0 已就绪；基于当前代码的验证容器完成健康检查、OpenAPI、流式上传与预览。生成阶段的 SplatTransform 3.4.2 `--decimate` 报缺少 `libvulkan.so.1`。已在 Dockerfile 运行层补充 `libvulkan1` 与 `mesa-vulkan-drivers`；默认及 host 网络的验证镜像构建均因 Ubuntu 软件源 DNS 解析失败而停止，生成与下载仍待容器复测。`git diff --check` 通过。
+
+- 2026-09-23（阶段 14 大模型收口）：真实 `point_cloud_5.compressed.ply`（49,812,429 bytes，3,059,456 点）经独立流式页面上传，生成 299,851 点浏览器预览并完成原始 Gaussian 渲染、业务坐标拾取、4 级 Streamed SOG 生成、缓存切换和下载入口恢复；生成状态 `ready 100%`，Playwright 控制台 0 error／0 warning，截图 `output/playwright/stage14-large-model.png` 与 `output/playwright/stage14-large-cache.png`。矩阵、大坐标、剖切、Gaussian 生命周期和交互互斥专项 10／10 通过。Docker Desktop Linux Engine pipe 仍不存在；单模型长方体及原点平面直接拖拽手柄列为后续交互增强。
+
+- 2026-09-23（阶段 14 最终回归）：服务测试 121／121、Windows CTest 1／1、Web 类型检查、生产构建和差异检查通过；构建仅保留既有 Worker 外部化、WebP WASM 与大包提示。`docker info` 再次确认 `dockerDesktopLinuxEngine` pipe 不存在，因此本轮 Docker 验收仍受环境阻塞。
+
+- 2026-09-23（阶段 14 保留期与辅助工具）：流式任务接入后台到期清理、延长保留和主动释放；仅删除源文件、数据集解码、计算中间文件和预览，保留生成输出，运行中和下载中任务返回占用冲突或由清理器跳过。服务专项覆盖保留、主动释放、到期及 reader 保护，回归 121／121。单模型视口增加长方体数值剖切、三原点平面与正负侧剖切、模型坐标轴；Playwright 在原始 Gaussian 显示下启用上述工具，控制台 0 error，截图 `output/playwright/stage14-streaming-tools.png`。当前仍缺长方体和原点平面的直接拖拽手柄、大模型视觉／坐标拾取、刷新保持相机及 Docker 验收。
+
+- 2026-09-23（阶段 14 显示切换与配注册口拆分）：单模型视口已支持中心点、原始 Gaussian、生成缓存三态切换和已有 LOD 层级选择，切换时释放上一份 Gaussian 资源且不重建相机；坐标查询支持拾取、手工输入和复制，坐标轴数值剖切同时作用于中心点和 Gaussian。Playwright 对 4 点真实 Gaussian 完成原始／缓存切换及剖切交互，控制台 0 error。配准上传、页头和历史已移除缓存生成、状态、重试与下载入口，旧后端接口和历史字段保留兼容。新增流式 ZIP 下载回归，服务测试 119／119、Web 类型检查、生产构建、Windows CTest 1／1、差异检查通过；README 和 API 文档已更新。当前 Docker Desktop Linux Engine pipe 不存在，未运行 Docker 验收。长方体／原点平面／坐标轴辅助体、大模型视觉和坐标拾取仍待完成；保留期清理涉及删除运行目录，未在本轮启用。
+
+- 2026-09-22（阶段 14 单模型预览与真实生成）：新增单模型 PlayCanvas 点云视口，复用已有 Application、ViewportCameraController 和 InputController，支持轨道、平移、缩放、适配视角与业务坐标点选；业务矩阵在视口内更新且不重建相机。仓库内 4 点 Gaussian PLY 及 3／4 点双层 LOD 分别完成真实预览、Streamed SOG 生成和 ZIP 校验，归档包含 20／14 个文件、CRC 无误。浏览器从 `/streaming` 上传 4 点样本进入预览并生成成功，控制台 0 error；小样本点太少，尚未证明大模型视觉正确性。类型检查与生产构建通过。完整原始 Gaussian／缓存预览、剖切、浏览器坐标拾取、保留期与 Docker 仍待实现或验证。
+
+- 2026-09-22（阶段 14 续作）：接通 `/streaming` 和 `/streaming/:taskId`，新增独立任务页，支持单文件／目录或 ZIP／有序 LOD 上传、层级顺序调整、任务历史、业务矩阵保存、生成重试及流式 ZIP 下载。当前页面尚无三维预览与坐标／剖切工具，真实数据端到端和浏览器验收未完成；`pnpm run typecheck:web`、`pnpm run build:web`、服务回归 118／118 与 `git diff --check` 通过。
+
+- 2026-09-22（阶段 14 初步编码）：磁贴首页、独立流式任务 API、单模型 C++ 预览命令已落地。Windows 原生 Worker 编译并用小型 Gaussian PLY 验证单模型预览成功；服务回归增至 118／118，Web 类型检查通过。独立流式真实生成、单模型三维工作台、浏览器和 Docker 尚未验证，任务清单保留为进行中。
+
+- 2026-09-22（阶段 14 基线）：`codex/gaussian-toolkit` 分支已创建，规范与执行清单落盘；Web 类型检查、生产构建、服务回归 114／114、差异检查通过。构建保留既有 worker、WebP WASM 与大包提示；尚未开始新功能验收。下一步为磁贴入口与独立流式服务契约。
+
+- 2026-09-22：开始阶段 14。目标为磁贴首页、保留双模型 ICP 工作流、独立单模型流式工作台、共享三维引擎、业务矩阵／单坐标查询，以及显式 LOD 文件组生成缓存。每完成一个可验证步骤同步执行清单与本文件；未验证事项不得标记完成。基线提交 `450f952e34d595fda99ce7ddbcfb13a8c8ed50dc`，开始时工作区干净。
 
 - 2026-09-16：首页上传说明明确列出单文件后缀 `PLY／PCD／LAS／LAZ／SOG／SPZ`，并解释多文件数据集是 `Streamed SOG（LOD 流式数据）／LCC／LCC2`，需要选择完整目录或 ZIP；文件选择器同步补充 `.spz`。
 
@@ -32,6 +76,8 @@
 - 正式部署、版本 tag 与发布尚未安排，执行前按项目红线单独确认。
 
 ### 最近验证
+
+- 2026-09-23（阶段 14 真实大模型）：49.8 MB Compressed PLY 上传后识别 3,059,456 点，抽样预览 299,851 点；真实 Gaussian 视觉正常，浏览器取点得到非零业务坐标，约两分钟内生成 4 级 Streamed SOG 并切换流式缓存，控制台 0 error／0 warning。专项 Web 测试 10／10 通过；Docker 引擎不可用，未把历史容器通过记录当作本轮结果。
 
 - 2026-09-22（导航立方体放大）：中间立方体与八个独立角点整体缩放从 0.68 提高到 0.80，保留原有角点几何和点击逻辑。真实小型 PCD 会话中，默认斜视时可见角点距正交／透视按钮约 12 px；切换两个角点斜视后最近约 9.7 px，角点仍在控件内，控制台 0 error。Web 类型检查、生产构建及差异检查通过。
 

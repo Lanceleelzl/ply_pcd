@@ -42,6 +42,11 @@ int main(int argc, char** argv)
             return registration::worker::runModelPreview(
                 registration::worker::parseModelPreviewArguments(argc, argv));
         }
+        if (command == "prepare-single-model-preview")
+        {
+            return registration::worker::runSingleModelPreview(
+                registration::worker::parseSingleModelPreviewArguments(argc, argv));
+        }
 
         if (argc != 3)
         {
