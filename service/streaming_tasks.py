@@ -9,6 +9,7 @@ from typing import Any
 
 from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 from service.dataset_preparation import _convert_to_ply, _convert_to_streamed_sog, _generate_streamed_sog, _safe_extract
+from service.ply_coordinates import read_ply_coordinates
 
 
 GAUSSIAN_FORMATS = {"gaussian_ply", "compressed_ply", "spz", "sog", "streamed_sog", "lcc", "lcc2"}
@@ -47,6 +48,7 @@ def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: l
         raise DatasetFormatError("Gaussian dataset entrypoint is missing")
 
     preview_input = entrypoint
+    status["coordinate_metadata"] = read_ply_coordinates(entrypoint)
     if format_name != "gaussian_ply":
         preview_input = directory / "computed" / "preview-model.ply"
         options: list[str] = []

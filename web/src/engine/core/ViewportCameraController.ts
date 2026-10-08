@@ -12,6 +12,7 @@ export interface ViewportInputDelegate {
   pointerLeave?(): void;
   pointerDown?(event: PointerEvent): boolean;
   pointerUp?(event: PointerEvent): void;
+  wheel?(event: WheelEvent): void;
   navigationBlocked?(event: PointerEvent): boolean;
   dragBlocked?(): boolean;
 }
@@ -101,10 +102,10 @@ export class ViewportCameraController {
     this.direction.set(horizontal * Math.sin(yaw), horizontal * Math.cos(yaw), Math.sin(pitch)).normalize();
   }
 
-  setViewDirection(direction: pc.Vec3): void {
+  setViewDirection(direction: pc.Vec3, up?: pc.Vec3): void {
     direction.normalize();
     this.direction.copy(direction);
-    this.up.copy(Math.abs(direction.z) > 0.999 ? pc.Vec3.UP : this.zUp);
+    this.up.copy(up ?? (Math.abs(direction.z) > 0.999 ? pc.Vec3.UP : this.zUp));
     this.update();
   }
 

@@ -8,6 +8,10 @@ import { getApiKey, setApiKey } from '../api/api-auth';
 import { ref, onMounted, onUnmounted } from 'vue';
 
 const router = useRouter();
+function goBack(): void {
+  if (router.options.history.state.back) router.back();
+  else void router.push('/');
+}
 const workspace = useWorkspaceStore();
 const draft = useRegistrationDraftStore();
 const apiKey = ref(getApiKey());
@@ -36,12 +40,13 @@ async function submit(): Promise<void> {
 <template>
   <main class="home-app-shell">
     <header class="app-topbar">
-      <div class="brand-mark"><span class="brand-symbol">R</span><div><strong>点云坐标配准</strong><small>Registration Studio</small></div></div>
+      <RouterLink class="brand-mark home-brand-link" to="/" aria-label="返回首页" title="返回首页"><span class="brand-symbol">R</span><div><strong>视界转换</strong></div></RouterLink>
       <nav><a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a><span class="service-chip" :class="{ offline: serviceState !== '服务正常' }"><i />{{ serviceState }}</span><details class="access-settings"><summary>访问设置</summary><div class="access-popover"><label class="api-key-field"><span>API Key</span><input v-model="apiKey" type="password" autocomplete="off" placeholder="未启用鉴权时留空" @change="setApiKey(apiKey)" /></label><p>用于本服务的访问鉴权与数据隔离。</p></div></details></nav>
+      <button class="icon-button" type="button" @click="goBack">← 返回上一页</button>
     </header>
     <div class="home-content">
       <section class="hero-copy">
-        <h1>建立两个世界之间的转换关系</h1>
+        <h1>建立两个数据世界之间的矩阵转换关系</h1>
         <p>单文件支持 <code>PLY、PCD、LAS、LAZ、SOG、SPZ</code>；多文件数据集支持 <code>Streamed SOG（LOD 流式数据）、LCC、LCC2</code>，请选择完整目录或 ZIP。上传后系统会自动准备配准数据。</p>
       </section>
       <section class="task-composer">

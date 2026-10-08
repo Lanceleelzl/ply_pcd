@@ -49,6 +49,7 @@ export class RegistrationEngine {
         const gizmo = new pc.TranslateGizmo(this.camera.camera!, pc.TranslateGizmo.createLayer(this.app, name));
         this.resources.add(() => gizmo.destroy());
         gizmo.axisGap = 0.08; gizmo.axisLineLength = 0.72; gizmo.axisPlaneSize = 0.14; gizmo.axisPlaneGap = 0.22;
+        gizmo.flipPlanes = true;
         return gizmo;
       };
       const rotate = (name: string) => {

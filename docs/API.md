@@ -1,4 +1,4 @@
-# 高斯数据工具箱 API（v2）
+# 高斯视界 API（v2）
 
 旧版 v1 API 与手工配准页面已移除，不提供兼容入口。历史矩阵档案保留；历史会话中的旧任务链接在读取时转换为 v2。
 
@@ -40,6 +40,8 @@
 | GET | `/api/v2/streaming-tasks` | workspace_id（必填） |
 | GET | `/api/v2/streaming-tasks/{task_id}` | task_id（必填） |
 | PUT | `/api/v2/streaming-tasks/{task_id}/business-transform` | TransformParameters |
+| POST | `/api/v2/streaming-tasks/{task_id}/coordinate-query` | 场景点、轴映射、参考点、独立及投影原点、单位、源／目标 EPSG |
+| POST | `/api/v2/streaming-tasks/{task_id}/coordinate-origin` | WGS84 经度、纬度和目标投影 source_epsg |
 | POST | `/api/v2/streaming-tasks/{task_id}/generate` | task_id（必填） |
 | POST | `/api/v2/streaming-tasks/{task_id}/retain` | task_id（必填） |
 | POST | `/api/v2/streaming-tasks/{task_id}/release` | task_id（必填） |
@@ -112,6 +114,16 @@
 源文件、计算文件与预览默认保留配置指定的小时数。`/retain` 从当前时间重新延长一个保留周期；`/release` 立即释放这些数据并保留已经生成的输出。后台清理和主动释放都会跳过正在准备、生成或下载的任务。
 
 ## 历史与文件保留
+
+### 流式坐标查询
+
+界面定位参考点默认模型原点，也支持选取已知场景点；内部逆业务矩阵绑定其原始模型位置作为 `reference`。参考点输入 WGS84 时先调用 `/coordinate-origin` 得到投影坐标，再调用查询接口；没有指定源 EPSG 时根据经纬度选 WGS84 UTM（纬度范围 −80°～84°），有源 EPSG 则沿用。原始模型轴向与显示矩阵独立，场景方向由两者推导。查询浮窗仅显示场景 XYZ、WGS84 经纬度和高度，接口 `projected` 保留内部投影计算结果。
+
+`/coordinate-query` 接收 `point`、`reference`、`independent_origin`、`projected_origin` 三元素数组。`point` 与 `reference` 为模型原始文件坐标，浏览器先将场景查询点按业务矩阵逆变换；`axes` 为文件东／北／上对应的有符号轴编号（X＝1、Y＝2、Z＝3），三条轴不得重复。`metres_per_unit` 为文件单位到米的倍率，`source_epsg` 必须为投影坐标系，`target_epsg` 仅支持 4326（默认）。先减文件参考点，再按轴向与单位计算偏移；独立原点以米表示，投影原点 E／N 使用源投影单位，H 使用米。返回轴向映射后的独立坐标、投影坐标、经度、纬度、源坐标系名称、转换精度及近似转换标识；界面的原始／独立 XYZ 单独显示业务矩阵反算值。高度只叠加偏移，不执行高程基准转换。接口沿用任务鉴权，非法设置返回 422。
+
+`GET /api/v2/streaming-tasks/{task_id}/coordinate-metadata` 返回原始 PLY 头部的 `source`、`epsg`、`offset`、`shift`、`scale`。数字注释以原字符串返回，三元素数组的缺失／无效项为 null，非 PLY 返回空信息。头部读取限制为 1 MiB，不读取顶点数据；新任务在准备时保存信息，旧任务按需读取尚保留的原始文件，不使用转换生成的 PLY 猜测坐标基准。非默认 shift／scale 只提示核对，不自动应用未经确认的厂商约定。
+
+`/coordinate-origin` 接收 `source_epsg`、`longitude`、`latitude`，将 WGS84 坐标转换为源投影 E／N，返回 `east`、`north`、`source_name` 和按 E／N 顺序排列的 `metres_per_projected_unit` 单位倍率。查询结果中的经纬度和高度可编辑；浏览器用同一定位参考点、源 EPSG、轴向和文件单位还原原始模型位置，再应用业务矩阵更新场景坐标与查询点手柄。场景坐标变化自动正算，不提供刷新按钮。浏览器坐标设置按任务保存在本机，不写入模型及生成成果。实现参考 [pyproj Transformer 文档](https://pyproj4.github.io/pyproj/stable/api/transformer.html) 。
 
 历史按 `workspace_id` 隔离。源模型和预览默认保留 24 小时；保留、释放、恢复操作需传入所属工作区。源文件已清理时继续配准返回 409，历史矩阵仍可查询。
 

@@ -174,7 +174,9 @@ export class ClippingHandles {
     const mode = this.getMode();
     if (mode === 'axis') {
       this.hoveredHandle = this.pick(point.x, point.y);
-      this.revealedHandle = this.axisHoverTarget(point.x, point.y) ?? this.hoveredHandle;
+      const axisTarget = this.axisHoverTarget(point.x, point.y);
+      this.revealedHandle = this.hoveredHandle
+        ?? (axisTarget && this.revealedHandle?.axis === axisTarget.axis ? this.revealedHandle : axisTarget);
       this.hovered = Boolean(this.hoveredHandle);
       return this.hovered;
     }
@@ -269,6 +271,9 @@ export class ClippingHandles {
   private axisHoverTarget(x: number, y: number): Handle | null {
     const center = this.sceneMin.clone().add(this.sceneMax).mulScalar(0.5);
     const centerScreen = this.camera.camera!.worldToScreen(center);
+    if (this.revealedHandle && Math.hypot(x - centerScreen.x, y - centerScreen.y) < 18 * window.devicePixelRatio) {
+      return this.revealedHandle;
+    }
     const diagonal = this.sceneMax.clone().sub(this.sceneMin).length();
     let best: Handle | null = null; let bestDistance = 18 * window.devicePixelRatio;
     for (const handle of this.handles) {

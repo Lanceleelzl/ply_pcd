@@ -44,6 +44,16 @@ class StreamingTaskRoutesTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temporary.cleanup()
 
+    async def test_original_ply_coordinate_metadata_is_available_before_preparation(self):
+        data = FIXTURE.read_bytes().replace(b"end_header", b"comment epsg 32651\ncomment offsetx 260137.0225660622527357\ncomment source L2Pro\nend_header", 1)
+        result = await self.routes["create_task"]("single", self.workspace,
+            UploadFile(filename="scene.ply", file=io.BytesIO(data)), None, "")
+        metadata = self.routes["coordinate_metadata"](result["task_id"])
+        self.assertEqual(metadata["epsg"], "32651")
+        self.assertEqual(metadata["offset"][0], "260137.0225660622527357")
+        self.assertEqual(metadata["offset"][1:], [None, None])
+        self.assertNotIn(result["task_id"], self.tasks.readers)
+
     async def test_ordered_lod_group_is_independent_of_registration_session(self):
         detailed = FIXTURE.read_bytes()
         head, body = detailed.split(b"end_header\n", 1)

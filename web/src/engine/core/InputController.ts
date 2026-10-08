@@ -48,6 +48,7 @@ export class InputController {
     }, { signal });
     canvas.addEventListener('wheel', event => {
       event.preventDefault();
+      delegate.wheel?.(event);
       camera.zoom(event.deltaY);
     }, { passive: false, signal });
   }

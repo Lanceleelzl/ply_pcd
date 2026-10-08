@@ -49,7 +49,7 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       <div class="workbench-brand"><span>R</span><small>REGISTRATION STUDIO</small></div>
       <div class="workflow-title">
         <div class="workbench-title-text">
-          <h1>通用点云双向配准</h1>
+          <h1>视界转换</h1>
           <div class="workbench-model-names">
             <small v-for="model in (['a', 'b'] as const)" :key="model" :title="session.inputs?.[`model_${model}_original_filename`]">
               {{ model.toUpperCase() }}：<template v-if="session.inputs?.[`model_${model}_original_filename`]">{{ session.inputs[`model_${model}_original_filename`] }}（{{ session.metadata!.models[model].format.toUpperCase() }}）</template><template v-else>{{ session.metadata!.models[model].format.toUpperCase() }}</template>
@@ -83,7 +83,7 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
           <h2><span>4</span> 配准结果</h2>
           <pre id="job-status" class="status timeline">{{ result.status }}</pre>
           <p v-if="result.visible && result.result">RMS：{{ result.result.metrics.final_rms.toFixed(6) }} m</p>
-          <button type="button" :disabled="!result.visible" :aria-expanded="resultOpen" @click="resultOpen = !resultOpen">{{ resultOpen ? '收起结果矩阵' : '查看结果与复制矩阵' }}</button>
+          <button type="button" :class="{ 'result-ready': result.visible }" :disabled="!result.visible" :aria-expanded="resultOpen" @click="resultOpen = !resultOpen">{{ resultOpen ? '收起结果' : '查看结果' }}</button>
           <section id="result" v-show="resultOpen && result.visible" class="result result-column">
             <RegistrationResultPanel :result="result.result" :direction="result.direction" />
           </section>

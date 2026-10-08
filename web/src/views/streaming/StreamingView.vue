@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import TransformEditor from '../../components/home/TransformEditor.vue';
 import SingleModelViewport from './SingleModelViewport.vue';
+import './streaming-workbench.css';
 import type { TransformParameters } from '../../coordinate-math';
 import { pickDirectory } from '../../shared/directory-selection';
 import { createStreamingTask, downloadStreamingCache, generateStreamedCache,
@@ -20,7 +21,9 @@ const tasks = ref<StreamingTask[]>([]);
 const task = ref<StreamingTask | null>(null);
 const transform = ref<TransformParameters>({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
 const busy = ref(false);
+const historyOpen = ref(false);
 const message = ref('');
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
 const fallbackDirectoryInput = ref<HTMLInputElement>();
 const downloadHandles = new Map<string, Awaited<ReturnType<typeof downloadStreamingCache>>>();
 const downloads = ref<Record<string, { received: number; status: 'downloading' | 'ready' | 'failed'; error: string }>>({});
@@ -58,6 +61,11 @@ function move(index: number, direction: number) {
   [paths.value[index], paths.value[target]] = [paths.value[target], paths.value[index]];
 }
 function fail(error: unknown) { message.value = error instanceof Error ? error.message : String(error); }
+function notify(value: string) { message.value = ''; message.value = value; }
+watch(message, value => {
+  if (toastTimer) clearTimeout(toastTimer);
+  if (value) toastTimer = setTimeout(() => { message.value = ''; }, 5000);
+}, { flush: 'sync' });
 async function refresh() {
   try {
     tasks.value = await listStreamingTasks(workspace.workspaceId);
@@ -84,13 +92,16 @@ async function submit() {
   } catch (error) { fail(error); }
   finally { busy.value = false; }
 }
-async function saveTransform() {
-  if (!task.value) return;
-  busy.value = true; message.value = '';
-  try { task.value = await saveStreamingTransform(task.value.task_id, transform.value); message.value = '业务矩阵已保存'; }
-  catch (error) { fail(error); }
-  finally { busy.value = false; }
-}
+let transformSaves = Promise.resolve();
+watch(transform, value => {
+  const id = task.value?.task_id;
+  if (!id || loadedTaskId !== id || route.params.taskId !== id) return;
+  const snapshot = JSON.parse(JSON.stringify(value)) as TransformParameters;
+  transformSaves = transformSaves.then(async () => {
+    try { await saveStreamingTransform(id, snapshot); }
+    catch (error) { notify(`业务矩阵自动保存失败：${error instanceof Error ? error.message : String(error)}，请重新编辑后重试`); }
+  });
+}, { deep: true, flush: 'sync' });
 async function generate() {
   if (!task.value) return;
   busy.value = true; message.value = '';
@@ -112,6 +123,7 @@ async function download() {
     });
     downloadHandles.delete(current.task_id);
     state.status = 'ready';
+    notify('流式数据下载完成');
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError' && !downloadHandles.has(current.task_id)) {
       delete downloads.value[current.task_id];
@@ -136,15 +148,15 @@ async function release() {
 }
 watch(() => route.params.taskId, refresh);
 onMounted(() => { void refresh(); timer = setInterval(() => { void refresh(); }, 2500); });
-onUnmounted(() => { if (timer) clearInterval(timer); });
+onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeout(toastTimer); });
 </script>
 
 <template>
-  <main class="streaming-page">
-    <header><RouterLink to="/">← 工具箱首页</RouterLink><h1>高斯流式数据处理</h1></header>
-    <p>导入模型或按精细到粗略排序的 LOD 文件组，生成可下载的流式数据。</p>
-    <p v-if="message" role="status">{{ message }}</p>
-    <section v-if="!task" class="panel">
+  <main class="streaming-page" :class="{ 'streaming-workbench': task }">
+    <header v-if="!task" class="streaming-topbar"><h1><RouterLink to="/" class="module-home" title="返回首页">高斯流式数据处理</RouterLink></h1><nav><button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button></nav></header>
+    <p v-if="!task">导入模型或按精细到粗略排序的 LOD 文件组，生成LOD流式数据。</p>
+    <p v-if="message && !task" class="page-message" role="status">{{ message }}</p>
+    <section v-if="!task" class="streaming-panel new-task-panel">
       <h2>新建任务</h2>
       <label>输入方式
         <select v-model="kind" @change="selected = []; paths = []">
@@ -167,30 +179,45 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
         </li>
       </ol>
       <p v-if="selected.length">已选择 {{ selected.length }} 个文件。<template v-if="kind === 'lod_group'">LOD 0 为最精细层，请确认顺序。</template></p>
-      <TransformEditor model="a" v-model="transform" />
-      <button type="button" :disabled="busy || !selected.length" @click="submit">创建任务</button>
+      <TransformEditor model="a" v-model="transform" external-feedback @notify="notify" />
+      <button class="create-task-action" type="button" :disabled="busy || !selected.length" @click="submit">创建任务</button>
     </section>
-    <section v-else class="panel">
+    <section v-else class="streaming-panel task-workspace">
+      <aside class="task-sidebar">
+      <h1 class="sidebar-module-title"><RouterLink to="/" title="返回首页">高斯流式数据处理</RouterLink></h1>
       <h2>{{ task.filename }}</h2>
       <p>模型状态：{{ task.status }}；流式数据：{{ task.cache_status }}<span v-if="cacheProgress(task.cache_progress) !== undefined">（{{ cacheProgress(task.cache_progress) }}%）</span></p>
       <progress v-if="task.cache_status === 'queued' || task.cache_status === 'converting'"
         aria-label="流式数据生成进度" :value="cacheProgress(task.cache_progress)" max="100" />
-      <p v-if="task.error || task.cache_error" role="alert">{{ task.error || task.cache_error }}</p>
       <p v-if="task.metadata">原始点数：{{ task.metadata.source_point_count.toLocaleString() }}；预览点数：{{ task.metadata.preview_point_count.toLocaleString() }}</p>
-      <SingleModelViewport v-if="task.status === 'ready' && task.preview_url && task.metadata"
-        :url="task.preview_url" :origin="task.metadata.origin" :transform="transform"
-        :original-url="task.gaussian_url" :original-filename="task.gaussian_filename"
-        :cache-url="task.cache_url" :lods="task.lods" />
-      <TransformEditor model="a" v-model="transform" />
-      <button type="button" :disabled="busy" @click="saveTransform">保存业务矩阵</button>
-      <button type="button" :disabled="busy || task.status !== 'ready' || task.cache_status === 'queued' || task.cache_status === 'converting'" @click="generate">{{ task.cache_status === 'failed' ? '重试生成' : '生成流式数据' }}</button>
+      <TransformEditor model="a" v-model="transform" external-feedback @notify="notify" />
       <button v-if="task.cache_status === 'ready'" type="button" :disabled="busy" @click="download">{{ downloadState?.status === 'failed' ? '重新下载 ZIP' : '下载 ZIP' }}</button>
-      <button type="button" :disabled="busy || task.source_available === false" @click="retain">再保留 24 小时</button>
-      <button type="button" :disabled="busy || task.source_available === false" @click="release">{{ task.source_available === false ? '源数据已释放' : '释放源数据' }}</button>
       <p v-if="downloadState">已接收 {{ downloadState.received.toLocaleString() }} 字节（{{ (downloadState.received / 1024 / 1024).toFixed(1) }} MB）<span v-if="downloadState.status === 'ready'">，下载完成</span></p>
-      <p v-if="downloadState?.status === 'failed'" role="alert">{{ downloadState.error }}</p>
+      <div id="streaming-coordinate-settings"></div>
+      </aside>
+      <div class="scene-stage">
+      <SingleModelViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :key="task.task_id" :task-id="task.task_id"
+        @notify="notify"
+        :url="task.preview_url" :origin="task.metadata.origin" v-model:transform="transform"
+        :original-url="task.gaussian_url" :original-filename="task.gaussian_filename"
+        :cache-url="task.cache_url" :lods="task.lods"><template #navigation><nav class="scene-navigation"><button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button><RouterLink to="/streaming">返回</RouterLink></nav></template><template #task-actions>
+        <button type="button" :disabled="busy || task.status !== 'ready' || task.cache_status === 'queued' || task.cache_status === 'converting'" @click="generate">{{ task.cache_status === 'failed' ? '重试生成' : '生成流式数据' }}</button>
+        <button type="button" :disabled="busy || task.source_available === false" @click="retain">再保留 24 小时</button>
+        <button type="button" :disabled="busy || task.source_available === false" @click="release">{{ task.source_available === false ? '源数据已释放' : '释放源数据' }}</button>
+      </template></SingleModelViewport>
+      <div v-else class="scene-placeholder"><div class="task-actions-fallback">
+        <button type="button" :disabled="busy || task.status !== 'ready' || task.cache_status === 'queued' || task.cache_status === 'converting'" @click="generate">{{ task.cache_status === 'failed' ? '重试生成' : '生成流式数据' }}</button>
+        <button type="button" :disabled="busy || task.source_available === false" @click="retain">再保留 24 小时</button>
+        <button type="button" :disabled="busy || task.source_available === false" @click="release">{{ task.source_available === false ? '源数据已释放' : '释放源数据' }}</button>
+      </div>{{ task.source_available === false ? '源数据已释放，仍可下载已生成的流式数据' : task.status === 'failed' ? '模型准备失败，请查看任务提示' : '正在准备三维模型……' }}</div>
+      <div class="scene-notifications">
+        <p v-if="message" role="status">{{ message }}</p>
+        <p v-if="task.error || task.cache_error" role="alert">{{ task.error || task.cache_error }}</p>
+        <p v-if="downloadState?.status === 'failed'" role="alert">{{ downloadState.error }}</p>
+      </div>
+      </div>
     </section>
-    <section class="panel"><h2>历史任务</h2><p v-if="!tasks.length">暂无任务</p>
+    <section v-if="!task || historyOpen" class="streaming-panel history-panel"><header><h2>历史任务</h2><button v-if="task" @click="historyOpen = false" aria-label="关闭历史任务">×</button></header><p v-if="!tasks.length">暂无任务</p>
       <ul><li v-for="item in tasks" :key="item.task_id"><RouterLink :to="`/streaming/${item.task_id}`">{{ item.filename }}</RouterLink> · {{ item.status }} · {{ item.cache_status }}<span v-if="cacheProgress(item.cache_progress) !== undefined">（{{ cacheProgress(item.cache_progress) }}%）</span></li></ul>
     </section>
   </main>
@@ -199,8 +226,19 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 <style scoped>
 .streaming-page { min-height: 100vh; padding: 32px max(24px, calc((100vw - 1040px) / 2)); background: #08111d; color: #edf5ff; }
 header a, a { color: #78d6b8; } h1 { margin: 14px 0; } h2 { margin-top: 0; }
-.panel { margin: 24px 0; padding: 24px; border: 1px solid #385574; border-radius: 14px; background: #17283d; }
+.streaming-panel { margin: 24px 0; padding: 24px; border: 1px solid #385574; border-radius: 14px; background: #17283d; }
+.streaming-page.streaming-workbench { padding: 0; }
+.streaming-workbench .task-workspace { margin: 0; padding: 0; border: 0; border-radius: 0; }
 label { display: block; margin: 12px 0; } input, select, button { margin: 6px; padding: 8px; }
 button { cursor: pointer; } button:disabled { cursor: default; opacity: .5; }
+.new-task-panel select { min-height: 36px; padding: 0 12px; border: 1px solid #385574; border-radius: 8px; color: #edf5ff; background: #0a1623; font: inherit; cursor: pointer; transition: border-color .18s, background .18s, box-shadow .18s; }
+.new-task-panel button, .new-task-panel input[type="file"]::file-selector-button { min-height: 36px; padding: 7px 11px; border: 1px solid #385574; border-radius: 7px; color: #78d6b8; background: #122238; font: inherit; cursor: pointer; transition: border-color .18s, background .18s, box-shadow .18s; }
+.new-task-panel input[type="file"] { color: #adbed2; font: inherit; }
+.new-task-panel input[type="file"]::file-selector-button { margin-right: 10px; }
+.new-task-panel select:hover, .new-task-panel button:not(:disabled):hover, .new-task-panel input[type="file"]::file-selector-button:hover { border-color: #65d6b2; background: #17364a; box-shadow: 0 0 0 2px #45c39a24; }
+.new-task-panel button.create-task-action { color: #06140f; border-color: #6be0ba; background: linear-gradient(135deg, #65d9b4, #35b388); font-weight: 750; }
+.new-task-panel button.create-task-action:not(:disabled):hover { border-color: #a3f5d8; filter: brightness(1.1); }
+.new-task-panel button:disabled { border-color: #344354; color: #77879a; background: #1b2633; cursor: not-allowed; }
+.new-task-panel :is(select, button, input):focus-visible { outline: 2px solid #75d6b8; outline-offset: 2px; }
 li { margin: 8px 0; }
 </style>

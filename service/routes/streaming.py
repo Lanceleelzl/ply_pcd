@@ -24,6 +24,8 @@ from service.streaming_tasks import GAUSSIAN_FORMATS, generate_streaming_cache, 
 from service.streaming_zip import directory_zip_metadata, stream_directory_zip
 from service.uploads import save_upload_directory_with_sha256, save_upload_with_sha256
 from service.validation import validate_transform
+from service.geographic_query import GeographicQuery, GeographicOrigin, query_coordinates, project_origin
+from service.ply_coordinates import read_ply_coordinates
 
 
 class _ProtectedTaskResponse:
@@ -110,7 +112,7 @@ class StreamingTasks:
                     prepared = await asyncio.to_thread(prepare_streaming_task, directory, status, self.converter, self.worker)
                     current = read_status(directory)
                     current.update({key: prepared[key] for key in (
-                        "metadata", "preview_url", "gaussian_path", "gaussian_filename", "status")})
+                        "metadata", "preview_url", "gaussian_path", "gaussian_filename", "status", "coordinate_metadata")})
                     if prepared.get("dataset_entrypoint"):
                         current["dataset_entrypoint"] = prepared["dataset_entrypoint"]
                     write_status(directory, current)
@@ -193,6 +195,31 @@ class StreamingTasks:
 
 def create_streaming_router(tasks: StreamingTasks) -> APIRouter:
     router = APIRouter(prefix="/api/v2/streaming-tasks")
+
+    @router.get("/{task_id}/coordinate-metadata")
+    def coordinate_metadata(task_id: str):
+        directory, status = tasks.read(task_id)
+        if "coordinate_metadata" in status:
+            return status["coordinate_metadata"]
+        relative = (status.get("lods") or [{}])[0].get("path") if status.get("input_kind") == "lod_group" else status.get("dataset_entrypoint") or status.get("source_path")
+        with tasks.reading(task_id):
+            return read_ply_coordinates(directory / relative) if relative else read_ply_coordinates(directory / "missing")
+
+    @router.post("/{task_id}/coordinate-origin")
+    def coordinate_origin(task_id: str, request: GeographicOrigin):
+        tasks.read(task_id)
+        try:
+            return project_origin(request)
+        except Exception as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/{task_id}/coordinate-query")
+    def coordinate_query(task_id: str, request: GeographicQuery):
+        tasks.read(task_id)
+        try:
+            return query_coordinates(request)
+        except Exception as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("", status_code=202)
     async def create_task(

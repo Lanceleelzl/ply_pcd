@@ -180,9 +180,12 @@
 .integrated-editor .workflow-panel .axis-input input { padding-left: 5px; padding-right: 20px; font-size: 12px; }
 .integrated-editor .workflow-panel summary { margin-top: 6px; }
 .integrated-editor .coarse-reset { float: right; margin-top: -36px; padding: 4px 6px; font-size: 12px; }
+.integrated-editor #registration-roles { clear: both; padding-top: 8px; }
 .integrated-editor .workflow-panel .registration-actions .primary { background: #24775f; border-color: #4dbb92; width: 100%; }
 .integrated-editor .workflow-panel .status { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 96px; margin: 6px 0; }
 .integrated-editor .result-summary > button { width: 100%; }
+.integrated-editor .result-summary > button.result-ready { background: #235b91; border-color: #73b8ef; color: #eef8ff; }
+.integrated-editor .result-summary > button.result-ready:not(:disabled):hover { background: #2c70ad; border-color: #a4d8ff; }
 .integrated-editor .result-summary .result-column { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 12px; padding-left: 0; border-left: 0; }
 .integrated-editor .result-summary .result-matrix-group { min-width: 0; padding-top: 10px; border-top: 1px solid #29394e; }
 .integrated-editor .result-summary .result-matrix-group h3 { margin: 0 0 6px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }

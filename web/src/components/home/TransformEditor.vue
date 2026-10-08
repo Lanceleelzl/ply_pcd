@@ -2,13 +2,14 @@
 import { nextTick, ref, watch } from 'vue';
 import { transformParametersMatrix, type TransformParameters } from '../../coordinate-math';
 import { decomposeMatrix, parseMatrix } from '../../home-matrix';
-const props = defineProps<{ model: 'a' | 'b'; modelValue: TransformParameters }>();
-const emit = defineEmits<{ 'update:modelValue': [value: TransformParameters] }>();
+const props = defineProps<{ model: 'a' | 'b'; modelValue: TransformParameters; externalFeedback?: boolean }>();
+const emit = defineEmits<{ 'update:modelValue': [value: TransformParameters]; notify: [message: string] }>();
 const axes = ['X', 'Y', 'Z'];
 const rows = [{ key: 'translation' as const, label: '平移／m' }, { key: 'rotation_degrees' as const, label: '旋转／°' }, { key: 'scale' as const, label: '缩放' }];
 const fields = ref({ translation: [] as string[], rotation_degrees: [] as string[], scale: [] as string[] });
 const cells = ref<string[][]>([]);
 const message = ref('');
+watch(message, value => { if (props.externalFeedback && value) emit('notify', value); }, { flush: 'sync' });
 const invalid = ref(false);
 const root = ref<HTMLElement>();
 async function selectValue(event: FocusEvent) {
@@ -82,6 +83,6 @@ async function copy() {
         <template v-for="(row, r) in cells" :key="r"><input v-for="(_, c) in row" :key="c" v-model="cells[r][c]" type="text" inputmode="decimal" :readonly="r === 3" :aria-label="`模型 ${model.toUpperCase()} 矩阵 ${r + 1}行 ${c + 1}列`" :title="cells[r][c]" @blur="commitMatrix" @keydown.enter.prevent="commitMatrix"></template>
       </div>
     </div>
-    <p class="transform-feedback" :class="{ 'error-text': invalid }" role="status">{{ message || '编辑完成后同步参数与矩阵，支持整块粘贴' }}</p>
+    <p class="transform-feedback" :class="{ 'error-text': invalid && !externalFeedback }" :role="externalFeedback ? undefined : 'status'">{{ externalFeedback ? '编辑完成后同步参数与矩阵，支持整块粘贴' : message || '编辑完成后同步参数与矩阵，支持整块粘贴' }}</p>
   </details>
 </template>

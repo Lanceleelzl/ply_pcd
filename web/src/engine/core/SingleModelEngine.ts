@@ -34,10 +34,25 @@ export class SingleModelEngine {
   private clipGizmosAttached = false;
   private gizmoTransforming = false;
   private originSides = new pc.Vec3();
+  private readonly queryAnchor: pc.Entity;
+  private readonly queryGizmo: pc.TranslateGizmo;
+  private queryHovered = false;
+  private queryDragging = false;
+  private queryPoint: XYZ | null = null;
+  private queryAttached = false;
+  private queryPicking = false;
+  private capturePointer: { x: number; y: number } | null = null;
+  private captureDirty = false;
+  private captureCamera = '';
+  private pickGesture: { x: number; y: number; dragged: boolean } | null = null;
+  private sceneAxesVisible = false;
 
   constructor(canvas: HTMLCanvasElement, cloud: PreviewCloud, origin: XYZ, transform: TransformParameters,
     onPick?: (businessPoint: XYZ) => void, onClipValuesChanged?: ClipValuesChanged,
-    onToolChanged?: (tool: SingleModelTool) => void) {
+    onToolChanged?: (tool: SingleModelTool) => void,
+    private readonly onPickingChanged?: (picking: boolean) => void,
+    private readonly onCapture?: (capture: { point: XYZ; x: number; y: number } | null) => void,
+    private readonly onSceneAxes?: (labels: Array<{ text: string; x: number; y: number; color: string }>) => void) {
     this.application = new RegistrationApplication({ canvas, viewport: canvas.parentElement! });
     try {
       this.scene = new SingleModelScene(this.application.app, cloud, origin, transform);
@@ -46,12 +61,29 @@ export class SingleModelEngine {
       this.camera = new ViewportCameraController({ camera: this.application.camera, canvas,
         orientationChanged: () => {}, baseDiagonal: this.scene.baseDiagonal,
         getBounds: () => this.scene.bounds() });
+      this.queryAnchor = new pc.Entity('Single model query point');
+      this.application.app.root.addChild(this.queryAnchor);
+      this.queryGizmo = new pc.TranslateGizmo(this.application.camera.camera!, pc.TranslateGizmo.createLayer(this.application.app, 'Single model query translation'));
+      this.queryGizmo.mouseButtons[1] = this.queryGizmo.mouseButtons[2] = false;
+      this.queryGizmo.axisGap = 0.15; this.queryGizmo.axisLineLength = 1;
+      this.queryGizmo.axisPlaneGap = 0.3; this.queryGizmo.axisPlaneSize = 0.25;
+      this.queryGizmo.on(pc.Gizmo.EVENT_POINTERMOVE, (_x: number, _y: number, hit: unknown) => { this.queryHovered = Boolean(hit); });
+      this.queryGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => { this.queryDragging = true; });
+      const updateQuery = () => {
+        const position = this.queryAnchor.getPosition();
+        const origin = this.scene.displayOrigin;
+        this.queryPoint = [position.x + origin[0], position.y + origin[1], position.z + origin[2]];
+        onPick?.([...this.queryPoint]);
+      };
+      this.queryGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, updateQuery);
+      this.queryGizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => { updateQuery(); this.queryDragging = false; });
       this.clipBox = new pc.Entity('Single model clip box');
       this.application.app.root.addChild(this.clipBox);
       this.handleBounds = this.scene.bounds();
       this.clipTranslate = new pc.TranslateGizmo(this.application.camera.camera!, pc.TranslateGizmo.createLayer(this.application.app, 'Single model clip translation'));
       this.clipTranslate.axisGap = 0.08; this.clipTranslate.axisLineLength = 0.72;
       this.clipTranslate.axisPlaneSize = 0.14; this.clipTranslate.axisPlaneGap = 0.22;
+      this.clipTranslate.flipPlanes = true;
       this.clipRotate = new pc.RotateGizmo(this.application.camera.camera!, pc.RotateGizmo.createLayer(this.application.app, 'Single model clip rotation'));
       this.clipRotate.centerRadius = 0.001; this.clipRotate.ringTolerance = 0.025;
       this.clipGizmoInput = new TransformGizmoInput(this.clipTranslate, this.clipRotate,
@@ -87,6 +119,14 @@ export class SingleModelEngine {
       );
       this.input = new InputController(canvas, this.camera, {
         pointerMove: event => {
+          if (this.queryPicking && this.tools.isActive('coordinate-query')) {
+            canvas.style.cursor = 'crosshair';
+            const rect = canvas.getBoundingClientRect();
+            this.capturePointer = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+            this.captureDirty = true;
+            if (this.pickGesture && Math.hypot(event.clientX - this.pickGesture.x, event.clientY - this.pickGesture.y) >= 4) this.pickGesture.dragged = true;
+            return false;
+          }
           const handled = this.clippingHandles.pointerMove(event);
           if (handled && this.clippingHandles.dragging) {
             this.syncBoxFromHelper();
@@ -95,18 +135,25 @@ export class SingleModelEngine {
           canvas.style.cursor = this.clippingHandles.dragging ? 'grabbing' : this.clippingHandles.hovered ? 'grab' : '';
           return handled;
         },
-        pointerLeave: () => this.clippingHandles.pointerLeave(),
+        pointerLeave: () => { this.clippingHandles.pointerLeave(); this.clearCapture(); },
+        wheel: () => { this.pickGesture = null; },
         pointerDown: event => {
+          if (this.tools.isActive('coordinate-query') && (this.queryHovered || this.queryDragging)) return false;
           if (this.clippingHandles.pointerDown(event)) return true;
-          if (!this.tools.isActive('coordinate-query') || !onPick || event.button !== 0) return false;
-          const rect = canvas.getBoundingClientRect();
-          const x = event.clientX - rect.left;
-          const y = event.clientY - rect.top;
-          const point = this.scene.pickPoint(this.application.camera, x, y);
-          if (point) onPick(point);
-          return true;
+          if (!this.tools.isActive('coordinate-query') || !this.queryPicking || !onPick || event.button !== 0) return false;
+          this.pickGesture = { x: event.clientX, y: event.clientY, dragged: false };
+          return false;
         },
         pointerUp: event => {
+          const gesture = this.pickGesture;
+          this.pickGesture = null;
+          if (gesture && !gesture.dragged && event.button === 0 && this.queryPicking
+            && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 4) {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left; const y = event.clientY - rect.top;
+            const point = this.captureAt(x, y) ?? this.freeQueryPoint(x, y);
+            this.setQueryPoint(point); onPick?.(point); this.setQueryPicking(false);
+          }
           const handled = this.clippingHandles.pointerUp(event);
           if (handled) {
             this.syncBoxFromHelper();
@@ -115,8 +162,9 @@ export class SingleModelEngine {
           return handled;
         },
         navigationBlocked: event => event.button === 2 || this.gizmoTransforming
+          || this.queryDragging || (event.button === 0 && this.queryHovered)
           || (event.button === 0 && this.clipGizmoInput.hovered),
-        dragBlocked: () => this.clippingHandles.dragging || this.gizmoTransforming,
+        dragBlocked: () => this.clippingHandles.dragging || this.gizmoTransforming || this.queryDragging,
       });
       this.application.app.on('update', this.updateHelpers, this);
     } catch (error) {
@@ -133,8 +181,59 @@ export class SingleModelEngine {
   get pickEnabled(): boolean { return this.tools.isActive('coordinate-query'); }
   set pickEnabled(enabled: boolean) { this.setQueryEnabled(enabled); }
   setQueryEnabled(enabled: boolean): void {
+    if (!enabled) this.setQueryPicking(false);
     this.tools.activate(enabled ? 'coordinate-query' : this.axisClip.enabled || this.boxClip.enabled ? 'clipping' : 'idle');
     this.syncClipGizmos();
+  }
+  setQueryPicking(picking: boolean): void {
+    this.queryPicking = picking && this.tools.isActive('coordinate-query');
+    this.onPickingChanged?.(this.queryPicking);
+    this.clearCapture();
+    (this.application.app.graphicsDevice.canvas as HTMLCanvasElement).style.cursor = this.queryPicking ? 'crosshair' : '';
+    this.syncQueryGizmo();
+  }
+  private clearCapture(): void {
+    this.pickGesture = null;
+    this.capturePointer = null; this.captureDirty = false; this.captureCamera = '';
+    this.onCapture?.(null);
+  }
+  private freeQueryPoint(x: number, y: number): XYZ {
+    const camera = this.application.camera;
+    const component = camera.camera!;
+    const bounds = this.scene.bounds();
+    const center = bounds.min.clone().add(bounds.max).mulScalar(0.5);
+    const reference = this.queryPoint ? this.queryAnchor.getPosition().clone() : center;
+    if (reference.clone().sub(camera.getPosition()).dot(camera.forward) <= component.nearClip) reference.copy(center);
+    const near = component.screenToWorld(x, y, component.nearClip);
+    const direction = component.screenToWorld(x, y, component.farClip).sub(near);
+    const distance = reference.sub(near).dot(camera.forward) / direction.dot(camera.forward);
+    const point = near.add(direction.mulScalar(distance));
+    const origin = this.scene.displayOrigin;
+    return [point.x + origin[0], point.y + origin[1], point.z + origin[2]];
+  }
+  private captureAt(x: number, y: number): XYZ | null {
+    const point = this.scene.pickPoint(this.application.camera, x, y);
+    if (!point) { this.onCapture?.(null); return null; }
+    const origin = this.scene.displayOrigin;
+    const screen = this.application.camera.camera!.worldToScreen(new pc.Vec3(point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]));
+    this.onCapture?.({ point, x: screen.x, y: screen.y });
+    return point;
+  }
+  setQueryPoint(point: XYZ): void {
+    if (!point.every(Number.isFinite)) return;
+    this.queryPoint = [...point];
+    if (!this.queryDragging) {
+      const origin = this.scene.displayOrigin;
+      this.queryAnchor.setPosition(point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]);
+    }
+    this.syncQueryGizmo();
+  }
+  private syncQueryGizmo(): void {
+    const show = this.tools.isActive('coordinate-query') && !this.queryPicking && this.queryPoint !== null;
+    if (show === this.queryAttached) return;
+    if (show) this.queryGizmo.attach(this.queryAnchor);
+    else { this.queryGizmo.detach(); this.queryHovered = false; this.queryDragging = false; }
+    this.queryAttached = show;
   }
   async showGaussian(url: string, filename: string): Promise<void> {
     await this.gaussian.show(url, filename); this.refreshClip();
@@ -160,6 +259,10 @@ export class SingleModelEngine {
     this.clipHelpersVisible = visible; this.syncClipGizmos();
   }
   setAxesVisible(visible: boolean): void { this.scene.setAxesVisible(visible); }
+  setSceneAxesVisible(visible: boolean): void {
+    this.sceneAxesVisible = visible;
+    if (!visible) this.onSceneAxes?.([]);
+  }
   setOriginPlane(plane: 'xoy' | 'xoz' | 'yoz', visible: boolean, side: number): void {
     this.scene.setOriginPlane(plane, visible);
     if (plane === 'yoz') this.originSides.x = side;
@@ -168,6 +271,7 @@ export class SingleModelEngine {
     this.refreshClip();
   }
   private refreshClip(): void {
+    this.captureDirty = true;
     const enabled = this.axisClip.enabled || this.boxClip.enabled;
     const min = this.axisClip.enabled ? this.axisClip.min : new pc.Vec3(-1e30, -1e30, -1e30);
     const max = this.axisClip.enabled ? this.axisClip.max : new pc.Vec3(1e30, 1e30, 1e30);
@@ -181,6 +285,7 @@ export class SingleModelEngine {
     if (!this.axisClip.enabled && !this.boxClip.enabled && this.tools.isActive('clipping')) this.tools.activate('idle');
   }
   private syncClipGizmos(): void {
+    this.syncQueryGizmo();
     const show = this.boxClip.enabled && this.clipHelpersVisible && this.tools.isActive('clipping');
     if (show === this.clipGizmosAttached) return;
     if (show) { this.clipTranslate.attach(this.clipBox); this.clipRotate.attach(this.clipBox); }
@@ -201,6 +306,38 @@ export class SingleModelEngine {
     });
   }
   private updateHelpers(): void {
+    if (this.sceneAxesVisible) {
+      const origin = this.scene.displayOrigin;
+      const start = new pc.Vec3(-origin[0], -origin[1], -origin[2]);
+      const length = this.scene.baseDiagonal * 0.3;
+      const labels: Array<{ text: string; x: number; y: number; color: string }> = [];
+      const camera = this.application.camera;
+      const canvas = this.application.app.graphicsDevice.canvas as HTMLCanvasElement;
+      const label = (point: pc.Vec3, text: string, color: string) => {
+        const screen = camera.camera!.worldToScreen(point);
+        if (point.clone().sub(camera.getPosition()).dot(camera.forward) > 0 && screen.x >= 0 && screen.x <= canvas.clientWidth && screen.y >= 0 && screen.y <= canvas.clientHeight)
+          labels.push({ text, x: screen.x, y: screen.y, color });
+      };
+      label(start, 'O（0，0，0）', '#edf5ff');
+      for (const [axis, direction, color, css] of [
+        ['X', new pc.Vec3(length, 0, 0), pc.Color.RED, '#ff7777'],
+        ['Y', new pc.Vec3(0, length, 0), pc.Color.GREEN, '#78e6a2'],
+        ['Z', new pc.Vec3(0, 0, length), pc.Color.BLUE, '#85a6ff'],
+      ] as const) {
+        const end = start.clone().add(direction);
+        this.application.app.drawLine(start, end, color, false);
+        label(end, `＋${axis}`, css);
+      }
+      this.onSceneAxes?.(labels);
+    }
+    if (this.queryPicking && this.capturePointer) {
+      const camera = this.application.camera;
+      const signature = `${camera.getWorldTransform().data.join(',')},${camera.camera!.orthoHeight},${camera.camera!.fov},${camera.camera!.aspectRatio}`;
+      if (this.captureDirty || signature !== this.captureCamera) {
+        this.captureAt(this.capturePointer.x, this.capturePointer.y);
+        this.captureDirty = false; this.captureCamera = signature;
+      }
+    }
     this.clippingHandles.update();
     if (!this.boxClip.enabled || !this.clipHelpersVisible || !this.tools.isActive('clipping')) return;
     const matrix = this.clipBox.getWorldTransform();
@@ -212,9 +349,14 @@ export class SingleModelEngine {
     edge(2, 6); edge(3, 7); edge(4, 5); edge(4, 6); edge(5, 7); edge(6, 7);
   }
   fit(): void { this.camera.fit(); }
+  northView(up: XYZ, north: XYZ): void {
+    this.camera.setViewDirection(new pc.Vec3(...up), new pc.Vec3(...north));
+    this.camera.setProjection(true);
+  }
   destroy(): void {
     this.application.app.off('update', this.updateHelpers, this);
     this.clipGizmoInput.destroy(); this.clipTranslate.destroy(); this.clipRotate.destroy();
+    this.queryGizmo.destroy(); this.queryAnchor.destroy();
     this.input.destroy(); this.clippingHandles.destroy(); this.tools.destroy(); this.clipBox.destroy();
     this.gaussian.destroy(); this.scene.destroy(); this.application.destroy();
   }

@@ -41,6 +41,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .candidate-actions { display: flex; gap: 6px; }
 .candidate-actions button { min-height: 30px; padding: 4px 9px; }
 .app-topbar a { color: var(--text-soft); text-decoration: none; font-size: 13px; }
+.app-topbar .home-brand-link { color: var(--text); border-radius: 10px; transition: background .18s, box-shadow .18s; }
+.app-topbar .home-brand-link:hover { background: #17364a; box-shadow: 0 0 0 6px #17364a; }
+.home-app-shell .app-topbar nav { margin-left: auto; margin-right: 20px; }
 .service-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft); font-size: 12px; background: #102033; }
 .service-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px #45c39a18; }
 
@@ -129,8 +132,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .task-settings label > span { color: var(--text-soft); font-size: 12px; }
 .task-settings select { width: 100%; height: 42px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: #0a1623; }
 .task-settings small { color: var(--text-muted); font-size: 10px; }
+.task-settings select { cursor: pointer; transition: border-color .18s, background .18s, box-shadow .18s; }
+.task-settings select:not(:disabled):hover { border-color: #65d6b2; background: #102536; box-shadow: 0 0 0 2px #45c39a24; }
 .primary-action { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 17px; border: 1px solid #6be0ba; border-radius: 9px; color: #06140f; background: linear-gradient(135deg, #65d9b4, #35b388); font-weight: 750; box-shadow: 0 10px 30px #29b28126; }
 .primary-action:disabled { opacity: .5; cursor: wait; }
+.primary-action { cursor: pointer; transition: border-color .18s, filter .18s, box-shadow .18s; }
+.primary-action:not(:disabled):hover { border-color: #a3f5d8; filter: brightness(1.1); box-shadow: 0 10px 30px #29b28140, 0 0 0 2px #45c39a24; }
 .primary-action b { font-size: 20px; }
 .submit-status { margin: 14px 0 0; color: #85d4ba; font-size: 12px; }
 
