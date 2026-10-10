@@ -26,7 +26,7 @@ export class InputController {
         return;
       }
       if (delegate.navigationBlocked?.(event)) return;
-      if (event.button === 0) navigation = 'orbit';
+      if (event.button === 0) navigation = delegate.orbitEnabled?.() === false ? 'pan' : 'orbit';
       else if (event.button === 1) navigation = 'pan';
       else return;
       lastX = event.clientX;

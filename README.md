@@ -1,6 +1,6 @@
 # 高斯视界
 
-高斯视界提供高斯数据处理工具：首页分别进入「视界转换」和单模型流式数据处理。「视界转换」支持两个具有点云性质的数据世界，通过粗配准→ICP 精配准建立矩阵转换关系，获取双向矩阵或同一位置的对应坐标；流式工具导入单个 Gaussian、完整数据集或用户确认顺序的 LOD 文件组，预览后生成并下载 Streamed SOG。
+高斯视界提供高斯数据处理工具：首页进入「视界转换」「高斯流式数据处理」和「高斯合并」。「视界转换」支持两个具有点云性质的数据世界，通过粗配准→ICP 精配准建立矩阵转换关系，获取双向矩阵或同一位置的对应坐标；流式工具导入单个 Gaussian、完整数据集或用户确认顺序的 LOD 文件组，预览后生成并下载 Streamed SOG。高斯合并将多个 Gaussian PLY 的对应 LOD 层对齐、区域裁剪并逐层合并，可选生成新的 Streamed SOG。
 
 流式工作台采用左侧任务流程与中央三维视口，历史任务、单模型剖切和坐标查询面板覆盖场景，不挤压视口。左侧地理定位支持 X／Y／Z 旋转快捷角度和北向俯视；定位参考点默认模型原点，也可选其他已知场景点，输入投影 EPSG 与东／北／高度，或 WGS84 经纬度与高度。原始 PLY 的 EPSG、offset 可预读；缺失时手动填写。原始文件地理轴向默认 X＝东、Y＝北、Z＝上、单位米，可在高级设置修改，观察旋转后场景方向自动换算。确认定位后选点或移动查询点，自动显示场景 XYZ、WGS84 经纬度及高度；内部反算原始模型位置并恢复投影坐标，观察旋转不改变同一模型点的真实位置。高度默认其域原始 RTK 椭球高，可手动切换，不执行高程基准转换；设置仅保存在本机当前任务，不改变原始数据或流式成果。CGCS2000 经纬度输出暂不提供。
 
@@ -112,6 +112,28 @@ POST /api/v2/streaming-tasks/{task_id}/retain
 POST /api/v2/streaming-tasks/{task_id}/release
 GET  /api/v2/streaming-tasks/{task_id}/preview
 GET  /api/v2/streaming-tasks/{task_id}/download
+```
+
+高斯合并从首页「高斯合并」进入。每个模型选择至少一份 Gaussian PLY，选择后仅读取本地文件头，以表格显示各 LOD 的来源、EPSG、offset、格式和点数；地理信息可手动填写，完整有效的投影原点旁自动显示 WGS84 经纬度，未知时全部留空。按精细到粗略确认 LOD 对应关系，最粗层 PLY 用于初始点云预览；新建任务不上传已有流式数据。模型具有相同投影 EPSG 和完整 offset 时，以目标模型原点自动对齐；点击待合入模型卡片后可用平移／旋转手柄或数值位移继续校正。目标模型固定为场景原点，其卡片可切换编辑投影 XYZ 与 WGS84 经纬度；修改输出地理锚点不改变模型相对位置和边界。场景默认锁定俯视正交，仅可平移缩放；切换三维透视后可旋转。每个模型可独立显隐；绘制边界支持捕捉其他边界顶点及边线、插入和删除顶点，并可对当前边界顶点编辑撤销恢复。边界贯穿全部高度并作用于每个对应 LOD。合并任务区可选择一个或多个 LOD，显示逐层状态和进度；完成后可预览及下载 PLY ZIP。流式生成由用户另行触发，服务端先校验合并层级连续、文件有效及层级属性一致，再生成并允许下载流式 ZIP。文件 XYZ 按各模型单位与比例换算，投影 offset 以米计；高度基准需要核对。合并任务保存在 `runtime/gaussian-merge-tasks`，当前不自动删除上传源和成果；大场景导入前应预留输入副本与合并输出的磁盘空间。
+
+任务页右侧场景左上工具条可选择原始 Gaussian 或点云，并切换已上传的 LOD；初始使用最粗层点云。点击「绘制边界」后逐点绘制，点击起点或按 Enter 闭合；「边界管理」可重新选中边界、拖动顶点或删除。每条边界分别为每个模型选择「不处理」「删除边界内」或「删除边界外」；多条边界的删减条件共同作用于各层 LOD。
+
+高斯合并任务接口：
+
+```text
+POST /api/v2/gaussian-merges
+GET  /api/v2/gaussian-merges/coordinate-preview?epsg={epsg}&x={x}&y={y}&z={z}
+GET  /api/v2/gaussian-merges?workspace={workspace_id}
+GET  /api/v2/gaussian-merges/{task_id}
+PUT  /api/v2/gaussian-merges/{task_id}/regions
+GET  /api/v2/gaussian-merges/{task_id}/preview
+GET  /api/v2/gaussian-merges/{task_id}/preview?level={level}
+GET  /api/v2/gaussian-merges/{task_id}/lod/{level}/{model}
+POST /api/v2/gaussian-merges/{task_id}/merge
+GET  /api/v2/gaussian-merges/{task_id}/preview-merged/{level}
+GET  /api/v2/gaussian-merges/{task_id}/download/ply
+POST /api/v2/gaussian-merges/{task_id}/generate
+GET  /api/v2/gaussian-merges/{task_id}/download/streamed
 ```
 
 调用顺序：上传模型创建会话，等待会话就绪，提交配准，再通过响应中的状态和结果链接读取任务。已有历史矩阵档案保留，旧任务链接在读取时转换为 v2。

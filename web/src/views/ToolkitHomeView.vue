@@ -23,6 +23,11 @@ const workspace = useWorkspaceStore();
           <p>支持导入高斯模型或已有的LOD文件组，生成高斯流式数据，可以预览对应的点云/高斯模型，打包下载处理后的流式数据。</p>
           <strong>进入工具 <span aria-hidden="true">→</span></strong>
         </RouterLink>
+        <RouterLink class="toolkit-card" to="/merge">
+          <h2>高斯合并</h2>
+          <p>对齐多个高斯模型，在俯视图绘制重叠取舍与删减范围，逐层合并 PLY，并按需生成流式数据。</p>
+          <strong>进入工具 <span aria-hidden="true">→</span></strong>
+        </RouterLink>
       </div>
       <small class="toolkit-workspace">当前工作区：{{ workspace.workspaceId.slice(0, 8) }}</small>
     </div>

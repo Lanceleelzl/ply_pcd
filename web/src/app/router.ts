@@ -3,6 +3,7 @@ import HomeRouteView from '../views/HomeRouteView.vue';
 import LegacyWorkbenchView from '../views/LegacyWorkbenchView.vue';
 import ToolkitHomeView from '../views/ToolkitHomeView.vue';
 import StreamingView from '../views/streaming/StreamingView.vue';
+import MergeView from '../views/merge/MergeView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -13,6 +14,8 @@ export const router = createRouter({
     { path: '/registration', name: 'registration-new', component: HomeRouteView },
     { path: '/streaming', name: 'streaming', component: StreamingView },
     { path: '/streaming/:taskId', name: 'streaming-task', component: StreamingView },
+    { path: '/merge', name: 'merge', component: MergeView },
+    { path: '/merge/:taskId', name: 'merge-task', component: MergeView },
     {
       path: '/registration/:sessionId',
       name: 'registration',

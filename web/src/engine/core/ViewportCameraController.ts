@@ -8,6 +8,7 @@ export interface ViewportBounds {
 }
 
 export interface ViewportInputDelegate {
+  orbitEnabled?(): boolean;
   pointerMove?(event: PointerEvent): boolean;
   pointerLeave?(): void;
   pointerDown?(event: PointerEvent): boolean;

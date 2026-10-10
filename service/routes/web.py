@@ -46,6 +46,14 @@ def create_web_router(
     async def streaming_task_page(task_id: str) -> Response:
         return web_index()
 
+    @router.get("/merge")
+    async def merge_home() -> Response:
+        return web_index()
+
+    @router.get("/merge/{task_id}")
+    async def merge_task_page(task_id: str) -> Response:
+        return web_index()
+
     @router.get("/registration/{session_id}")
     async def model_registration_page(session_id: str) -> Response:
         status = read_status(session_directory(session_id))
