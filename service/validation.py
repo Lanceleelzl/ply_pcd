@@ -33,8 +33,8 @@ def validate_registration_parameters(
         raise HTTPException(status_code=400, detail="min_rms_decrease must be between 1e-8 and 1e-3")
     if not 10000 <= sampling_limit <= 500000:
         raise HTTPException(status_code=400, detail="sampling_limit must be between 10000 and 500000")
-    if not 0.5 <= overlap <= 1.0:
-        raise HTTPException(status_code=400, detail="overlap must be between 0.5 and 1.0")
+    if not 0.2 <= overlap <= 1.0:
+        raise HTTPException(status_code=400, detail="overlap must be between 0.2 and 1.0")
     if not 0 <= random_seed <= 4294967295:
         raise HTTPException(status_code=400, detail="Invalid registration parameters")
     if precision_mode not in {"recommended", "high_accuracy"}:

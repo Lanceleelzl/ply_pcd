@@ -80,3 +80,13 @@ class RegistrationSubmissionTest(unittest.IsolatedAsyncioTestCase):
         self.start.assert_not_called()
         self.persist.assert_not_called()
         self.assertNotIn("active_job_id", self.states[self.session])
+
+    async def test_overlap_lower_bound_is_accepted_and_smaller_value_rejected(self):
+        with patch.object(Path, "mkdir"), patch.object(Path, "write_text"):
+            await self.submit("session", self.request(overlap=0.2))
+        command = self.start.call_args.args[1]
+        self.assertEqual(command[command.index("--overlap") + 1], "0.2")
+
+        with self.assertRaises(HTTPException) as raised:
+            await self.submit("session", self.request(overlap=0.19))
+        self.assertEqual(raised.exception.status_code, 400)

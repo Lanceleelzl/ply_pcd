@@ -7,7 +7,7 @@ const emit = defineEmits<{ change: [key: string, value: string] }>();
 const fields = [
   { key: 'min_rms_decrease', id: 'min-rms', label: 'RMS 阈值', step: '0.000001' },
   { key: 'sampling_limit', id: 'sampling-limit', label: '采样上限', step: '1000' },
-  { key: 'overlap', id: 'overlap', label: '重叠率', step: '0.01', min: '0.01', max: '1' },
+  { key: 'overlap', id: 'overlap', label: '重叠率', step: '0.01', min: '0.2', max: '1' },
   { key: 'random_seed', id: 'random-seed', label: '随机种子', step: '1', min: '0' },
 ];
 </script>
@@ -21,4 +21,5 @@ const fields = [
         @input="emit('change', field.key, ($event.target as HTMLInputElement).value)">
     </label>
   </div>
+  <p class="step-hint">重叠率按移动模型中与固定模型重叠的点数比例估计（0.2～1）；设得过低可能错配，请核对交叉区域。</p>
 </template>
