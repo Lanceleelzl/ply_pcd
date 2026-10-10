@@ -6,6 +6,7 @@ import type { DatasetInfo, ModelId, RegistrationSession } from '../api/contracts
 import { useWorkspaceStore } from '../stores/workspace-store';
 import { useBackgroundCacheStore } from '../stores/background-cache-store';
 import { useRegistrationDraftStore } from '../stores/registration-draft-store';
+import ModuleTopbar from '../components/ModuleTopbar.vue';
 
 const props = defineProps<{ sessionId: string; apiVersion: 'v2' }>();
 const router = useRouter();
@@ -82,13 +83,14 @@ function stageFor(session: RegistrationSession | null, model: ModelId): string {
 </script>
 
 <template>
-  <main v-if="loadError" class="loading" role="alert">
-    <h2>配准工作台加载失败</h2>
-    <p>{{ loadError }}</p>
-    <button @click="router.push({ name: 'home' })">返回首页</button>
+  <main v-if="loadError" class="registration-loading-page">
+    <ModuleTopbar title="视界转换" mark="R"><template #actions><RouterLink to="/registration">新建任务</RouterLink></template></ModuleTopbar>
+    <section class="loading" role="alert"><div><h2>配准工作台加载失败</h2>
+      <p>{{ loadError }}</p><button @click="router.push({ name: 'home' })">返回首页</button></div></section>
   </main>
-  <main v-else-if="!layout" class="loading" role="status">
-    <section class="preparation-screen">
+  <main v-else-if="!layout" class="registration-loading-page">
+    <ModuleTopbar title="视界转换" mark="R"><template #actions><RouterLink to="/registration">新建任务</RouterLink></template></ModuleTopbar>
+    <section class="loading" role="status"><div class="preparation-screen">
       <header><h2>准备数据</h2><p>两个模型的计算数据就绪后进入工作台；可选高斯资源将在后台继续转换。</p></header>
       <div class="preparation-models">
         <article v-for="model in (['a', 'b'] as const)" :key="model" class="preparation-model">
@@ -101,9 +103,13 @@ function stageFor(session: RegistrationSession | null, model: ModelId): string {
         </article>
       </div>
       <p class="preparation-overall">{{ loadingStatus === 'queued' ? '任务已排队' : '正在准备 A／B 模型' }}</p>
-    </section>
+    </div></section>
   </main>
   <div v-show="layout !== null" ref="host" class="legacy-workbench-host">
     <WorkbenchContent v-if="layout" :options="layout" />
   </div>
 </template>
+
+<style scoped>
+.registration-loading-page > .loading { height: auto; min-height: calc(100vh - 60px); }
+</style>

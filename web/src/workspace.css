@@ -14,77 +14,8 @@
   flex: 1;
 }
 
-.workbench-topbar {
-  z-index: 10;
-  display: flex;
-  min-height: 58px;
-  align-items: center;
-  gap: 22px;
-  padding: 0 16px;
-  border-bottom: 1px solid #283548;
-  background: #0c1420;
-  box-shadow: 0 8px 24px #0004;
-}
-
-.workbench-brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: #8c9bb0;
-  font-size: 10px;
-  letter-spacing: .12em;
-}
-
-.workbench-brand span {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid #3ed3a0;
-  border-radius: 8px;
-  background: #143a31;
-  color: #82f1c8;
-  font-weight: 800;
-  font-size: 15px;
-}
-
-.workbench-topbar .workflow-title {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  margin: 0;
-  min-width: 0;
-  gap: 16px;
-}
-
-.workbench-title-text { flex: 1; min-width: 0; }
-.workbench-model-names { display: flex; gap: 16px; }
+.workbench-model-names { display: flex; gap: 16px; color: #a8b9cd; }
 .workbench-model-names small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.workbench-topbar .workflow-title h1 {
-  margin: 0 0 2px;
-  font-size: 16px;
-}
-
-.workbench-topbar .workflow-title button {
-  min-width: 78px;
-  min-height: 36px;
-  padding: 7px 11px;
-  border: 1px solid #40516a;
-  border-radius: 6px;
-  background: #172233;
-  color: #e8eef7;
-}
-.workbench-header-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; margin-left: auto; }
-.workbench-header-actions > .background-task-center { display: flex; height: 36px; align-items: stretch; }
-.workbench-header-actions > button,
-.workbench-header-actions > .background-task-center > summary {
-  box-sizing: border-box;
-  height: 36px;
-  min-height: 36px;
-  margin: 0;
-}
-.workbench-header-actions .background-task-center button { min-width: 0; min-height: 28px; }
 
 .workflow-panel {
   grid-column: 1;
@@ -833,8 +764,6 @@
 @media (max-width: 600px) {
   .preparation-models { grid-template-columns: 1fr; }
   .preparation-ring { width: 120px; height: 120px; }
-  .workbench-topbar { gap: 12px; padding: 8px 12px; }
-  .workbench-brand small { display: none; }
   .integrated-editor .viewport-toolbar { max-width: calc(100% - 24px); }
   .integrated-editor .view-gizmo { top: auto; bottom: 80px; }
 }

@@ -8,6 +8,7 @@ import type { ResultViewState } from './result-view-state';
 import RegistrationResultPanel from './RegistrationResultPanel.vue';
 import type { InspectorState } from './inspector-state';
 import BackgroundTaskCenter from '../../components/BackgroundTaskCenter.vue';
+import ModuleTopbar from '../../components/ModuleTopbar.vue';
 
 const props = defineProps<{ view: { roleSummary: string; initialMatrix: string; help: string }; session: RegistrationSession; gaussian: GaussianViewState; toolbar: ToolbarState; result: ResultViewState; inspector: InspectorState }>();
 const emit = defineEmits<{ newTask: []; toolbar: [command: ToolbarCommand] }>();
@@ -45,20 +46,14 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
 
 <template>
   <main class="editor integrated-editor">
-    <header class="workbench-topbar">
-      <div class="workbench-brand"><span>R</span><small>REGISTRATION STUDIO</small></div>
-      <div class="workflow-title">
-        <div class="workbench-title-text">
-          <h1>视界转换</h1>
-          <div class="workbench-model-names">
-            <small v-for="model in (['a', 'b'] as const)" :key="model" :title="session.inputs?.[`model_${model}_original_filename`]">
-              {{ model.toUpperCase() }}：<template v-if="session.inputs?.[`model_${model}_original_filename`]">{{ session.inputs[`model_${model}_original_filename`] }}（{{ session.metadata!.models[model].format.toUpperCase() }}）</template><template v-else>{{ session.metadata!.models[model].format.toUpperCase() }}</template>
-            </small>
-          </div>
-        </div>
-        <div class="workbench-header-actions"><BackgroundTaskCenter /><button id="new-task" @click="emit('newTask')">新建</button></div>
-      </div>
-    </header>
+    <ModuleTopbar title="视界转换" mark="R">
+      <template #subtitle><span class="workbench-model-names">
+        <small v-for="model in (['a', 'b'] as const)" :key="model" :title="session.inputs?.[`model_${model}_original_filename`]">
+          {{ model.toUpperCase() }}：<template v-if="session.inputs?.[`model_${model}_original_filename`]">{{ session.inputs[`model_${model}_original_filename`] }}（{{ session.metadata!.models[model].format.toUpperCase() }}）</template><template v-else>{{ session.metadata!.models[model].format.toUpperCase() }}</template>
+        </small>
+      </span></template>
+      <template #actions><BackgroundTaskCenter /><button id="new-task" @click="emit('newTask')">新建</button></template>
+    </ModuleTopbar>
     <div class="workspace integrated-workspace" :class="{ 'has-inspector': inspectorOpen }">
       <aside class="panel workflow-panel">
         <header class="dock-heading"><strong>配准流程</strong></header>

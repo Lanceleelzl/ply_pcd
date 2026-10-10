@@ -7,6 +7,7 @@ import { createMerge, downloadMerge, listMerges, loadMerge, loadMergeOrigin, pre
   type LegacyRegion, type RegionAction, type MergeModelSetting } from '../../api/merge-api';
 import { readPlyHeader, type PlyHeader } from './ply-header';
 import MergeViewport from './MergeViewport.vue';
+import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import type { ModelCoordinates } from '../../api/merge-api';
 
 const route = useRoute();
@@ -492,7 +493,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
 
 <template>
   <main class="merge-page" :class="{ 'merge-task-page': task }">
-    <header><RouterLink to="/">高斯视界</RouterLink><h1>高斯合并</h1><RouterLink to="/merge">新建任务</RouterLink></header>
+    <ModuleTopbar title="高斯合并" mark="M"><template #actions><RouterLink to="/merge">新建任务</RouterLink></template></ModuleTopbar>
     <p v-if="message" role="status">{{ message }}</p>
     <section v-if="!task" class="merge-panel">
       <h2>选择模型</h2>
@@ -641,16 +642,10 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
 </template>
 
 <style scoped>
-.merge-page { min-height: 100vh; padding: 24px; background: #08111d; color: #edf5ff; }
+.merge-page { min-height: 100vh; padding: 0; background: #08111d; color: #edf5ff; }
+.merge-page:not(.merge-task-page) > .merge-panel { margin: 24px; }
 .merge-task-page { height: 100vh; min-height: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; font-size: 14px; line-height: 1.45; }
-.merge-task-page > header { min-height: 58px; gap: 16px; padding: 0 16px; background: #0c1420; border-bottom: 1px solid #283548; box-shadow: 0 8px 24px #0004; }
-.merge-task-page > header h1 { margin-block: 0; font-size: 20px; line-height: 1.2; font-weight: 700; }
-.merge-task-page > header a { color: #9bc8bc; font-size: 13px; text-decoration: none; }
-.merge-task-page > header a:first-child { padding-right: 16px; border-right: 1px solid #40516a; }
-.merge-task-page > header a:last-child { padding: 7px 11px; border: 1px solid #40516a; border-radius: 6px; background: #172233; color: #e8eef7; }
-.merge-task-page > header a:hover { color: #82f1c8; }
 .merge-task-page > [role=status] { position: absolute; z-index: 10; right: 16px; bottom: 16px; margin: 0; padding: 8px 12px; background: #173c32; border: 1px solid #4dbb92; border-radius: 6px; }
-header { display: flex; align-items: center; gap: 24px; } header h1 { margin-right: auto; }
 a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 16px; }
 .merge-task-page .merge-workspace { flex: 1; min-height: 0; grid-template-columns: 320px minmax(0, 1fr); gap: 0; }
 .merge-task-page .merge-panel { min-width: 0; min-height: 0; border: 0; border-radius: 0; }

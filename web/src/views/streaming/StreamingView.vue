@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import TransformEditor from '../../components/home/TransformEditor.vue';
+import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import SingleModelViewport from './SingleModelViewport.vue';
 import './streaming-workbench.css';
 import type { TransformParameters } from '../../coordinate-math';
@@ -153,7 +154,10 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
 
 <template>
   <main class="streaming-page" :class="{ 'streaming-workbench': task }">
-    <header v-if="!task" class="streaming-topbar"><h1><RouterLink to="/" class="module-home" title="返回首页">高斯流式数据处理</RouterLink></h1><nav><button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button></nav></header>
+    <ModuleTopbar title="高斯流式数据处理" mark="S"><template #actions>
+      <button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button>
+      <RouterLink v-if="task" to="/streaming">新建任务</RouterLink>
+    </template></ModuleTopbar>
     <p v-if="!task">导入模型或按精细到粗略排序的 LOD 文件组，生成LOD流式数据。</p>
     <p v-if="message && !task" class="page-message" role="status">{{ message }}</p>
     <section v-if="!task" class="streaming-panel new-task-panel">
@@ -184,7 +188,6 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
     </section>
     <section v-else class="streaming-panel task-workspace">
       <aside class="task-sidebar">
-      <h1 class="sidebar-module-title"><RouterLink to="/" title="返回首页">高斯流式数据处理</RouterLink></h1>
       <h2>{{ task.filename }}</h2>
       <p>模型状态：{{ task.status }}；流式数据：{{ task.cache_status }}<span v-if="cacheProgress(task.cache_progress) !== undefined">（{{ cacheProgress(task.cache_progress) }}%）</span></p>
       <progress v-if="task.cache_status === 'queued' || task.cache_status === 'converting'"
@@ -200,7 +203,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
         @notify="notify"
         :url="task.preview_url" :origin="task.metadata.origin" v-model:transform="transform"
         :original-url="task.gaussian_url" :original-filename="task.gaussian_filename"
-        :cache-url="task.cache_url" :lods="task.lods"><template #navigation><nav class="scene-navigation"><button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button><RouterLink to="/streaming">返回</RouterLink></nav></template><template #task-actions>
+        :cache-url="task.cache_url" :lods="task.lods"><template #task-actions>
         <button type="button" :disabled="busy || task.status !== 'ready' || task.cache_status === 'queued' || task.cache_status === 'converting'" @click="generate">{{ task.cache_status === 'failed' ? '重试生成' : '生成流式数据' }}</button>
         <button type="button" :disabled="busy || task.source_available === false" @click="retain">再保留 24 小时</button>
         <button type="button" :disabled="busy || task.source_available === false" @click="release">{{ task.source_available === false ? '源数据已释放' : '释放源数据' }}</button>
@@ -224,7 +227,8 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
 </template>
 
 <style scoped>
-.streaming-page { min-height: 100vh; padding: 32px max(24px, calc((100vw - 1040px) / 2)); background: #08111d; color: #edf5ff; }
+.streaming-page { min-height: 100vh; padding: 0; background: #08111d; color: #edf5ff; }
+.streaming-page:not(.streaming-workbench) > :is(p, .streaming-panel) { box-sizing: border-box; width: min(1040px, calc(100% - 48px)); margin-left: auto; margin-right: auto; }
 header a, a { color: #78d6b8; } h1 { margin: 14px 0; } h2 { margin-top: 0; }
 .streaming-panel { margin: 24px 0; padding: 24px; border: 1px solid #385574; border-radius: 14px; background: #17283d; }
 .streaming-page.streaming-workbench { padding: 0; }
