@@ -42,7 +42,7 @@ Thumbs.db
 
 # AI local configuration
 .playwright-cli/
-/output/playwright/
+/output/
 .claude/
 .codex/
 

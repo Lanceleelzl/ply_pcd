@@ -137,7 +137,7 @@ async function nativeFiles(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await nativeFiles(path));
-    else files.push(path);
+    else if (relative(root, path).replaceAll("\\", "/") !== "cpp/vendor/laszip/docs/Makefile") files.push(path);
   }
   return files;
 }
@@ -151,7 +151,10 @@ async function nativeSourceHash() {
   for (const file of files) {
     hash.update(relative(root, file).replaceAll("\\", "/"));
     hash.update("\0");
-    hash.update(await readFile(file));
+    const bytes = await readFile(file);
+    hash.update(/\.(?:png|las|laz|enc)$/i.test(file)
+      ? bytes
+      : Buffer.from(bytes.toString("latin1").replaceAll("\r\n", "\n"), "latin1"));
     hash.update("\0");
   }
   return hash.digest("hex");
