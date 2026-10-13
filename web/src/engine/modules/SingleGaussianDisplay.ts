@@ -1,16 +1,21 @@
 import * as pc from 'playcanvas';
 import type { XYZ } from '../../coordinate-math';
 import { GaussianClipController } from '../../gaussian-clipping.ts';
+import { MergeGaussianClip } from '../../views/merge/MergeGaussianClip';
+import type { Region } from '../../api/merge-api';
 
 export class SingleGaussianDisplay {
   private asset: pc.Asset | null = null;
   private entity: pc.Entity | null = null;
   private clip: GaussianClipController | null = null;
+  private mergeClip: MergeGaussianClip | null = null;
+  private mergeRules: { regions: Region[]; model: number; enabled: boolean } | null = null;
   private generation = 0;
   private destroyed = false;
 
   constructor(private readonly app: pc.Application, private readonly parent: pc.Entity,
-    private readonly origin: XYZ, private readonly pointsVisible: (visible: boolean) => void) {}
+    private readonly origin: XYZ, private readonly pointsVisible: (visible: boolean) => void,
+    private readonly clipMode: 'standard' | 'merge' = 'standard') {}
 
   async show(url: string, filename: string): Promise<void> {
     if (this.destroyed) return;
@@ -49,7 +54,10 @@ export class SingleGaussianDisplay {
         entity.setLocalScale(direct.transform.scale, direct.transform.scale, direct.transform.scale);
       }
       this.parent.addChild(entity);
-      this.clip = new GaussianClipController(entity.gsplat!);
+      if (this.clipMode === 'merge') {
+        this.mergeClip = new MergeGaussianClip(this.app, entity.gsplat!);
+        if (this.mergeRules) this.mergeClip.setRules(this.mergeRules.regions, this.mergeRules.model, this.mergeRules.enabled);
+      } else this.clip = new GaussianClipController(entity.gsplat!);
       this.pointsVisible(false);
     } catch (error) {
       if (generation === this.generation) this.release();
@@ -62,6 +70,11 @@ export class SingleGaussianDisplay {
     this.clip?.setClipState(enabled, min, max, boxEnabled, worldToBox, originSides, worldToOrigin, true);
   }
 
+  setMergeClip(regions: Region[], model: number, enabled: boolean): void {
+    this.mergeRules = { regions, model, enabled };
+    this.mergeClip?.setRules(regions, model, enabled);
+  }
+
   showPoints(): void { if (!this.destroyed) { ++this.generation; this.release(); } }
 
   destroy(): void {
@@ -71,6 +84,7 @@ export class SingleGaussianDisplay {
 
   private release(): void {
     this.clip = null;
+    this.mergeClip?.destroy(); this.mergeClip = null;
     this.entity?.destroy();
     if (this.asset) { this.asset.unload(); this.app.assets.remove(this.asset); }
     this.entity = null; this.asset = null;

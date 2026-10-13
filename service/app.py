@@ -36,7 +36,7 @@ from service.routes.registrations import create_registration_router
 from service.routes.coarse_registrations import create_coarse_registration_router
 from service.routes.sessions import create_session_router
 from service.routes.streaming import StreamingTasks, create_streaming_resource_router, create_streaming_router
-from service.routes.gaussian_merge import MergeTasks, create_merge_router
+from service.routes.gaussian_merge import MergeTasks, create_merge_router, create_merge_resource_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.routes.gaussian_resources import create_gaussian_resource_router
@@ -143,6 +143,7 @@ app.include_router(create_web_router(STATIC_ROOT, _manual_session_directory, _re
 app.include_router(create_gaussian_resource_router(_manual_session_directory, _read_status))
 app.include_router(create_streaming_resource_router(_streaming_tasks))
 app.include_router(create_streaming_router(_streaming_tasks))
+app.include_router(create_merge_resource_router(_merge_tasks))
 app.include_router(create_merge_router(_merge_tasks))
 
 

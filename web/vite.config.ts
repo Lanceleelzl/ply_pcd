@@ -18,6 +18,7 @@ export default defineConfig({
       '/api': `http://127.0.0.1:${localConfig.port}`,
       '/gaussian-resources': `http://127.0.0.1:${localConfig.port}`,
       '/streaming-resources': `http://127.0.0.1:${localConfig.port}`,
+      '/merge-resources': `http://127.0.0.1:${localConfig.port}`,
       '/health': `http://127.0.0.1:${localConfig.port}`,
       '/docs': `http://127.0.0.1:${localConfig.port}`,
       '/openapi.json': `http://127.0.0.1:${localConfig.port}`

@@ -6,12 +6,14 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import UploadFile
 from fastapi import HTTPException
 
-from service.routes.gaussian_merge import MergeTasks, create_merge_router, validate_merged_levels
+from service.routes.gaussian_merge import MergeCancelled, MergeTasks, create_merge_router, create_merge_resource_router, restore_completed_merge, validate_merged_levels
 from service.gaussian_merge import read_layout
+from service.storage import write_status
 
 
 def gaussian(name, offset, geo=True, point=(0, 0, 0)):
@@ -32,9 +34,36 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.tasks = MergeTasks(Path(self.temporary.name), ["node", "converter"])
         self.routes = {route.name: route.endpoint for route in create_merge_router(self.tasks).routes}
+        self.resource_routes = {route.name: route.endpoint for route in create_merge_resource_router(self.tasks).routes}
 
     async def asyncTearDown(self):
         self.temporary.cleanup()
+
+    async def test_cancel_running_merge_does_not_recover(self):
+        status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = status["task_id"]
+        directory = self.tasks.directory(task_id)
+        status = self.tasks.read(task_id)[1]
+        status["units_confirmed"] = True
+        write_status(directory, status)
+        def wait_for_cancel(_directory, _status):
+            while not self.tasks.cancellations[task_id].wait(0.01):
+                pass
+            raise MergeCancelled()
+
+        with patch.object(self.tasks, "_merge", side_effect=wait_for_cancel):
+            await self.routes["start_merge"](task_id)
+            while self.tasks.read(task_id)[1]["merge_status"] != "running":
+                await asyncio.sleep(0.01)
+            cancelled = await self.routes["cancel_merge"](task_id)
+            self.assertEqual(cancelled["merge_status"], "cancelling")
+            await asyncio.wait_for(self.tasks.running[task_id], 5)
+        result = self.tasks.read(task_id)[1]
+        self.assertEqual(result["merge_status"], "cancelled")
+        self.assertTrue(all(item["status"] == "cancelled" for item in result["level_progress"]))
+        self.tasks.recover()
+        self.assertNotIn(task_id, self.tasks.running)
 
     async def test_coordinate_preview_converts_projected_origin(self):
         preview = self.routes["coordinate_preview"](32651, 500000, 0, 13.5)
@@ -43,6 +72,43 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preview["wgs84"][2], 13.5)
         with self.assertRaises(HTTPException):
             self.routes["coordinate_preview"](4326, 123, 0, 13.5)
+
+    async def test_boundary_coordinates_convert_both_directions(self):
+        projected = self.routes["convert_coordinates"]({"epsg": "32651", "mode": "wgs84", "points": [[123, 0]]})
+        self.assertAlmostEqual(projected["points"][0][0], 500000, places=5)
+        geographic = self.routes["convert_coordinates"]({"epsg": "32651", "mode": "projected", "points": projected["points"]})
+        self.assertAlmostEqual(geographic["points"][0][0], 123, places=7)
+        with self.assertRaises(HTTPException):
+            self.routes["convert_coordinates"]({"epsg": "32651", "mode": "wgs84", "points": [[181, 0]]})
+
+    async def test_ready_streamed_cache_exposes_only_its_tokenized_files(self):
+        created = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = created["task_id"]
+        directory = self.tasks.directory(task_id)
+        status = self.tasks.read(task_id)[1]
+        relative = "streamed/test-cache/lod-meta.json"
+        cache_root = directory / "streamed" / "test-cache"
+        cache_root.mkdir(parents=True)
+        (cache_root / "lod-meta.json").write_text('{"lodLevels":1}', encoding="utf-8")
+        (cache_root / "sh0.webp").write_bytes(b"webp")
+        status.update(cache_status="ready", cache_path=relative)
+        write_status(directory, status)
+        url = self.routes["get_merge"](task_id)["cache_url"]
+        self.assertEqual(url, f"/merge-resources/{task_id}/{status['resource_token']}/{relative}")
+        resource = self.resource_routes["merge_resource"]
+        response = resource(task_id, status["resource_token"], "streamed/test-cache/sh0.webp")
+        self.assertEqual(Path(response.path).read_bytes(), b"webp")
+        for token, path in [("wrong", relative),
+                            (status["resource_token"], "streamed/other/lod-meta.json"),
+                            (status["resource_token"], "streamed/test-cache/../../status.json")]:
+            with self.assertRaises(HTTPException):
+                resource(task_id, token, path)
+        status["cache_status"] = "not_requested"
+        write_status(directory, status)
+        self.assertIsNone(self.routes["get_merge"](task_id)["cache_url"])
+        with self.assertRaises(HTTPException):
+            resource(task_id, status["resource_token"], relative)
 
     async def test_upload_preview_region_and_merge(self):
         status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
@@ -64,8 +130,95 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["merged_lods"][0]["count"], 1)
         response = self.routes["download"](task_id, "ply")
         self.assertIn("gaussian-merge-ply.zip", response.headers["content-disposition"])
+        lod_response = self.routes["download_merged_lod"](task_id, 0)
+        self.assertEqual(Path(lod_response.path).read_bytes(),
+                         (self.tasks.directory(task_id) / result["merged_lods"][0]["path"]).read_bytes())
+        self.assertIn("gaussian-merge-lod-0.ply", lod_response.headers["content-disposition"])
+        with self.assertRaises(HTTPException):
+            self.routes["download_merged_lod"](task_id, 1)
         with self.tasks.reading(task_id), self.assertRaises(HTTPException):
             await self.routes["start_merge"](task_id)
+
+    async def test_restoring_original_regions_relinks_finished_merge_and_cache(self):
+        created = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = created["task_id"]
+        directory = self.tasks.directory(task_id)
+        status = self.tasks.read(task_id)[1]
+        status["units_confirmed"] = True
+        for model in status["models"]:
+            model["confirmed"] = True
+        write_status(directory, status)
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        completed = self.tasks.read(task_id)[1]
+        cache_path = "streamed/old/lod-meta.json"
+        (directory / cache_path).parent.mkdir(parents=True)
+        (directory / cache_path).write_text("{}", encoding="utf-8")
+        completed.update(cache_status="ready", cache_path=cache_path)
+        write_status(directory, completed)
+        payload = {"regions": [{"kind": "per_model", "actions": ["none", "none"],
+                                "polygon": [[0, 0], [1, 0], [0, 1]]}],
+                   "corrections": [model["correction"] for model in completed["models"]],
+                   "rotations": [model["rotation"] for model in completed["models"]],
+                   "axes": completed["axes"], "units_confirmed": True}
+        edited = self.routes["save_regions"](task_id, payload)
+        self.assertEqual((edited["merge_status"], edited["cache_status"]), ("editing", "not_requested"))
+        payload["regions"] = completed["regions"]
+        with patch("service.routes.gaussian_merge.validate_streamed_sog_directory"):
+            restored = self.routes["save_regions"](task_id, payload)
+        self.assertEqual((restored["merge_status"], restored["cache_status"]), ("ready", "ready"))
+        self.assertEqual(len(restored["merged_lods"]), 1)
+        self.assertEqual(restored["cache_path"], cache_path)
+
+    async def test_cancelled_replacement_restores_matching_completed_download(self):
+        status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = status["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        directory, original = self.tasks.read(task_id)
+        original_path = original["merged_lods"][0]["path"]
+        original["merge_status"] = "cancelled"
+        original["merge_path"] = "merged/aborted"
+        original["merged_lods"] = []
+        original["level_progress"][0]["status"] = "cancelled"
+        self.assertTrue(restore_completed_merge(directory, original))
+        write_status(directory, original)
+        self.assertEqual(original["merge_status"], "ready")
+        self.assertEqual(Path(self.routes["download_merged_lod"](task_id, 0).path),
+                         directory / original_path)
+        original["regions"] = [{"kind": "per_model", "actions": ["remove_inside", "none"],
+                                "polygon": [[0, 0], [1, 0], [0, 1]]}]
+        self.assertFalse(restore_completed_merge(directory, original))
+
+    async def test_cancel_repeated_merge_relinks_prior_result(self):
+        status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = status["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        original_path = self.tasks.read(task_id)[1]["merged_lods"][0]["path"]
+
+        def wait_for_cancel(_directory, _status):
+            while not self.tasks.cancellations[task_id].wait(0.01):
+                pass
+            raise MergeCancelled()
+
+        with patch.object(self.tasks, "_merge", side_effect=wait_for_cancel):
+            await self.routes["start_merge"](task_id)
+            while self.tasks.read(task_id)[1]["merge_status"] != "running":
+                await asyncio.sleep(0.01)
+            await self.routes["cancel_merge"](task_id)
+            await asyncio.wait_for(self.tasks.running[task_id], 5)
+        restored = self.tasks.read(task_id)[1]
+        self.assertEqual(restored["merge_status"], "ready")
+        self.assertEqual(restored["merged_lods"][0]["path"], original_path)
+        self.assertEqual(restored["level_progress"][0]["status"], "ready")
 
     async def test_same_region_applies_to_each_confirmed_lod(self):
         status = await self.routes["create_merge"](str(uuid.uuid4()), "[2,2]", [
@@ -88,6 +241,52 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.media_type, "application/octet-stream")
         with self.assertRaises(HTTPException):
             self.routes["source_lod"](task_id, 5, 0)
+
+    async def test_recovery_preserves_completed_lod(self):
+        status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("a.ply", 1000), gaussian("b.ply", 1004)])
+        task_id = status["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        directory, completed = self.tasks.read(task_id)
+        output = directory / completed["merged_lods"][0]["path"]
+        original = output.read_bytes()
+        with patch("service.routes.gaussian_merge.merge_level", side_effect=AssertionError("recomputed")):
+            resumed = self.tasks._merge(directory, completed)
+        self.assertEqual(resumed, completed["merged_lods"])
+        self.assertEqual(output.read_bytes(), original)
+        completed["merge_status"] = "running"
+        completed["merged_lods"] = []
+        write_status(directory, completed)
+        self.assertTrue(self.routes["get_merge"](task_id)["partial_lod_downloads"])
+        resumed_legacy = self.tasks._merge(directory, completed)
+        self.assertEqual(resumed_legacy[0]["count"], read_layout(output).count)
+        self.assertEqual(Path(self.routes["download_merged_lod"](task_id, 0).path), output)
+
+    async def test_recovery_only_recomputes_unfinished_lod(self):
+        status = await self.routes["create_merge"](str(uuid.uuid4()), "[2,2]", [
+            gaussian("a-0.ply", 1000), gaussian("a-1.ply", 1000),
+            gaussian("b-0.ply", 1004), gaussian("b-1.ply", 1004)])
+        task_id = status["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        directory, interrupted = self.tasks.read(task_id)
+        first = directory / interrupted["merged_lods"][0]["path"]
+        first_modified = first.stat().st_mtime_ns
+        interrupted["merge_status"] = "running"
+        interrupted["merged_lods"] = interrupted["merged_lods"][:1]
+        interrupted["level_progress"][1]["status"] = "running"
+        write_status(directory, interrupted)
+        from service.routes.gaussian_merge import merge_level
+        with patch("service.routes.gaussian_merge.merge_level", wraps=merge_level) as merge:
+            resumed = self.tasks._merge(directory, interrupted)
+        self.assertEqual(merge.call_count, 1)
+        self.assertEqual([item["level"] for item in resumed], [0, 1])
+        self.assertEqual(first.stat().st_mtime_ns, first_modified)
 
     async def test_selected_lod_merges_alone_and_reports_level_progress(self):
         status = await self.routes["create_merge"](str(uuid.uuid4()), "[2,2]", [

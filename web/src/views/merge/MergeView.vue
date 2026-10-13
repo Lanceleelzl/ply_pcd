@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWorkspaceStore } from '../../stores/workspace-store';
-import { createMerge, downloadMerge, listMerges, loadMerge, loadMergeOrigin, previewMergeCoordinates, saveMergeOrigin, resetMergeOrigin, loadMergePreview,
-  loadMergedPreview, mergeLodUrl, saveMergeRegions, startMerge, type MergeTask, type Region,
+import { createMerge, downloadMerge, listMerges, loadMerge, loadMergeOrigin, previewMergeCoordinates, convertMergeCoordinates, saveMergeOrigin, resetMergeOrigin, loadMergePreview,
+  loadMergedPreview, mergeLodUrl, mergedLodUrl, saveMergeRegions, startMerge, cancelMerge, type MergeTask, type Region,
   type LegacyRegion, type RegionAction, type MergeModelSetting } from '../../api/merge-api';
 import { readPlyHeader, type PlyHeader } from './ply-header';
 import MergeViewport from './MergeViewport.vue';
@@ -51,7 +51,12 @@ const task = ref<MergeTask | null>(null);
 const sceneViewport = ref<InstanceType<typeof MergeViewport> | null>(null);
 const history = ref<MergeTask[]>([]);
 const samples = ref<number[][][]>([]);
+const mergedSamples = ref<number[][][]>([]);
 const regions = ref<Region[]>([]);
+const persistedRegions = ref<Region[]>([]);
+const boundaryDirty = computed(() => JSON.stringify(regions.value) !== JSON.stringify(persistedRegions.value));
+const previewTrimmed = ref<boolean[]>([]);
+const gaussianLoading = ref<boolean[]>([]);
 const corrections = ref<number[][]>([]);
 const rotations = ref<number[][]>([]);
 const modelSettings = ref<MergeModelSetting[]>([]);
@@ -64,6 +69,8 @@ const operationHint = computed(() => {
     return '拖动顶点调整边界，点击边线插入顶点；选中顶点后点击「−」或按 Delete 删除。Ctrl+Z／Ctrl+Y 仅撤销恢复当前边界的顶点操作。';
   if (selectedModel.value >= 0 && selectedModel.value !== targetModel.value)
     return '拖动场景手柄移动或旋转当前模型；切换模型时自动保存校正，按 Esc 退出选中。';
+  const loadingModel = gaussianLoading.value.findIndex(Boolean);
+  if (loadingModel >= 0) return `模型 ${loadingModel + 1} 的 Gaussian LOD 正在加载；点云会保留到加载完成。`;
   return '';
 });
 const drawing = ref<[number, number][]>([]);
@@ -72,8 +79,29 @@ const activeRegion = ref<number | null>(null);
 const editingRegion = ref(false);
 const busy = ref(false);
 const message = ref('');
+const createPhase = ref<'idle' | 'preparing' | 'uploading' | 'processing' | 'loading' | 'error'>('idle');
+const uploadLoaded = ref(0);
+const uploadTotal = ref<number | null>(null);
+const createError = ref('');
+const previewLoading = ref(false);
+const uploadPercent = computed(() => uploadTotal.value ? Math.min(100, Math.floor(uploadLoaded.value / uploadTotal.value * 100)) : null);
+function uploadSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+const createStatus = computed(() => {
+  if (createPhase.value === 'preparing') return '正在准备上传请求…';
+  if (createPhase.value === 'uploading') return `正在上传文件：${uploadSize(uploadLoaded.value)}${uploadTotal.value
+    ? `／${uploadSize(uploadTotal.value)}（${uploadPercent.value}%）` : ''}`;
+  if (createPhase.value === 'processing') return '文件已上传，服务端正在保存、校验 PLY 并创建任务…';
+  if (createPhase.value === 'loading') return '任务已创建，正在加载三维场景…';
+  return '';
+});
 const received = ref(0);
 const mergedPreview = ref(false);
+const mergedSource = ref<'ply' | 'streamed'>('ply');
+const mergedDisplay = ref<'points' | 'gaussian'>('points');
 const previewLevel = ref(0);
 const modelDisplays = ref<('points' | 'gaussian')[]>([]);
 const gaussianLevels = ref<number[]>([]);
@@ -86,6 +114,12 @@ const originMode = ref<'projected' | 'wgs84'>('projected');
 const originEpsg = ref('');
 const originProjected = ref<string[]>(['', '', '']);
 const originWgs84 = ref<string[]>(['', '', '']);
+const originPoint = ref<number[] | null>(null);
+const vertexMode = ref<'scene' | 'projected' | 'wgs84'>('scene');
+const vertexInputs = ref<[string, string][]>([]);
+const vertexInputError = ref('');
+const vertexConverting = ref(false);
+let vertexInputVersion = 0;
 const undoVertices: [number, number][][] = [];
 const redoVertices: [number, number][][] = [];
 let vertexDragChanged = false;
@@ -102,8 +136,53 @@ async function refreshOrigin() {
   if (!task.value) return;
   const origin = await loadMergeOrigin(task.value.task_id);
   originEpsg.value = origin.epsg;
+  originPoint.value = origin.projected;
   originProjected.value = origin.projected?.map(value => value.toFixed(4)) ?? ['', '', ''];
   originWgs84.value = origin.wgs84?.map((value, index) => value.toFixed(index === 2 ? 4 : 10)) ?? ['', '', ''];
+}
+watch([activeRegion, vertexMode, regions, originEpsg, originPoint], async () => {
+  const version = ++vertexInputVersion;
+  const polygon = activeRegion.value === null ? null : regions.value[activeRegion.value]?.polygon;
+  vertexInputError.value = '';
+  vertexConverting.value = false;
+  if (!polygon) { vertexInputs.value = []; return; }
+  if (vertexMode.value === 'scene') {
+    vertexInputs.value = polygon.map(point => [String(point[0]), String(point[1])]); return;
+  }
+  if (!originPoint.value || !originEpsg.value) {
+    vertexInputs.value = []; vertexInputError.value = '请先设置目标模型的投影坐标原点'; return;
+  }
+  const projected = polygon.map(point => [point[0] + originPoint.value![0], point[1] + originPoint.value![1]] as [number, number]);
+  try {
+    if (vertexMode.value === 'wgs84') { vertexInputs.value = []; vertexConverting.value = true; }
+    const values = vertexMode.value === 'projected' ? projected :
+      await convertMergeCoordinates(originEpsg.value, 'projected', projected);
+    if (version === vertexInputVersion) vertexInputs.value = values.map(point =>
+      [point[0].toFixed(vertexMode.value === 'wgs84' ? 10 : 4), point[1].toFixed(vertexMode.value === 'wgs84' ? 10 : 4)]);
+  } catch (error) { if (version === vertexInputVersion) vertexInputError.value = String(error); }
+  finally { if (version === vertexInputVersion) vertexConverting.value = false; }
+}, { deep: true, immediate: true });
+async function applyVertexInput(index: number) {
+  const raw = vertexInputs.value[index];
+  const region = activeRegion.value === null ? null : regions.value[activeRegion.value];
+  if (!raw || !region?.polygon[index]) return;
+  const values = raw.map(value => value.trim() === '' ? NaN : Number(value)) as [number, number];
+  if (values.some(value => !Number.isFinite(value))) { vertexInputError.value = '请输入完整、有效的坐标'; return; }
+  try {
+    let scene = values;
+    if (vertexMode.value !== 'scene') {
+      if (!originPoint.value || !originEpsg.value) throw new Error('请先设置目标模型的投影坐标原点');
+      const projected = vertexMode.value === 'projected' ? values :
+        (await convertMergeCoordinates(originEpsg.value, 'wgs84', [values]))[0];
+      if (!projected) throw new Error('坐标转换失败');
+      scene = [projected[0] - originPoint.value[0], projected[1] - originPoint.value[1]];
+    }
+    if (scene.some(value => !Number.isFinite(value))) throw new Error('坐标转换结果无效');
+    if (scene[0] !== region.polygon[index][0] || scene[1] !== region.polygon[index][1]) {
+      snapshotVertices(); region.polygon[index] = scene;
+    }
+    vertexInputError.value = '';
+  } catch (error) { vertexInputError.value = String(error); }
 }
 async function applyOrigin() {
   if (!task.value) return;
@@ -168,25 +247,22 @@ function restoreVertices(redo: boolean) {
   if (drawingMode.value) drawing.value = previous;
   else if (activeRegion.value !== null) regions.value[activeRegion.value].polygon = previous;
   selectedVertex.value = null;
-  if (!drawingMode.value) void save();
 }
 function insertVertex(index: number, point: [number, number]) {
   const vertices = currentVertices();
   if (!vertices) return;
   snapshotVertices(); vertices.splice(index, 0, point);
   selectedVertex.value = index;
-  void save();
 }
 function deleteVertex(index: number) {
   const vertices = currentVertices();
   if (!vertices || vertices.length <= 3) return;
   snapshotVertices(); vertices.splice(index, 1);
   selectedVertex.value = null;
-  void save();
 }
 const colors = ['#65d9b4', '#f4aa6a', '#8bbdff', '#da9ef7', '#ffe080', '#ff8eac', '#9ce1dc', '#d7bd96'];
 function statusLabel(status: string | undefined): string {
-  return ({ editing: '待合并', queued: '排队中', running: '处理中', ready: '已完成', failed: '失败',
+  return ({ editing: '待合并', queued: '排队中', running: '处理中', cancelling: '正在终止', cancelled: '已终止', ready: '已完成', failed: '失败',
     not_selected: '未选择', not_requested: '未生成' } as Record<string, string>)[status ?? ''] ?? '未执行';
 }
 const canGenerate = computed(() => {
@@ -227,14 +303,71 @@ function normalizeRegion(region: Region | LegacyRegion, modelCount: number): Reg
   });
   return { kind: 'per_model', actions, polygon: region.polygon };
 }
+function cloneRegion(region: Region): Region {
+  return { kind: 'per_model', actions: [...region.actions],
+    polygon: region.polygon.map(point => [...point] as [number, number]) };
+}
+function cancelBoundaryChanges() {
+  regions.value = persistedRegions.value.map(cloneRegion);
+  drawing.value = [];
+  drawingMode.value = false;
+  activeRegion.value = null;
+  editingRegion.value = false;
+  selectedVertex.value = null;
+  vertexDragChanged = false;
+  undoVertices.length = 0;
+  redoVertices.length = 0;
+}
 function relativeOffset(index: number): string {
   if (!task.value) return '';
   const source = task.value.models[index].offset;
   const origin = task.value.models[targetModel.value].offset;
   return source && origin ? source.map((value, axis) => (value - origin[axis]).toFixed(4)).join('／') : '未知，使用三维手柄匹配';
 }
-const gaussianUrls = computed(() => task.value?.models.map((_, index) =>
-  mergeLodUrl(task.value!.task_id, gaussianLevels.value[index] ?? 0, index)) ?? []);
+const gaussianUrls = computed(() => !task.value ? [] : mergedPreview.value
+  ? [mergedSource.value === 'streamed' ? task.value.cache_url ?? '' : mergedLodUrl(task.value.task_id, previewLevel.value)]
+  : task.value.models.map((_, index) => mergeLodUrl(task.value!.task_id, gaussianLevels.value[index] ?? 0, index)));
+const gaussianFilenames = computed(() => mergedPreview.value && mergedSource.value === 'streamed'
+  ? ['lod-meta.json'] : gaussianUrls.value.map((_, index) => `model-${index}.ply`));
+function insidePolygon(polygon: [number, number][], x: number, y: number): boolean {
+  let inside = false;
+  let previous = polygon[polygon.length - 1];
+  for (const current of polygon) {
+    const [x1, y1] = previous, [x2, y2] = current;
+    const cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1);
+    if (Math.abs(cross) <= 1e-9 && Math.min(x1, x2) - 1e-9 <= x && x <= Math.max(x1, x2) + 1e-9 &&
+        Math.min(y1, y2) - 1e-9 <= y && y <= Math.max(y1, y2) + 1e-9) return true;
+    if ((y1 > y) !== (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1) inside = !inside;
+    previous = current;
+  }
+  return inside;
+}
+function keepPreviewPoint(point: number[], model: number): boolean {
+  for (const region of regions.value) {
+    const action = region.actions[model];
+    if (action === 'none') continue;
+    const inside = insidePolygon(region.polygon, point[0], point[1]);
+    if ((action === 'remove_inside' && inside) || (action === 'remove_outside' && !inside)) return false;
+  }
+  return true;
+}
+const sceneSamples = computed(() => mergedPreview.value ? mergedSamples.value :
+  samples.value.map((points, index) => previewTrimmed.value[index]
+    ? points.filter(point => keepPreviewPoint(point, index)) : points));
+const sceneDisplays = computed(() => mergedPreview.value ? [mergedDisplay.value] : modelDisplays.value);
+const sceneTranslations = computed<[number, number, number][]>(() => mergedPreview.value ? [[0, 0, 0]] : modelTranslations.value);
+const sceneRotations = computed(() => mergedPreview.value ? [[1, 0, 0, 0]] : rotations.value);
+const sceneAxes = computed(() => mergedPreview.value ? [modelSettings.value[targetModel.value]?.axes ?? [1, 2, 3]] :
+  modelSettings.value.map(item => item.axes));
+const sceneScales = computed(() => mergedPreview.value ? [modelFactor(targetModel.value)] :
+  modelSettings.value.map((_, index) => modelFactor(index)));
+const allTrimmed = computed(() => previewTrimmed.value.length > 0 && previewTrimmed.value.every(Boolean));
+function toggleTrimmedAll() { previewTrimmed.value = previewTrimmed.value.map(() => !allTrimmed.value); }
+function toggleMergedDisplay() {
+  mergedDisplay.value = mergedDisplay.value === 'points' ? 'gaussian' : 'points';
+  if (!mergedPreview.value) void showPreview(true);
+}
+function setGaussianLoading(index: number, loading: boolean) { gaussianLoading.value[index] = loading; }
 const unitMeters = { m: 1, cm: 0.01, mm: 0.001 };
 function modelFactor(index: number): number {
   const setting = modelSettings.value[index];
@@ -284,12 +417,11 @@ function updateVertex(index: number, point: [number, number]) {
   if (!vertexDragChanged) { snapshotVertices(); vertexDragChanged = true; }
   region.polygon[index] = point;
 }
-function endVertexEdit() { if (vertexDragChanged) void save(); vertexDragChanged = false; }
+function endVertexEdit() { vertexDragChanged = false; }
 function removeRegion(index: number) {
   regions.value.splice(index, 1);
   if (activeRegion.value === index) { activeRegion.value = null; editingRegion.value = false; }
   else if (activeRegion.value !== null && activeRegion.value > index) activeRegion.value--;
-  void save();
 }
 function moveModel(model: number, delta: [number, number, number]) {
   if (model === targetModel.value) return;
@@ -348,7 +480,6 @@ function finishPolygon() {
   drawingMode.value = false;
   editingRegion.value = true;
   undoVertices.length = 0; redoVertices.length = 0;
-  void save();
 }
 async function choose(model: number, event: Event) {
   inputs.value[model] = Array.from((event.target as HTMLInputElement).files ?? [])
@@ -383,16 +514,23 @@ async function refresh() {
     const previousMergeStatus = task.value?.merge_status;
     const previousCacheStatus = task.value?.cache_status;
     task.value = await loadMerge(id);
+    if (task.value.merge_status !== 'ready' || !task.value.merged_lods?.length) mergedPreview.value = false;
     if (previousMergeStatus && previousMergeStatus !== 'failed' && task.value.merge_status === 'failed')
       message.value = task.value.merge_error || 'PLY 合并失败';
     if (previousCacheStatus && previousCacheStatus !== 'failed' && task.value.cache_status === 'failed')
       message.value = task.value.cache_error || '流式生成失败';
     if (previous !== id) {
-      regions.value = task.value.regions.map(region => normalizeRegion(region, task.value!.models.length));
+      persistedRegions.value = task.value.regions.map(region => cloneRegion(normalizeRegion(region, task.value!.models.length)));
+      regions.value = persistedRegions.value.map(cloneRegion);
       targetModel.value = task.value.target_model ?? 0;
       selectedModel.value = -1;
       visibleModels.value = task.value.models.map(() => true);
+      previewTrimmed.value = task.value.models.map(() => false);
+      gaussianLoading.value = task.value.models.map(() => false);
+      mergedSamples.value = [];
       mergedPreview.value = false;
+      mergedSource.value = 'ply';
+      mergedDisplay.value = 'points';
       modelDisplays.value = task.value.models.map(() => 'points');
       gaussianLevels.value = task.value.models.map(model => model.lods.length - 1);
       modelSettings.value = task.value.models.map(model => ({ axes: [...(model.axes ?? task.value!.axes)],
@@ -404,33 +542,46 @@ async function refresh() {
       samples.value = (await loadMergePreview(id)).models;
     }
     if (task.value.merge_status === 'ready' && task.value.merged_lods?.length &&
-        !task.value.merged_lods.some(item => item.level === previewLevel.value))
-      previewLevel.value = task.value.merged_lods[0].level;
+        (previous !== id || previousMergeStatus !== 'ready' ||
+         !task.value.merged_lods.some(item => item.level === previewLevel.value)))
+      previewLevel.value = task.value.merged_lods[task.value.merged_lods.length - 1].level;
   } catch (error) { message.value = String(error); }
 }
 async function create() {
-  busy.value = true; message.value = '';
+  if (busy.value) return;
+  busy.value = true; message.value = ''; createError.value = '';
+  createPhase.value = 'preparing'; uploadLoaded.value = 0; uploadTotal.value = null;
   try {
     const created = await createMerge(workspace.workspaceId, inputs.value,
-      targetModel.value, coordinates.value.map(item => ({ ...item, confirmed: coordinateComplete(item) })));
+      targetModel.value, coordinates.value.map(item => ({ ...item, confirmed: coordinateComplete(item) })), progress => {
+        if (progress.phase === 'processing') createPhase.value = 'processing';
+        else {
+          createPhase.value = 'uploading';
+          uploadLoaded.value = progress.loaded;
+          uploadTotal.value = progress.total;
+        }
+      });
+    createPhase.value = 'loading';
     await router.push({ name: 'merge-task', params: { taskId: created.task_id } });
     await refresh();
-  } catch (error) { message.value = String(error); }
+  } catch (error) { createError.value = String(error); createPhase.value = 'error'; }
   finally { busy.value = false; }
 }
-function save(): Promise<void> {
+function save(includeRegions = false): Promise<void> {
   if (!task.value) return Promise.resolve();
+  if (savePromise && includeRegions) return savePromise.then(() => save(true));
   if (savePromise) { saveQueued = true; return savePromise; }
   savePromise = (async () => {
     busy.value = true; message.value = '';
     try {
       do {
         saveQueued = false;
-        const saved = await saveMergeRegions(task.value!.task_id, regions.value, corrections.value, rotations.value,
+        const saved = await saveMergeRegions(task.value!.task_id, includeRegions ? regions.value : persistedRegions.value, corrections.value, rotations.value,
           modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value);
+        if (includeRegions) persistedRegions.value = saved.regions.map(region => cloneRegion(normalizeRegion(region, saved.models.length)));
         if (saveQueued) continue;
         task.value = saved;
-        regions.value = saved.regions.map(region => normalizeRegion(region, saved.models.length));
+        if (includeRegions) regions.value = persistedRegions.value.map(cloneRegion);
         corrections.value = saved.models.map(model => [...model.correction]);
         rotations.value = saved.models.map(model => [...(model.rotation ?? [1, 0, 0, 0])]);
         modelSettings.value = saved.models.map(model => ({ axes: [...(model.axes ?? saved.axes)],
@@ -439,7 +590,7 @@ function save(): Promise<void> {
         await refreshOrigin();
         samples.value = (await loadMergePreview(saved.task_id)).models;
         mergedPreview.value = false;
-        message.value = '区域与校正已保存';
+        message.value = includeRegions ? '边界规则与模型设置已保存' : '模型设置已保存';
       } while (saveQueued);
     } catch (error) { message.value = String(error); }
     finally { busy.value = false; savePromise = null; }
@@ -448,32 +599,49 @@ function save(): Promise<void> {
 }
 async function run(operation: 'merge' | 'generate') {
   if (!task.value) return;
+  if (operation === 'merge' && task.value.merge_path &&
+      !window.confirm('此任务已有合并记录。再次执行会创建新一轮成果；若模型位置与边界未变化，结果也不会变化。中途终止时，设置一致的旧成果可恢复下载。确定继续吗？')) return;
   busy.value = true; message.value = '';
-  try { task.value = await saveMergeRegions(task.value.task_id, regions.value, corrections.value, rotations.value,
+  try { task.value = await saveMergeRegions(task.value.task_id, operation === 'merge' ? regions.value : persistedRegions.value, corrections.value, rotations.value,
     modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value);
-    regions.value = task.value.regions.map(region => normalizeRegion(region, task.value!.models.length));
+    if (operation === 'merge') {
+      persistedRegions.value = task.value.regions.map(region => cloneRegion(normalizeRegion(region, task.value!.models.length)));
+      regions.value = persistedRegions.value.map(cloneRegion);
+    }
     task.value = await startMerge(task.value.task_id, operation,
       operation === 'merge' ? selectedLevels.value : undefined); }
   catch (error) { message.value = String(error); }
   finally { busy.value = false; }
 }
-async function download(kind: 'ply' | 'streamed') {
+async function stopMerge() {
+  if (!task.value || !window.confirm('确定终止当前合并任务吗？已完成的成果文件会保留。')) return;
+  busy.value = true;
+  try {
+    task.value = await cancelMerge(task.value.task_id);
+    message.value = '正在终止合并任务';
+  } catch (error) { message.value = String(error); }
+  finally { busy.value = false; }
+}
+async function download(kind: 'ply' | 'streamed', level?: number) {
   if (!task.value) return;
   busy.value = true; received.value = 0; message.value = '';
-  try { await downloadMerge(task.value.task_id, kind, value => { received.value = value; });
-    message.value = '下载完成'; }
+  try { await downloadMerge(task.value.task_id, kind, value => { received.value = value; }, level);
+    message.value = level === undefined ? '下载完成' : `LOD ${level} 下载完成`; }
   catch (error) { message.value = String(error); }
   finally { busy.value = false; }
 }
-async function showPreview(merged: boolean) {
-  if (!task.value) return;
+async function showPreview(merged: boolean, source: 'ply' | 'streamed' = 'ply') {
+  if (!task.value || previewLoading.value) return;
+  previewLoading.value = true;
   try {
-    samples.value = merged
-      ? (await loadMergedPreview(task.value.task_id, previewLevel.value)).models
-      : (await loadMergePreview(task.value.task_id)).models;
+    if (merged && source === 'streamed' && !task.value.cache_url) throw new Error('流式缓存尚未就绪');
+    if (merged) mergedSamples.value = (await loadMergedPreview(task.value.task_id, previewLevel.value)).models;
+    mergedSource.value = source;
+    if (merged && source === 'streamed') mergedDisplay.value = 'gaussian';
     mergedPreview.value = merged;
     drawingMode.value = false;
   } catch (error) { message.value = String(error); }
+  finally { previewLoading.value = false; }
 }
 async function swapDirection() {
   if (inputs.value.length !== 2) return;
@@ -484,7 +652,7 @@ async function swapDirection() {
 watch(targetModel, () => { selectedModel.value = -1; });
 watch(() => route.params.taskId, () => { void refresh(); });
 onMounted(() => { window.addEventListener('keydown', onDrawingKey); void refresh(); timer = setInterval(() => {
-  if (task.value && (['queued', 'running'].includes(task.value.merge_status) ||
+  if (task.value && (['queued', 'running', 'cancelling'].includes(task.value.merge_status) ||
     ['queued', 'running'].includes(task.value.cache_status))) void refresh();
 }, 3000); });
 onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (timer) clearInterval(timer);
@@ -536,9 +704,15 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
       <button type="button" :disabled="inputs.length >= 8" @click="inputs.push([]); headers.push([]); coordinates.push({ epsg: '', offset: ['', '', ''], confirmed: false })">增加模型</button>
       <button type="button" :disabled="inputs.length <= 2" @click="inputs.pop(); headers.pop(); coordinates.pop(); targetModel = Math.min(targetModel, inputs.length - 1)">移除末尾模型</button>
       <p v-if="preflightError">{{ preflightError }}</p>
-      <button type="button" :disabled="busy || !!preflightError" @click="create">上传并创建合并任务</button>
+      <button type="button" :disabled="busy || !!preflightError" @click="create">{{ busy && createPhase !== 'idle' ? '正在创建合并任务…' : '上传并创建合并任务' }}</button>
+      <div v-if="createStatus || createError" class="create-progress" role="status" aria-live="polite">
+        <span v-if="createStatus">{{ createStatus }}</span>
+        <span v-if="createError" class="create-error">{{ createError }}</span>
+        <progress v-if="createPhase === 'uploading' && uploadTotal" :value="uploadLoaded" :max="uploadTotal"></progress>
+        <progress v-else-if="createPhase === 'preparing' || createPhase === 'uploading' || createPhase === 'processing' || createPhase === 'loading'"></progress>
+      </div>
       <p>上传与合并结果会同时占用磁盘；合并前服务会检查至少具有输入 PLY 总大小的可用空间。</p>
-      <h2>历史合并任务</h2><ul><li v-for="item in history" :key="item.task_id"><RouterLink :to="`/merge/${item.task_id}`">{{ item.task_id }}</RouterLink>：{{ item.merge_status }}</li></ul>
+      <h2>历史合并任务</h2><ul><li v-for="item in history" :key="item.task_id"><RouterLink :to="`/merge/${item.task_id}`">{{ item.task_id }}</RouterLink>：{{ item.merge_status === 'ready' ? '合并已完成' : statusLabel(item.merge_status) }}</li></ul>
     </section>
     <div v-else class="merge-workspace">
       <section class="merge-panel controls">
@@ -563,78 +737,134 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
           </div>
           <p v-if="index !== targetModel">相对目标模型的投影差值（东／北／高）：{{ relativeOffset(index) }}</p>
           <label v-for="axis in index === targetModel ? 0 : 3" :key="axis" class="model-correction">{{ 'XYZ'[axis - 1] }} 位移（{{ { m: '米', cm: '厘米', mm: '毫米' }[modelSettings[index].unit] }}）
-            <input v-model.number="corrections[index][axis - 1]" type="number" step="any" @wheel="preventNumberWheel" @change="save"></label>
+            <input v-model.number="corrections[index][axis - 1]" type="number" step="any" @wheel="preventNumberWheel" @change="save()"></label>
           <button v-if="index !== targetModel" type="button" class="reset-model-position" :disabled="busy ||
             (corrections[index]?.every(value => value === 0) && rotations[index]?.every((value, axis) => value === (axis === 0 ? 1 : 0)))"
             @click.stop="resetModelPosition(index)">重置位置</button>
         </div>
         <div class="merge-confirm">
           <h2>合并任务</h2>
-          <label>合并目标<select v-model.number="targetModel" @change="save"><option v-for="(_, index) in task.models" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
+          <label>合并目标<select v-model.number="targetModel" @change="save()"><option v-for="(_, index) in task.models" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
           <div v-for="(lod, level) in task.models[0].lods" :key="level" class="merge-level">
-            <label><input v-model="selectedLevels" type="checkbox" :value="level" :disabled="task.merge_status === 'running'">LOD {{ level }}：{{ lod.name }}</label>
-            <span>{{ statusLabel(task.level_progress?.[level]?.status) }}<template v-if="task.level_progress?.[level]?.status === 'running' && task.level_progress[level].total">：{{ Math.floor(task.level_progress[level].processed / task.level_progress[level].total * 100) }}%</template></span>
+            <label><input v-model="selectedLevels" type="checkbox" :value="level" :disabled="['queued', 'running', 'cancelling'].includes(task.merge_status)">LOD {{ level }}：{{ lod.name }}</label>
+            <div class="merge-level-status"><span>{{ statusLabel(task.level_progress?.[level]?.status) }}<template v-if="task.level_progress?.[level]?.status === 'running' && task.level_progress[level].total">：{{ Math.floor(task.level_progress[level].processed / task.level_progress[level].total * 100) }}%</template></span>
+              <button v-if="task.level_progress?.[level]?.status === 'ready' ||
+                (task.merge_status === 'ready' && task.merged_lods?.some(item => item.level === level))"
+                type="button" :disabled="busy || (task.merge_status !== 'ready' && !task.partial_lod_downloads)"
+                :title="task.merge_status !== 'ready' && !task.partial_lod_downloads ? '当前服务待合并任务结束后更新，避免中断处理' : ''"
+                @click="download('ply', level)">{{ task.merge_status !== 'ready' && !task.partial_lod_downloads ? '下载 PLY（待服务更新）' : '下载 PLY' }}</button></div>
             <progress v-if="task.level_progress?.[level]?.status === 'running'" :value="task.level_progress[level].processed" :max="task.level_progress[level].total || 1"></progress>
             <span v-if="task.merged_lods?.some(item => item.level === level)">{{ task.merged_lods.find(item => item.level === level)?.count.toLocaleString() }} 个高斯</span>
           </div>
-          <button type="button" class="merge-workflow-action" :disabled="busy || task.merge_status === 'running' || !selectedLevels.length || !unitsConfirmed" @click="run('merge')">合并选中层级</button>
+          <button type="button" class="merge-workflow-action" :disabled="busy || ['queued', 'running', 'cancelling'].includes(task.merge_status) || !selectedLevels.length || !unitsConfirmed" @click="run('merge')">合并选中层级</button>
+          <button v-if="['queued', 'running', 'cancelling'].includes(task.merge_status)" type="button" class="merge-workflow-action" :disabled="busy || task.merge_status === 'cancelling'" @click="stopMerge">{{ task.merge_status === 'cancelling' ? '正在终止…' : '终止任务' }}</button>
           <p>PLY 合并：{{ statusLabel(task.merge_status) }}</p>
         </div>
-        <div v-if="task.merge_status === 'ready'" class="merge-result-preview">
-          <h2>成果预览</h2>
-          <label>预览层级<select v-model.number="previewLevel"><option v-for="level in task.merged_lods" :key="level.level" :value="level.level">LOD {{ level.level }}</option></select></label>
-          <button type="button" class="merge-workflow-action" @click="showPreview(true)">预览合并 PLY</button>
-          <button type="button" class="merge-workflow-action" @click="showPreview(false)">返回原模型预览</button>
-          <p>切换层级只影响预览，不会重新合并。</p>
-        </div>
-        <button type="button" class="merge-workflow-action" :disabled="busy || task.merge_status !== 'ready'" @click="download('ply')">下载合并 PLY ZIP</button>
+        <button type="button" class="merge-workflow-action" :disabled="busy || task.merge_status !== 'ready'" @click="download('ply')">下载合并成果集（zip）</button>
         <p v-if="task.merge_status === 'ready' && task.cache_status === 'not_requested'">PLY 已合并。流式数据不会自动生成，需要时请手动确认。</p>
-        <button type="button" class="merge-workflow-action" :disabled="busy || !canGenerate || task.cache_status === 'running'" @click="run('generate')">确认并生成流式数据</button>
+        <button type="button" class="merge-workflow-action" :disabled="busy || !canGenerate || task.cache_status === 'running'" @click="run('generate')">生成LOD流式数据缓存</button>
         <p v-if="task.merge_status === 'ready' && !canGenerate">所选成果层级不连续，需合并连续层级后才能生成流式数据。</p>
         <p>流式生成：{{ statusLabel(task.cache_status) }}</p>
-        <button type="button" class="merge-workflow-action" :disabled="busy || task.cache_status !== 'ready'" @click="download('streamed')">下载合并流式 ZIP</button>
+        <button type="button" class="merge-workflow-action" :disabled="busy || task.cache_status !== 'ready'" @click="download('streamed')">下载LOD流式数据缓存</button>
         <p v-if="received">已接收 {{ (received / 1024 / 1024).toFixed(1) }} MB</p>
       </section>
       <section class="merge-panel scene">
-        <MergeViewport ref="sceneViewport" :samples="samples" :regions="mergedPreview ? [] : regions" :drawing="drawing" :selected="mergedPreview ? -1 : selectedModel"
+        <MergeViewport ref="sceneViewport" :samples="sceneSamples" :regions="mergedPreview ? [] : regions" :drawing="drawing" :selected="mergedPreview ? -1 : selectedModel"
           :target-model="targetModel" :drawing-mode="drawingMode && !mergedPreview"
-          :displays="mergedPreview ? task.models.map(() => 'points') : modelDisplays" :gaussian-urls="gaussianUrls"
-          :model-translations="modelTranslations" :model-rotations="rotations"
-          :model-axes="modelSettings.map(item => item.axes)" :model-scales="modelSettings.map((_, index) => modelFactor(index))"
+          :displays="sceneDisplays" :gaussian-urls="gaussianUrls" :gaussian-filenames="gaussianFilenames" :trimmed="previewTrimmed"
+          :model-translations="sceneTranslations" :model-rotations="sceneRotations"
+          :model-axes="sceneAxes" :model-scales="sceneScales"
           :visible-models="mergedPreview ? [true] : visibleModels" :selected-vertex="selectedVertex"
           :operation-hint="operationHint"
           :editing-region="editingRegion && !mergedPreview ? activeRegion : null" @point="addPoint" @finish="finishPolygon"
           @vertex="updateVertex" @vertex-start="vertexDragChanged = false" @vertex-select="selectedVertex = $event"
-          @vertex-insert="insertVertex" @vertex-delete="deleteVertex" @vertex-end="endVertexEdit" @move="moveModel" @rotate="rotateModel" @move-end="save">
+          @vertex-insert="insertVertex" @vertex-delete="deleteVertex" @vertex-end="endVertexEdit" @move="moveModel" @rotate="rotateModel" @move-end="save()"
+          @gaussian-loading="setGaussianLoading">
           <template #tools>
             <button type="button" :disabled="mergedPreview" @click="startDrawing">绘制边界</button>
             <button v-if="drawingMode" type="button" :disabled="drawing.length < 3" @click="finishPolygon">完成边界</button>
             <button v-if="drawingMode" type="button" @click="drawing = []; drawingMode = false">取消</button>
             <button type="button" :disabled="mergedPreview" @click="regionPanel = !regionPanel">边界管理（{{ regions.length }}）</button>
+            <div class="scene-preview-section">
+              <span class="scene-toolbar-divider" aria-hidden="true"></span>
+              <div class="scene-preview-actions">
+                <div class="scene-preview-action-group">
+                  <span>原模型</span>
+                  <button type="button" :disabled="mergedPreview || !regions.length" :aria-pressed="allTrimmed"
+                    @click="toggleTrimmedAll">{{ allTrimmed ? '恢复' : '预览删减' }}</button>
+                </div>
+                <div v-if="task.merge_status === 'ready' && task.merged_lods?.length" class="scene-result-actions">
+                  <span class="scene-toolbar-divider" aria-hidden="true"></span>
+                  <div class="scene-preview-action-group">
+                    <label for="merge-result-level">合并成果</label>
+                    <select id="merge-result-level" v-model.number="previewLevel" aria-label="成果层级"
+                      :disabled="previewLoading" @change="mergedPreview && showPreview(true, 'ply')">
+                      <option v-for="level in task.merged_lods" :key="level.level" :value="level.level">LOD {{ level.level }}</option>
+                    </select>
+                    <button type="button" :disabled="previewLoading" :aria-pressed="mergedDisplay === 'gaussian'"
+                      @click="toggleMergedDisplay">{{ mergedDisplay === 'gaussian' ? '点云' : '高斯' }}</button>
+                    <button type="button" :disabled="previewLoading" @click="showPreview(!mergedPreview || mergedSource !== 'ply', 'ply')">{{ previewLoading ? '加载中…' : mergedPreview && mergedSource === 'ply' ? '返回' : '查看合并结果' }}</button>
+                  </div>
+                </div>
+                <div v-if="task.cache_status === 'ready' && task.cache_url" class="scene-result-actions">
+                  <span class="scene-toolbar-divider" aria-hidden="true"></span>
+                  <div class="scene-preview-action-group">
+                    <span>流式缓存</span>
+                    <button type="button" :disabled="previewLoading" @click="showPreview(!mergedPreview || mergedSource !== 'streamed', 'streamed')">{{ previewLoading ? '加载中…' : mergedPreview && mergedSource === 'streamed' ? '返回' : '预览流式缓存' }}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </template>
           <template #preview-tools>
+            <template v-if="!mergedPreview">
             <div v-for="(model, index) in task.models" :key="index" class="model-preview-row">
               <span class="model-preview-name"><span class="model-card-color" :style="{ backgroundColor: colors[index % colors.length] }"></span>模型 {{ index + 1 }}</span>
               <button type="button" :aria-pressed="visibleModels[index] !== false" :disabled="mergedPreview"
                 @click="visibleModels[index] = visibleModels[index] === false">{{ visibleModels[index] === false ? '显示' : '隐藏' }}</button>
               <button type="button" :disabled="mergedPreview" @click="modelDisplays[index] = modelDisplays[index] === 'points' ? 'gaussian' : 'points'">{{ modelDisplays[index] === 'points' ? '高斯' : '点云' }}</button>
+              <button type="button" :disabled="mergedPreview || !regions.length" @click="previewTrimmed[index] = !previewTrimmed[index]">{{ previewTrimmed[index] ? '恢复模型' : '预览删减' }}</button>
               <select v-if="modelDisplays[index] === 'gaussian'" v-model.number="gaussianLevels[index]"
                 :aria-label="`模型 ${index + 1} Gaussian LOD 层级`" :disabled="mergedPreview">
                 <option v-for="(lod, level) in model.lods" :key="level" :value="level">LOD {{ level }}：{{ lod.name }}</option>
               </select>
+              <span v-if="gaussianLoading[index]" class="preview-loading">加载中…</span>
             </div>
+            </template>
+            <div v-if="mergedPreview" class="merged-preview-label">{{ mergedSource === 'streamed' ? '流式缓存' : `合并成果 · LOD ${previewLevel}` }} · {{ mergedDisplay === 'gaussian' ? '高斯' : '点云' }}<span v-if="mergedDisplay === 'gaussian' && gaussianLoading[0]"> · 加载中…</span></div>
+            <small v-if="!mergedPreview && previewTrimmed.some(Boolean)" class="preview-note">点云与高斯按当前边界实时预览删减；合并按完整 PLY 执行。</small>
           </template>
           <template #panel><div v-if="regionPanel && !mergedPreview" class="region-editor"
-            :style="{ top: `${62 + task.models.length * 46}px`, maxHeight: `calc(100% - ${78 + task.models.length * 46}px)` }">
+            :style="{ top: `calc(${62 + task.models.length * 46}px + var(--merge-toolbar-extra, 0px))`, maxHeight: `calc(100% - ${78 + task.models.length * 46}px - var(--merge-toolbar-extra, 0px))` }">
             <ol><li v-for="(region, index) in regions" :key="index">
               <button type="button" :class="{ active: activeRegion === index && editingRegion }" @click="editRegion(index)">边界 {{ index + 1 }}（{{ region.polygon.length }} 点）</button>
               <button type="button" @click="removeRegion(index)">删除</button>
               <div v-if="activeRegion === index && editingRegion" class="region-detail">
                 <div class="region-model-actions"><label v-for="(_, model) in task.models" :key="model">模型 {{ model + 1 }}
                   <select v-model="region.actions[model]"><option value="none">不处理</option><option value="remove_inside">删除边界内</option><option value="remove_outside">删除边界外</option></select></label></div>
+                <label class="region-coordinate-mode">顶点坐标
+                  <select v-model="vertexMode" aria-label="边界顶点坐标类型">
+                    <option value="scene">场景 X／Y</option>
+                    <option value="projected" :disabled="!originEpsg || !originPoint">源文件投影 东／北</option>
+                    <option value="wgs84" :disabled="!originEpsg || !originPoint">WGS84 经／纬度</option>
+                  </select>
+                </label>
+                <p v-if="vertexMode !== 'scene'" class="region-coordinate-hint">EPSG:{{ originEpsg }}；以目标模型原点换算，边界贯穿全部高度。</p>
+                <div class="region-vertex-row region-vertex-header"><span>顶点</span><span>{{ vertexMode === 'wgs84' ? '经度' : vertexMode === 'projected' ? '投影东' : '场景 X' }}</span><span>{{ vertexMode === 'wgs84' ? '纬度' : vertexMode === 'projected' ? '投影北' : '场景 Y' }}</span></div>
+                <p v-if="vertexConverting" class="region-coordinate-hint">正在换算坐标…</p>
+                <div v-for="(point, vertex) in vertexInputs" :key="vertex" class="region-vertex-row">
+                  <span>点 {{ vertex + 1 }}</span>
+                  <input v-model="point[0]" :aria-label="`边界 ${index + 1} 顶点 ${vertex + 1} ${vertexMode === 'wgs84' ? '经度' : vertexMode === 'projected' ? '投影东' : '场景 X'}`" inputmode="decimal" @change="applyVertexInput(vertex)">
+                  <input v-model="point[1]" :aria-label="`边界 ${index + 1} 顶点 ${vertex + 1} ${vertexMode === 'wgs84' ? '纬度' : vertexMode === 'projected' ? '投影北' : '场景 Y'}`" inputmode="decimal" @change="applyVertexInput(vertex)">
+                </div>
+                <p v-if="vertexInputError" class="coordinate-warning">{{ vertexInputError }}</p>
               </div>
             </li></ol>
-            <button type="button" :disabled="busy" @click="save">保存边界规则</button>
+            <p v-if="boundaryDirty">边界修改尚未保存，现有合并成果与下载保持原样。</p>
+            <div class="region-editor-actions">
+              <button type="button" :disabled="busy || !boundaryDirty" @click="save(true)">保存边界规则</button>
+              <button type="button" :disabled="busy || (!boundaryDirty && !drawing.length)" @click="cancelBoundaryChanges">取消修改</button>
+            </div>
           </div></template>
         </MergeViewport></section>
     </div>
@@ -656,14 +886,24 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .merge-task-page .controls h2 { margin: 0 0 14px; font-size: 18px; line-height: 1.3; }
 .merge-task-page .scene { position: relative; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
 .merge-task-page .scene .merge-viewport { flex: 1; min-height: 0; }
-.region-editor { position: absolute; z-index: 3; left: 12px; width: min(360px, calc(100% - 24px)); overflow: auto; padding: 12px; background: #17283df2; border: 1px solid #385574; border-radius: 8px; box-shadow: 0 12px 30px #0008; }
+.region-editor { position: absolute; z-index: 3; left: 12px; width: min(520px, calc(100% - 24px)); overflow: auto; padding: 12px; background: #17283df2; border: 1px solid #385574; border-radius: 8px; box-shadow: 0 12px 30px #0008; }
 .region-editor ol { padding-left: 20px; } .region-editor li { margin: 8px 0; }
 .region-model-actions { display: grid; gap: 6px; }
 .region-model-actions label { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 6px; align-items: center; }
 .region-model-actions select { min-width: 0; margin: 0; }
 .region-detail { padding: 8px; background: #102036; }
+.region-coordinate-mode { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.region-coordinate-hint { margin: 4px 0 8px; color: #adbed2; font-size: 12px; }
+.region-vertex-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) minmax(0, 1fr); gap: 6px; align-items: center; }
+.region-vertex-header { color: #adbed2; font-size: 12px; }
+.region-vertex-row input { width: 100%; min-width: 0; box-sizing: border-box; margin: 2px 0; font-size: 13px; }
 .region-editor button.active { border-color: #65d9b4; color: #65d9b4; }
+.region-editor-actions { display: flex; gap: 8px; }
+.region-editor-actions button { flex: 1; min-width: 0; }
 .merge-panel { padding: 20px; border: 1px solid #385574; border-radius: 12px; background: #17283d; }
+.create-progress { display: grid; gap: 8px; max-width: 560px; margin: 10px 5px 16px; padding: 12px; border: 1px solid #385574; border-radius: 8px; background: #102036; color: #c7e8df; }
+.create-progress progress { width: 100%; accent-color: #65d9b4; }
+.create-error { color: #ffad9f; overflow-wrap: anywhere; }
 .controls { max-height: calc(100vh - 110px); overflow: auto; } .model-input { padding: 12px; border: 1px solid #385574; margin: 12px 0; }
 .merge-task-page .model-input { padding: 10px; margin: 8px 0; }
 .merge-task-page .controls > .model-input:first-child { margin-top: 0; }
@@ -677,6 +917,18 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .merge-task-page .model-input select { font-size: 14px; }
 .model-card-color { display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%; }
 .model-preview-row { display: flex; align-items: center; gap: 8px; min-height: 38px; max-width: 100%; white-space: nowrap; }
+.scene-preview-section { display: flex; align-items: center; gap: 8px; }
+.scene-toolbar-divider { flex: none; width: 1px; height: 30px; margin: 0 4px; background: #49627b; }
+.scene-preview-actions { display: flex; align-items: center; gap: 16px; min-height: 38px; }
+.scene-result-actions { display: flex; align-items: center; gap: 8px; }
+.scene-preview-action-group { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.scene-preview-action-group > span, .scene-preview-action-group > label { color: #a9c5da; font-size: 13px; }
+.scene-preview-action-group > select { width: 92px; min-width: 0; margin: 0; }
+.scene-preview-action-group > button { margin: 0; }
+.scene-preview-action-group button[aria-pressed="true"] { border-color: #65d9b4; color: #65d9b4; }
+.preview-loading, .preview-note { color: #a9c5da; font-size: 12px; }
+.preview-note { padding: 0 4px; }
+.merged-preview-label { padding: 8px 12px; border: 1px solid #65d9b4; border-radius: 6px; background: #173c32; color: #c7f5e6; }
 .model-preview-name { display: inline-flex; align-items: center; gap: 6px; min-width: 76px; }
 .model-preview-row button[aria-pressed="false"] { color: #9babc0; }
 .target-origin { padding: 7px; margin-top: 6px; background: #102036; border-radius: 6px; }
@@ -687,12 +939,11 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .origin-mode button.active { border-color: #65d9b4; color: #65d9b4; }
 .merge-confirm { margin-top: 16px; padding: 12px; border: 1px solid #385574; border-radius: 8px; background: #102036; }
 .merge-task-page .merge-confirm h2 { margin-bottom: 10px; }
-.merge-result-preview { margin-top: 12px; padding: 12px; border: 1px solid #385574; border-radius: 8px; background: #102036; }
-.merge-task-page .merge-result-preview h2 { margin: 0 0 10px; font-size: 18px; line-height: 1.3; }
-.merge-result-preview p { margin: 8px 4px 0; color: #adbed2; font-size: 12px; }
 .merge-task-page .merge-workflow-action { display: block; box-sizing: border-box; width: calc(100% - 10px); margin: 8px 5px; text-align: center; }
 .merge-level { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid #385574; }
 .merge-level progress { width: 100%; }
+.merge-level-status { display: flex; align-items: center; gap: 8px; }
+.merge-level-status button { margin: 0; padding: 3px 8px; font-size: 13px; }
 .model-input label { display: inline-block; margin-right: 8px; } .model-input input[type=number] { width: 90px; appearance: textfield; -moz-appearance: textfield; }
 .model-input input[type=number]::-webkit-inner-spin-button, .model-input input[type=number]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .model-input .model-coordinate-rules label { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; min-width: 0; margin: 0; white-space: nowrap; }

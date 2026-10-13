@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import math
 import secrets
@@ -11,6 +12,7 @@ import struct
 import subprocess
 import time
 import uuid
+from threading import Event
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated
@@ -75,11 +77,60 @@ def validate_merged_levels(directory: Path, status: dict) -> list[dict]:
     return levels
 
 
+def restore_completed_merge(directory: Path, status: dict) -> bool:
+    """Relink a complete, still matching result after a replacement run was cancelled."""
+    root = directory / "merged"
+    if not root.is_dir():
+        return False
+    target = status.get("target_model", 0)
+    origin = status.get("scene_origin", status["models"][target]["offset"])
+    epsg = status.get("scene_epsg", status["models"][target]["epsg"])
+    batches = sorted(root.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)
+    for batch in batches:
+        manifest_path = batch / "merge-manifest.json"
+        if not batch.is_dir() or not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (manifest.get("models") != status["models"] or
+                    manifest.get("regions") != status["regions"] or
+                    manifest.get("axes") != status["axes"] or
+                    manifest.get("target_model") != target or
+                    manifest.get("scene_origin") != origin or
+                    manifest.get("source_epsg") != (epsg or None)):
+                continue
+            levels = manifest["merged_lods"]
+            if not levels or any(item["level"] < 0 or item["level"] >= status["level_count"] or
+                    (directory / item["path"]).parent != batch for item in levels):
+                continue
+            for item in levels:
+                source = directory / item["path"]
+                layout = read_layout(source)
+                if layout.count != item["count"] or layout.count <= 0 or \
+                        source.stat().st_size != layout.data_start + layout.count * layout.stride:
+                    raise ValueError("旧合并成果文件不完整")
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        selected = [item["level"] for item in levels]
+        status.update(merge_status="ready", merge_error=None,
+                      merge_path=batch.relative_to(directory).as_posix(),
+                      merged_lods=levels, selected_levels=selected,
+                      level_progress=[{"level": level, "status": "ready" if level in selected else "not_selected",
+                                       "processed": 0, "total": 0} for level in range(status["level_count"])])
+        return True
+    return False
+
+
+class MergeCancelled(Exception):
+    pass
+
+
 class MergeTasks:
     def __init__(self, runtime_root: Path, converter: list[str]) -> None:
         self.root = runtime_root / "gaussian-merge-tasks"
         self.converter = converter
         self.running: dict[str, asyncio.Task[None]] = {}
+        self.cancellations: dict[str, Event] = {}
         self.readers: dict[str, int] = {}
         self.semaphore = asyncio.Semaphore(1)
 
@@ -111,9 +162,20 @@ class MergeTasks:
         current = self.running.get(task_id)
         if current and not current.done():
             return
+        if operation == "merge":
+            self.cancellations[task_id] = Event()
         task = asyncio.create_task(self._run(task_id, operation))
         self.running[task_id] = task
-        task.add_done_callback(lambda _: self.running.pop(task_id, None))
+        def finished(completed: asyncio.Task[None]) -> None:
+            if self.running.get(task_id) is completed:
+                self.running.pop(task_id, None)
+                self.cancellations.pop(task_id, None)
+        task.add_done_callback(finished)
+
+    def cancel(self, task_id: str) -> None:
+        cancellation = self.cancellations.get(task_id)
+        if cancellation is not None:
+            cancellation.set()
 
     def recover(self) -> None:
         if not self.root.is_dir():
@@ -146,17 +208,29 @@ class MergeTasks:
         async with self.semaphore:
             status = read_status(directory)
             key = "merge_status" if operation == "merge" else "cache_status"
-            status[key] = "running"
-            write_status(directory, status)
             try:
+                if operation == "merge" and self.cancellations[task_id].is_set():
+                    raise MergeCancelled()
+                status[key] = "running"
+                write_status(directory, status)
                 if operation == "merge":
                     result = await asyncio.to_thread(self._merge, directory, status)
+                    if self.cancellations[task_id].is_set():
+                        raise MergeCancelled()
                     status = read_status(directory)
                     status.update(merge_status="ready", merged_lods=result, merge_error=None)
                 else:
                     relative = await asyncio.to_thread(self._encode, directory, status)
                     status = read_status(directory)
                     status.update(cache_status="ready", cache_path=relative, cache_error=None)
+                write_status(directory, status)
+            except MergeCancelled:
+                status = read_status(directory)
+                status.update(merge_status="cancelled", merge_error="合并已终止")
+                for item in status.get("level_progress", []):
+                    if item["status"] in {"queued", "running"}:
+                        item["status"] = "cancelled"
+                restore_completed_merge(directory, status)
                 write_status(directory, status)
             except Exception as error:
                 status = read_status(directory)
@@ -169,10 +243,12 @@ class MergeTasks:
                 write_status(directory, status)
 
     def _merge(self, directory: Path, status: dict) -> list[dict]:
+        cancellation = self.cancellations.get(status["task_id"])
         selected = status.get("selected_levels", list(range(status["level_count"])))
         status.setdefault("level_progress", [{"level": level, "status": "queued", "processed": 0, "total": 0}
                                              for level in range(status["level_count"])])
-        required = sum(model["lods"][level]["bytes"] for model in status["models"] for level in selected)
+        required = sum(model["lods"][level]["bytes"] for model in status["models"] for level in selected
+                       if status["level_progress"][level]["status"] != "ready")
         if shutil.disk_usage(directory).free < required:
             raise ValueError("可用磁盘空间不足以写入合并 PLY 文件组")
         result = []
@@ -182,11 +258,29 @@ class MergeTasks:
         geography = {"epsg": status.get("scene_epsg", status["models"][target_model]["epsg"]),
                      "offset": status.get("scene_origin", status["models"][target_model]["offset"])}
         for level in selected:
+            if cancellation is not None and cancellation.is_set():
+                raise MergeCancelled()
             inputs = [directory / model["lods"][level]["path"] for model in status["models"]]
             output = root / f"lod-{level}.ply"
+            completed = next((item for item in status.get("merged_lods", []) if item["level"] == level), None)
+            if status["level_progress"][level]["status"] == "ready" and output.is_file():
+                layout = read_layout(output)
+                if layout.count > 0 and output.stat().st_size == layout.data_start + layout.count * layout.stride and \
+                        (completed is None or layout.count == completed["count"]):
+                    if completed is None:
+                        completed = {"level": level, "path": output.relative_to(directory).as_posix(),
+                                     "count": layout.count, "by_model": [], "bounds": None,
+                                     "epsg": layout.epsg, "offset": layout.offset}
+                        status.setdefault("merged_lods", []).append(completed)
+                        status["merged_lods"].sort(key=lambda item: item["level"])
+                        write_status(directory, status)
+                    result.append(completed)
+                    continue
             status["level_progress"][level].update(status="running", processed=0)
             write_status(directory, status)
             def update_progress(processed: int, total: int) -> None:
+                if cancellation is not None and cancellation.is_set():
+                    raise MergeCancelled()
                 status["level_progress"][level].update(processed=processed, total=total)
                 write_status(directory, status)
             summary = merge_level(inputs, output, status["regions"],
@@ -194,7 +288,10 @@ class MergeTasks:
                                   tuple(status["axes"]), target_model, status["models"], geography,
                                   update_progress,
                                   [tuple(model.get("rotation", [1, 0, 0, 0])) for model in status["models"]])
-            result.append({"level": level, "path": output.relative_to(directory).as_posix(), **summary})
+            completed = {"level": level, "path": output.relative_to(directory).as_posix(), **summary}
+            result.append(completed)
+            status["merged_lods"] = [item for item in status.get("merged_lods", []) if item["level"] != level] + [completed]
+            status["merged_lods"].sort(key=lambda item: item["level"])
             status["level_progress"][level].update(status="ready", processed=status["level_progress"][level]["total"])
             write_status(directory, status)
         manifest = {"schema_version": 1, "coordinate_mode":
@@ -237,6 +334,29 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                 raise ValueError("投影坐标无法转换为有效经纬度")
             return {"wgs84": [lon, lat, z]}
         except (ValueError, CRSError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/coordinates/convert")
+    def convert_coordinates(payload: dict) -> dict:
+        try:
+            crs = CRS.from_epsg(int(payload["epsg"]))
+            mode = payload["mode"]
+            points = payload["points"]
+            if not crs.is_projected or mode not in {"projected", "wgs84"} or not isinstance(points, list) or len(points) > 1000:
+                raise ValueError("坐标转换参数无效")
+            if any(not isinstance(point, list) or len(point) != 2 or
+                   any(type(value) not in (int, float) or not math.isfinite(value) for value in point)
+                   for point in points):
+                raise ValueError("坐标转换参数无效")
+            if mode == "wgs84" and any(not -180 <= point[0] <= 180 or not -90 <= point[1] <= 90 for point in points):
+                raise ValueError("经纬度超出有效范围")
+            source, destination = (crs, 4326) if mode == "projected" else (4326, crs)
+            transformer = Transformer.from_crs(source, destination, always_xy=True)
+            converted = [list(transformer.transform(*point)) for point in points]
+            if any(not all(math.isfinite(value) for value in point) for point in converted):
+                raise ValueError("坐标转换结果无效")
+            return {"points": converted}
+        except (KeyError, ValueError, TypeError, CRSError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("", status_code=202)
@@ -376,7 +496,10 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
 
     @router.get("/{task_id}")
     def get_merge(task_id: str) -> dict:
-        return tasks.read(task_id)[1]
+        status = tasks.read(task_id)[1]
+        cache_url = (f"/merge-resources/{task_id}/{status['resource_token']}/{status['cache_path']}"
+                     if status.get("cache_status") == "ready" and status.get("cache_path") else None)
+        return {**status, "partial_lod_downloads": True, "cache_url": cache_url}
 
     @router.get("/{task_id}/origin")
     def get_origin(task_id: str) -> dict:
@@ -553,6 +676,17 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                                               for model in status["models"]]}, sort_keys=True)
         if before != after:
             status.update(merge_status="editing", cache_status="not_requested", merged_lods=[], level_progress=[])
+        if status["merge_status"] == "editing" and status.get("merge_path"):
+            previous_merge_path = status["merge_path"]
+            if restore_completed_merge(directory, status) and status["merge_path"] == previous_merge_path:
+                cache_path = status.get("cache_path")
+                if cache_path:
+                    try:
+                        validate_streamed_sog_directory(directory / cache_path)
+                    except (OSError, DatasetFormatError):
+                        pass
+                    else:
+                        status["cache_status"] = "ready"
         write_status(directory, status)
         return status
 
@@ -670,6 +804,23 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
         tasks.start(task_id, "merge")
         return status
 
+    @router.post("/{task_id}/cancel", status_code=202)
+    async def cancel_merge(task_id: str) -> dict:
+        directory, status = tasks.read(task_id)
+        if status["merge_status"] not in {"queued", "running", "cancelling"}:
+            raise HTTPException(status_code=409, detail="当前没有正在执行的合并任务")
+        tasks.cancel(task_id)
+        if task_id not in tasks.cancellations:
+            status.update(merge_status="cancelled", merge_error="合并已终止")
+            for item in status.get("level_progress", []):
+                if item["status"] in {"queued", "running"}:
+                    item["status"] = "cancelled"
+            restore_completed_merge(directory, status)
+        else:
+            status["merge_status"] = "cancelling"
+        write_status(directory, status)
+        return status
+
     @router.post("/{task_id}/generate", status_code=202)
     async def generate(task_id: str) -> dict:
         directory, status = tasks.read(task_id)
@@ -701,5 +852,45 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote('gaussian-merge-' + kind + '.zip')}",
             "X-Cache-File-Count": str(count), "X-Cache-Source-Bytes": str(size),
         })
+
+    @router.get("/{task_id}/download/ply/{level}")
+    def download_merged_lod(task_id: str, level: int) -> FileResponse:
+        directory, status = tasks.read(task_id)
+        entry = next((item for item in status.get("merged_lods", []) if item["level"] == level), None)
+        progress = next((item for item in status.get("level_progress", []) if item["level"] == level), None)
+        if progress is None or progress["status"] != "ready":
+            raise HTTPException(status_code=404, detail="合并 LOD 尚未就绪")
+        source = directory / (entry["path"] if entry else f"{status.get('merge_path', 'merged')}/lod-{level}.ply")
+        if not source.is_file():
+            raise HTTPException(status_code=404, detail="合并 PLY 文件不存在")
+        layout = read_layout(source)
+        if layout.count <= 0 or source.stat().st_size != layout.data_start + layout.count * layout.stride or \
+                (entry and layout.count != entry["count"]):
+            raise HTTPException(status_code=409, detail="合并 PLY 文件不完整")
+        return _ProtectedMergeFileResponse(source, tasks=tasks, task_id=task_id,
+                                           media_type="application/octet-stream",
+                                           filename=f"gaussian-merge-lod-{level}.ply")
+
+    return router
+
+
+def create_merge_resource_router(tasks: MergeTasks) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/merge-resources/{task_id}/{token}/{resource_path:path}")
+    def merge_resource(task_id: str, token: str, resource_path: str) -> FileResponse:
+        directory = tasks.directory(task_id)
+        status = read_status(directory)
+        if not hmac.compare_digest(token, status.get("resource_token", "")) or \
+                status.get("cache_status") != "ready" or not status.get("cache_path"):
+            raise HTTPException(status_code=404, detail="流式缓存不存在")
+        root = (directory / status["cache_path"]).parent.resolve()
+        path = (directory / resource_path.replace("\\", "/")).resolve()
+        if (path != root and root not in path.parents) or not path.is_file() or \
+                path.suffix.lower() not in {".json", ".webp", ".bin"}:
+            raise HTTPException(status_code=404, detail="流式缓存文件不存在")
+        media = {".json": "application/json", ".webp": "image/webp"}
+        return _ProtectedMergeFileResponse(path, tasks=tasks, task_id=task_id,
+                                           media_type=media.get(path.suffix.lower(), "application/octet-stream"))
 
     return router

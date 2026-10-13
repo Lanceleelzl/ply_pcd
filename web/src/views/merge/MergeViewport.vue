@@ -13,7 +13,8 @@ import type { Region } from '../../api/merge-api';
 const props = defineProps<{
   samples: number[][][]; regions: Region[]; drawing: [number, number][];
   selected: number; targetModel: number; drawingMode: boolean; editingRegion: number | null;
-  displays: ('points' | 'gaussian')[]; gaussianUrls: string[];
+  displays: ('points' | 'gaussian')[]; gaussianUrls: string[]; gaussianFilenames: string[];
+  trimmed: boolean[];
   modelTranslations: [number, number, number][]; modelRotations: number[][];
   modelAxes: number[][]; modelScales: number[]; visibleModels: boolean[];
   selectedVertex: number | null;
@@ -31,6 +32,7 @@ const emit = defineEmits<{
   vertexSelect: [index: number | null];
   vertexInsert: [index: number, point: [number, number]];
   vertexDelete: [index: number];
+  gaussianLoading: [model: number, loading: boolean];
 }>();
 const viewport = ref<HTMLElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -48,6 +50,7 @@ let materials: PointCloudMaterial[] = [];
 let gaussianParents: pc.Entity[] = [];
 let gaussianDisplays: SingleGaussianDisplay[] = [];
 let loadedGaussianUrls: string[] = [];
+let gaussianLoadTokens: number[] = [];
 let displayGeneration = 0;
 let dragging = false;
 let drawingPress = false;
@@ -155,12 +158,18 @@ function updateGaussianTransforms() {
     parent.setLocalScale(factor, factor, factor);
   });
 }
+function updateMergeClips() {
+  gaussianDisplays.forEach((display, index) =>
+    display.setMergeClip(props.regions, index, props.trimmed[index] === true));
+}
 async function updateDisplay() {
   const generation = ++displayGeneration;
   if (!application) return;
   for (let index = 0; index < props.gaussianUrls.length; index++) {
     if (generation !== displayGeneration) return;
     if (props.displays[index] !== 'gaussian' || props.visibleModels[index] === false) {
+      gaussianLoadTokens[index] = (gaussianLoadTokens[index] ?? 0) + 1;
+      emit('gaussianLoading', index, false);
       gaussianDisplays[index]?.showPoints();
       loadedGaussianUrls[index] = '';
       if (roots[index]) roots[index].enabled = props.displays[index] === 'points' && props.visibleModels[index] !== false;
@@ -169,17 +178,24 @@ async function updateDisplay() {
     let url = props.gaussianUrls[index];
     if (loadedGaussianUrls[index] === url) continue;
     loadedGaussianUrls[index] = url;
+    const token = gaussianLoadTokens[index] = (gaussianLoadTokens[index] ?? 0) + 1;
+    error.value = '';
+    emit('gaussianLoading', index, true);
     let blobUrl = '';
     try {
-      if (getApiKey()) {
+      if (getApiKey() && props.gaussianFilenames[index] !== 'lod-meta.json') {
         const response = await apiFetch(url);
         if (!response.ok) throw new Error(`Gaussian LOD 请求失败：HTTP ${response.status}`);
         blobUrl = URL.createObjectURL(await response.blob());
         url = blobUrl;
       }
-      await gaussianDisplays[index]?.show(url, `model-${index}.ply`);
-    } catch (reason) { loadedGaussianUrls[index] = ''; error.value = String(reason); }
-    finally { if (blobUrl) URL.revokeObjectURL(blobUrl); }
+      await gaussianDisplays[index]?.show(url, props.gaussianFilenames[index] ?? `model-${index}.ply`);
+    } catch (reason) {
+      if (token === gaussianLoadTokens[index]) { loadedGaussianUrls[index] = ''; error.value = String(reason); }
+    } finally {
+      if (token === gaussianLoadTokens[index]) emit('gaussianLoading', index, false);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    }
   }
 }
 function selectModel() {
@@ -417,8 +433,9 @@ onMounted(() => {
       application!.app.root.addChild(parent);
       gaussianParents.push(parent);
       gaussianDisplays.push(new SingleGaussianDisplay(application!.app, parent, [0, 0, 0],
-        visible => { if (roots[index]) roots[index].enabled = visible && props.displays[index] === 'points' && props.visibleModels[index] !== false; }));
+        visible => { if (roots[index]) roots[index].enabled = visible && props.visibleModels[index] !== false; }, 'merge'));
     });
+    updateMergeClips();
     updateGaussianTransforms();
     sceneBounds = computeBounds();
     const diagonal = Math.max(sceneBounds.max.clone().sub(sceneBounds.min).length(), 1);
@@ -508,7 +525,8 @@ onMounted(() => {
   } catch (reason) { error.value = String(reason); }
 });
 watch(() => props.samples, replaceModels);
-watch([() => props.displays, () => props.gaussianUrls], () => { void updateDisplay(); }, { deep: true });
+watch([() => props.regions, () => props.trimmed], updateMergeClips, { deep: true });
+watch([() => props.displays, () => props.gaussianUrls, () => props.gaussianFilenames], () => { void updateDisplay(); }, { deep: true });
 watch([() => props.modelTranslations, () => props.modelRotations, () => props.modelAxes, () => props.modelScales], updateGaussianTransforms, { deep: true });
 watch(() => props.visibleModels, () => {
   updateGaussianTransforms();
@@ -595,7 +613,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.merge-viewport { position: relative; min-height: 0; overflow: hidden; background: #08111d; }
+.merge-viewport { position: relative; min-height: 0; overflow: hidden; background: #08111d; container-type: inline-size; }
 .merge-viewport canvas { display: block; width: 100%; height: 100%; }
 .merge-viewport canvas.drawing-cursor { cursor: crosshair; }
 .merge-origin-axis-label { position: absolute; z-index: 2; pointer-events: none; font-size: 12px; font-weight: 700; text-shadow: 0 1px 3px #08111d; transform: translate(4px, -50%); }
@@ -613,8 +631,13 @@ onUnmounted(() => {
 .edit-edge-hint small { position: absolute; left: 14px; top: -13px; }
 .edit-vertex-hint { transform: translate(18px, 14px); }
 .merge-viewport-toolbar, .merge-viewport-preview-toolbar { position: absolute; z-index: 4; left: 12px; display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; max-width: calc(100% - 24px); overflow-x: auto; }
-.merge-viewport-toolbar { top: 12px; }
+.merge-viewport-toolbar { top: 12px; max-width: calc(100% - 96px); }
 .merge-viewport-preview-toolbar { top: 58px; flex-direction: column; align-items: flex-start; gap: 8px; }
+@container (max-width: 1220px) {
+  .merge-viewport { --merge-toolbar-extra: 46px; }
+  .merge-viewport-toolbar { flex-wrap: wrap; max-width: calc(100% - 96px); overflow: visible; }
+  .merge-viewport-preview-toolbar { top: 104px; }
+}
 .merge-viewport-toolbar > *, .merge-viewport-preview-toolbar > * { flex: none; }
 .merge-viewport-toolbar button, .merge-viewport-toolbar :deep(button), .merge-viewport-toolbar :deep(select), .merge-viewport-preview-toolbar :deep(button), .merge-viewport-preview-toolbar :deep(select) { margin: 0; min-height: 38px; padding: 8px; color: #edf5ff; background: #17283d; border: 1px solid #385574; border-radius: 6px; cursor: pointer; font: inherit; font-size: 14px; }
 @media (hover: hover) { .merge-viewport-toolbar > button:not(:disabled):hover, .vertex-delete:hover { border-color: #65d9b4; background-color: #1b3a4b; box-shadow: 0 0 0 1px #65d9b43d, 0 3px 10px #0004; transform: translateY(-1px); } }
