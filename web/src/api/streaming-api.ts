@@ -35,6 +35,7 @@ export interface StreamingTask {
   cache_url?: string;
   lods?: StreamingLod[];
   created_at_unix: number;
+  updated_at_unix?: number;
   source_expires_at_unix: number | null;
   source_available?: boolean;
 }

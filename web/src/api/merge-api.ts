@@ -7,7 +7,8 @@ export type LegacyRegion = { kind: 'keep' | 'remove'; model: number; polygon: [n
 export type ModelCoordinates = { epsg: string; offset: [string, string, string]; confirmed: boolean };
 export type MergeModelSetting = { axes: number[]; unit: 'm' | 'cm' | 'mm'; scale: number; confirmed: boolean };
 export type MergeTask = {
-  task_id: string; models: ({ lods: { name: string; count: number }[]; epsg: string; offset: number[] | null; source?: string; correction: number[]; rotation?: number[] } & Partial<MergeModelSetting>)[];
+  task_id: string; created_at_unix?: number; updated_at_unix?: number;
+  models: ({ lods: { name: string; count: number }[]; epsg: string; offset: number[] | null; source?: string; correction: number[]; rotation?: number[] } & Partial<MergeModelSetting>)[];
   regions: (Region | LegacyRegion)[]; axes: number[]; units_confirmed: boolean; target_model?: number;
   merge_status: string; merge_error?: string; cache_status: string; cache_error?: string;
   cache_url?: string | null;

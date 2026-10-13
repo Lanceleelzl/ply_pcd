@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { listHistory, runSessionAction } from '../../api/registration-api';
 import type { HistoryItem } from '../../api/contracts';
+import { formatTaskTime } from '../../shared/task-time';
 
 const props = defineProps<{ workspaceId: string }>();
 const emit = defineEmits<{ resume: [sessionId: string] }>();
@@ -11,7 +12,6 @@ const error = ref('');
 const busyId = ref('');
 
 const matrixText = (matrix?: number[][]) => matrix?.map(row => row.map(value => Number(value).toFixed(12)).join(' ')).join('\n') ?? '';
-const formatTime = (unix?: number) => unix ? new Date(unix * 1000).toLocaleString('zh-CN', { hour12: false }) : '未知时间';
 const formatBytes = (bytes?: number) => bytes === undefined ? '未知大小' : bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 
 async function load(): Promise<void> {
@@ -60,11 +60,13 @@ onMounted(load);
     <div v-else class="history-table">
       <article v-for="item in items" :key="item.session_id" class="history-row">
         <div class="history-main">
-          <div class="history-name"><strong>{{ item.has_registration_result ? (item.recommended_matrix?.name ?? (item.output_direction === 'b_to_a' ? 'T_b_to_a' : 'T_a_to_b')) : '尚未完成精配准' }}</strong><time>{{ formatTime(item.updated_at_unix ?? item.completed_at_unix ?? item.created_at_unix) }}</time></div>
+          <div class="history-name"><strong>{{ item.has_registration_result ? (item.recommended_matrix?.name ?? (item.output_direction === 'b_to_a' ? 'T_b_to_a' : 'T_a_to_b')) : '尚未完成精配准' }}</strong></div>
+          <p>精配准：{{ item.has_registration_result ? '已完成' : '未完成' }}</p>
+          <p>创建时间：<time>{{ formatTaskTime(item.created_at_unix) }}</time> · {{ item.updated_at_unix ? '最近更新' : item.completed_at_unix ? '完成时间' : '最近更新' }}：<time>{{ formatTaskTime(item.updated_at_unix ?? item.completed_at_unix) }}</time></p>
           <p>A：{{ item.models?.a.filename ?? '模型 A' }} · {{ (item.models?.a.format ?? '').toUpperCase() }} · {{ formatBytes(item.models?.a.bytes) }}</p>
           <p>B：{{ item.models?.b.filename ?? '模型 B' }} · {{ (item.models?.b.format ?? '').toUpperCase() }} · {{ formatBytes(item.models?.b.bytes) }}</p>
           <div v-if="item.has_registration_result" class="metric-row"><span>RMS {{ item.metrics?.final_rms?.toFixed(6) ?? '—' }} m</span><span>{{ item.metrics?.final_point_count?.toLocaleString() ?? '—' }} 点</span><span>{{ item.metrics?.elapsed_seconds?.toFixed(2) ?? '—' }} s</span></div>
-          <small :class="{ muted: !item.source_available }">{{ item.source_available && item.source_expires_at_unix ? `源文件保留至 ${formatTime(item.source_expires_at_unix)}` : '源文件已释放，仅保留精配准结果' }}</small>
+          <small :class="{ muted: !item.source_available }">{{ item.source_available && item.source_expires_at_unix ? `源文件保留至 ${formatTaskTime(item.source_expires_at_unix)}` : '源文件已释放，仅保留精配准结果' }}</small>
         </div>
         <div class="history-actions-modern">
           <button v-if="item.has_registration_result" type="button" :disabled="!item.recommended_matrix?.value" @click="copy(item)">复制矩阵</button>

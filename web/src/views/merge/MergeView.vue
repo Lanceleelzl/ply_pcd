@@ -8,6 +8,8 @@ import { createMerge, downloadMerge, listMerges, loadMerge, loadMergeOrigin, pre
 import { readPlyHeader, type PlyHeader } from './ply-header';
 import MergeViewport from './MergeViewport.vue';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
+import '../../styles/module-entry.css';
+import { formatTaskTime } from '../../shared/task-time';
 import type { ModelCoordinates } from '../../api/merge-api';
 
 const route = useRoute();
@@ -663,14 +665,17 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
   <main class="merge-page" :class="{ 'merge-task-page': task }">
     <ModuleTopbar title="高斯合并" mark="M"><template #actions><RouterLink to="/merge">新建任务</RouterLink></template></ModuleTopbar>
     <p v-if="message" role="status">{{ message }}</p>
-    <section v-if="!task" class="merge-panel">
-      <h2>选择模型</h2>
-      <p>每个模型至少一份 Gaussian PLY。请按精细到粗略确认 LOD 顺序，最粗层用于预览，边界裁剪调整。</p>
-      <p>合并方向：模型 {{ targetModel + 1 }} 为目标模型。地理原点未知时，以目标模型的文件原点作为相对参照。</p>
-      <label>目标模型<select v-model.number="targetModel"><option v-for="(_, index) in inputs" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
-      <button v-if="inputs.length === 2" type="button" @click="swapDirection">交换方向</button>
-      <div v-for="(files, model) in inputs" :key="model" class="model-input">
-        <h3>模型 {{ model + 1 }}（{{ model === targetModel ? '目标模型' : '待合入模型' }}）</h3>
+    <div v-if="!task" class="module-entry-content module-entry-single merge-entry">
+      <div class="module-entry-intro"><h1>创建高斯合并任务</h1>
+        <p>每个模型至少一份 Gaussian PLY，请按精细到粗略确认 LOD 顺序；最粗层用于预览和边界调整。</p></div>
+      <section class="module-entry-card merge-create-card">
+      <h2>新建任务</h2>
+      <div class="merge-direction"><span>模型 {{ targetModel + 1 }} 为目标模型；地理原点未知时，以目标模型的文件原点作为相对参照。</span>
+        <label>目标模型<select v-model.number="targetModel"><option v-for="(_, index) in inputs" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
+        <button v-if="inputs.length === 2" type="button" @click="swapDirection">交换方向</button></div>
+      <div class="merge-model-grid"><div v-for="(files, model) in inputs" :key="model" class="model-input module-entry-tile"
+        :style="{ '--entry-accent': colors[model % colors.length] }">
+        <h3><span class="merge-model-mark">{{ model + 1 }}</span>模型 {{ model + 1 }}（{{ model === targetModel ? '目标模型' : '待合入模型' }}）</h3>
         <div class="model-input-content"><div class="model-files">
           <input type="file" accept=".ply" multiple @change="choose(model, $event)">
           <ol><li v-for="(file, index) in files" :key="file.name + index">LOD {{ index }}：{{ file.name }}
@@ -700,11 +705,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
               <span v-else>填写完整投影坐标后显示</span>
             </div></div>
         </div></div>
-      </div>
-      <button type="button" :disabled="inputs.length >= 8" @click="inputs.push([]); headers.push([]); coordinates.push({ epsg: '', offset: ['', '', ''], confirmed: false })">增加模型</button>
-      <button type="button" :disabled="inputs.length <= 2" @click="inputs.pop(); headers.pop(); coordinates.pop(); targetModel = Math.min(targetModel, inputs.length - 1)">移除末尾模型</button>
-      <p v-if="preflightError">{{ preflightError }}</p>
-      <button type="button" :disabled="busy || !!preflightError" @click="create">{{ busy && createPhase !== 'idle' ? '正在创建合并任务…' : '上传并创建合并任务' }}</button>
+      </div></div>
+      <div class="merge-create-footer"><div class="merge-model-controls">
+        <button type="button" :disabled="inputs.length >= 8" @click="inputs.push([]); headers.push([]); coordinates.push({ epsg: '', offset: ['', '', ''], confirmed: false })">增加模型</button>
+        <button type="button" :disabled="inputs.length <= 2" @click="inputs.pop(); headers.pop(); coordinates.pop(); targetModel = Math.min(targetModel, inputs.length - 1)">移除末尾模型</button>
+      </div><div class="merge-create-submit"><p v-if="preflightError">{{ preflightError }}</p>
+        <button type="button" :disabled="busy || !!preflightError" @click="create">{{ busy && createPhase !== 'idle' ? '正在创建合并任务…' : '上传并创建合并任务' }}</button></div></div>
       <div v-if="createStatus || createError" class="create-progress" role="status" aria-live="polite">
         <span v-if="createStatus">{{ createStatus }}</span>
         <span v-if="createError" class="create-error">{{ createError }}</span>
@@ -712,8 +718,13 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
         <progress v-else-if="createPhase === 'preparing' || createPhase === 'uploading' || createPhase === 'processing' || createPhase === 'loading'"></progress>
       </div>
       <p>上传与合并结果会同时占用磁盘；合并前服务会检查至少具有输入 PLY 总大小的可用空间。</p>
-      <h2>历史合并任务</h2><ul><li v-for="item in history" :key="item.task_id"><RouterLink :to="`/merge/${item.task_id}`">{{ item.task_id }}</RouterLink>：{{ item.merge_status === 'ready' ? '合并已完成' : statusLabel(item.merge_status) }}</li></ul>
-    </section>
+      </section>
+      <section class="module-entry-card merge-history-card"><h2>历史任务</h2><ul class="merge-history-list module-entry-history-list"><li v-for="item in history" :key="item.task_id">
+        <RouterLink :to="`/merge/${item.task_id}`">{{ item.task_id }}</RouterLink>
+        <span>PLY 合并：{{ item.merge_status === 'ready' ? '已完成' : statusLabel(item.merge_status) }}；流式缓存：{{ statusLabel(item.cache_status) }}</span>
+        <small>创建时间：<time>{{ formatTaskTime(item.created_at_unix) }}</time>　最近更新：<time>{{ formatTaskTime(item.updated_at_unix) }}</time></small>
+      </li></ul></section>
+    </div>
     <div v-else class="merge-workspace">
       <section class="merge-panel controls">
         <div v-for="(model, index) in task.models" :key="index" class="model-input"
@@ -873,7 +884,25 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
 
 <style scoped>
 .merge-page { min-height: 100vh; padding: 0; background: #08111d; color: #edf5ff; }
-.merge-page:not(.merge-task-page) > .merge-panel { margin: 24px; }
+.merge-entry .merge-direction { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; color: #adbed2; }
+.merge-entry .merge-direction > span { flex: 1 1 400px; }
+.merge-entry .merge-direction label { display: flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; }
+.merge-entry .merge-direction :is(select, button) { margin: 0; }
+.merge-model-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.merge-entry .model-input { margin: 0; }
+.merge-entry .model-input h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 16px; }
+.merge-model-mark { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 6px; color: #08111d; background: var(--entry-accent); font-weight: 700; }
+.merge-entry .model-input-content { grid-template-columns: minmax(0, 1fr); }
+.merge-entry .model-files input[type=file] { box-sizing: border-box; width: 100%; margin: 0; border-style: dashed; background: #091421; }
+.merge-entry .model-files input[type=file]::file-selector-button { margin-right: 10px; padding: 7px 11px; border: 1px solid #385574; border-radius: 6px; color: #78d6b8; background: #122238; cursor: pointer; }
+.merge-create-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #29394e; }
+.merge-model-controls { display: flex; flex-wrap: wrap; align-items: start; gap: 6px; }
+.merge-model-controls button { margin: 0; }
+.merge-create-submit { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.merge-create-submit p { max-width: 400px; margin: 0; color: #adbed2; }
+.merge-create-submit button { min-width: 190px; margin: 0; }
+.merge-history-card .merge-history-list li { margin: 0; }
+.merge-history-card .merge-history-list li > span { margin: 2px 0; }
 .merge-task-page { height: 100vh; min-height: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; font-size: 14px; line-height: 1.45; }
 .merge-task-page > [role=status] { position: absolute; z-index: 10; right: 16px; bottom: 16px; margin: 0; padding: 8px 12px; background: #173c32; border: 1px solid #4dbb92; border-radius: 6px; }
 a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 16px; }
@@ -900,6 +929,9 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .region-editor button.active { border-color: #65d9b4; color: #65d9b4; }
 .region-editor-actions { display: flex; gap: 8px; }
 .region-editor-actions button { flex: 1; min-width: 0; }
+.merge-history-list li { margin: 10px 0; overflow-wrap: anywhere; }
+.merge-history-list li > span, .merge-history-list li > small { display: block; }
+.merge-history-list li > small { color: #adbed2; }
 .merge-panel { padding: 20px; border: 1px solid #385574; border-radius: 12px; background: #17283d; }
 .create-progress { display: grid; gap: 8px; max-width: 560px; margin: 10px 5px 16px; padding: 12px; border: 1px solid #385574; border-radius: 8px; background: #102036; color: #c7e8df; }
 .create-progress progress { width: 100%; accent-color: #65d9b4; }
@@ -976,4 +1008,7 @@ button { cursor: pointer; transition: border-color .16s ease, background-color .
 .scene canvas { display: block; max-width: 100%; height: auto; margin: auto; cursor: crosshair; border: 1px solid #385574; }
 @media (max-width: 950px) { .model-input-content { grid-template-columns: 1fr; } }
 @media (max-width: 1050px) { .coordinate-origin-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .merge-entry .merge-direction > span { flex-basis: 100%; }
+}
 </style>

@@ -6,8 +6,10 @@ import TransformEditor from '../../components/home/TransformEditor.vue';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import SingleModelViewport from './SingleModelViewport.vue';
 import './streaming-workbench.css';
+import '../../styles/module-entry.css';
 import type { TransformParameters } from '../../coordinate-math';
 import { pickDirectory } from '../../shared/directory-selection';
+import { formatTaskTime } from '../../shared/task-time';
 import { createStreamingTask, downloadStreamingCache, generateStreamedCache,
   listStreamingTasks, loadStreamingTask, saveStreamingTransform, type StreamingInputKind,
   releaseStreamingSource, retainStreamingSource, type StreamingTask } from '../../api/streaming-api';
@@ -54,6 +56,12 @@ async function chooseDirectory() {
 }
 function cacheProgress(value: number | null): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : undefined;
+}
+function taskStatusLabel(value: StreamingTask['status']): string {
+  return { queued: '排队中', preparing: '准备中', ready: '已就绪', failed: '失败' }[value];
+}
+function cacheStatusLabel(value: StreamingTask['cache_status']): string {
+  return { not_requested: '未生成', queued: '排队中', converting: '生成中', ready: '已完成', failed: '失败' }[value];
 }
 function move(index: number, direction: number) {
   const target = index + direction;
@@ -158,10 +166,12 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
       <button type="button" @click="historyOpen = !historyOpen" :aria-expanded="historyOpen">历史任务</button>
       <RouterLink v-if="task" to="/streaming">新建任务</RouterLink>
     </template></ModuleTopbar>
-    <p v-if="!task">导入模型或按精细到粗略排序的 LOD 文件组，生成LOD流式数据。</p>
-    <p v-if="message && !task" class="page-message" role="status">{{ message }}</p>
-    <section v-if="!task" class="streaming-panel new-task-panel">
+    <div v-if="!task" class="module-entry-content module-entry-single streaming-entry">
+    <div class="module-entry-intro"><h1>创建高斯流式任务</h1><p>导入模型或按精细到粗略排序的 LOD 文件组，生成 LOD 流式数据。</p></div>
+    <p v-if="message" class="page-message" role="status">{{ message }}</p>
+    <section class="module-entry-card new-task-panel">
       <h2>新建任务</h2>
+      <div class="module-entry-tile streaming-upload-tile">
       <label>输入方式
         <select v-model="kind" @change="selected = []; paths = []">
           <option value="single">单个高斯文件</option><option value="dataset">完整数据集目录或 ZIP</option>
@@ -183,9 +193,11 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
         </li>
       </ol>
       <p v-if="selected.length">已选择 {{ selected.length }} 个文件。<template v-if="kind === 'lod_group'">LOD 0 为最精细层，请确认顺序。</template></p>
+      </div>
       <TransformEditor model="a" v-model="transform" external-feedback @notify="notify" />
       <button class="create-task-action" type="button" :disabled="busy || !selected.length" @click="submit">创建任务</button>
     </section>
+    </div>
     <section v-else class="streaming-panel task-workspace">
       <aside class="task-sidebar">
       <h2>{{ task.filename }}</h2>
@@ -220,17 +232,33 @@ onUnmounted(() => { if (timer) clearInterval(timer); if (toastTimer) clearTimeou
       </div>
       </div>
     </section>
-    <section v-if="!task || historyOpen" class="streaming-panel history-panel"><header><h2>历史任务</h2><button v-if="task" @click="historyOpen = false" aria-label="关闭历史任务">×</button></header><p v-if="!tasks.length">暂无任务</p>
-      <ul><li v-for="item in tasks" :key="item.task_id"><RouterLink :to="`/streaming/${item.task_id}`">{{ item.filename }}</RouterLink> · {{ item.status }} · {{ item.cache_status }}<span v-if="cacheProgress(item.cache_progress) !== undefined">（{{ cacheProgress(item.cache_progress) }}%）</span></li></ul>
+    <section v-if="!task || historyOpen" class="streaming-panel history-panel module-entry-card"><header><h2>历史任务</h2><button v-if="task" @click="historyOpen = false" aria-label="关闭历史任务">×</button></header><p v-if="!tasks.length">暂无任务</p>
+      <ul class="streaming-history-list module-entry-history-list"><li v-for="item in tasks" :key="item.task_id">
+        <RouterLink :to="`/streaming/${item.task_id}`">{{ item.filename }}</RouterLink>
+        <span>模型：{{ taskStatusLabel(item.status) }}；流式缓存：{{ cacheStatusLabel(item.cache_status) }}<template v-if="cacheProgress(item.cache_progress) !== undefined && item.cache_status !== 'ready'">（{{ cacheProgress(item.cache_progress) }}%）</template></span>
+        <small>创建时间：<time>{{ formatTaskTime(item.created_at_unix) }}</time>　最近更新：<time>{{ formatTaskTime(item.updated_at_unix) }}</time></small>
+      </li></ul>
     </section>
   </main>
 </template>
 
 <style scoped>
 .streaming-page { min-height: 100vh; padding: 0; background: #08111d; color: #edf5ff; }
-.streaming-page:not(.streaming-workbench) > :is(p, .streaming-panel) { box-sizing: border-box; width: min(1040px, calc(100% - 48px)); margin-left: auto; margin-right: auto; }
+.streaming-entry { padding-bottom: 0; }
+.streaming-page:not(.streaming-workbench) > .history-panel { box-sizing: border-box; width: min(1040px, calc(100% - 40px)); margin: 16px auto 32px; }
 header a, a { color: #78d6b8; } h1 { margin: 14px 0; } h2 { margin-top: 0; }
 .streaming-panel { margin: 24px 0; padding: 24px; border: 1px solid #385574; border-radius: 14px; background: #17283d; }
+.streaming-entry .new-task-panel { margin: 0; }
+.streaming-entry .streaming-upload-tile { display: grid; gap: 10px; }
+.streaming-entry .streaming-upload-tile > label { margin: 0; }
+.streaming-entry .streaming-upload-tile input[type=file] { box-sizing: border-box; max-width: 100%; }
+.streaming-entry .streaming-upload-tile > p { margin: 0; }
+.streaming-entry .create-task-action { display: block; width: min(280px, 100%); margin: 12px 0 0 auto; }
+.streaming-page:not(.streaming-workbench) > .history-panel { padding: 16px; border-color: #29394e; border-radius: 8px; background: linear-gradient(145deg, #111e2ed9, #0b1725f2); }
+.streaming-page:not(.streaming-workbench) .history-panel h2 { margin-bottom: 12px; }
+.streaming-history-list li { margin: 10px 0; overflow-wrap: anywhere; }
+.streaming-history-list li > span, .streaming-history-list li > small { display: block; }
+.streaming-history-list li > small { color: #adbed2; }
 .streaming-page.streaming-workbench { padding: 0; }
 .streaming-workbench .task-workspace { margin: 0; padding: 0; border: 0; border-radius: 0; }
 label { display: block; margin: 12px 0; } input, select, button { margin: 6px; padding: 8px; }
@@ -245,4 +273,5 @@ button { cursor: pointer; } button:disabled { cursor: default; opacity: .5; }
 .new-task-panel button:disabled { border-color: #344354; color: #77879a; background: #1b2633; cursor: not-allowed; }
 .new-task-panel :is(select, button, input):focus-visible { outline: 2px solid #75d6b8; outline-offset: 2px; }
 li { margin: 8px 0; }
+@media (max-width: 720px) { .streaming-page:not(.streaming-workbench) > .history-panel { width: calc(100% - 24px); } }
 </style>
