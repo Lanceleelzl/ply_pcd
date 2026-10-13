@@ -8,7 +8,9 @@ export type EditorRule =
   | { type: 'box'; action: 'keep' | 'remove'; center: XYZ; size: XYZ; rotation: [number, number, number, number] };
 export interface EditorGeography { reference: XYZ; projected_origin: XYZ; axes: [number, number, number];
   metres_per_unit: number; source_epsg: number }
-export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null }
+export interface EditorTransform { translation: XYZ; rotation_degrees: XYZ; scale: XYZ }
+export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null;
+  transform?: EditorTransform }
 export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string }
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number }
 export interface EditorTask {

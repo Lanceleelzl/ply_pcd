@@ -48,3 +48,12 @@ def test_ascii_gaussian_ply_converts_before_cross_lod_clip(tmp_path: Path):
     rules = [{"type": "sphere", "action": "keep", "center": [0, 0, 0], "radius": 0.6}]
     assert clip_ply(binary, result, rules) == 1
     assert read_layout(result).count == 1
+
+
+def test_clip_rules_use_transformed_scene_coordinates(tmp_path: Path):
+    source = Path(__file__).parent / "gaussian-small-binary.ply"
+    destination = tmp_path / "transformed-selection.ply"
+    rules = [{"type": "sphere", "action": "keep", "center": [10, 20, 30], "radius": 0.6}]
+    count = clip_ply(source, destination, rules,
+                     to_common=lambda point: (point[0] + 10, point[1] + 20, point[2] + 30))
+    assert count == 1

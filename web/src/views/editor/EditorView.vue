@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
 import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, exportEditorResult, jumpEditorHistory,
   listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
-  type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask } from '../../api/gaussian-editor-api';
+  type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
+  type EditorTransform } from '../../api/gaussian-editor-api';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
@@ -25,7 +26,9 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const message = ref('');
-const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'history' | 'results' | null>('lod');
+const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
+const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
+const transformDraft = ref<EditorTransform>(identityTransform());
 const geographyDraft = ref<EditorGeography>({ reference: [0, 0, 0], projected_origin: [0, 0, 0],
   axes: [1, 2, 3], metres_per_unit: 1, source_epsg: 0 });
 const coordinateResult = ref<{ independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string } | null>(null);
@@ -55,6 +58,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
+const currentTransform = computed(() => currentState.value.transform ?? identityTransform());
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const selectedDerived = computed(() => task.value?.derived_lods.filter(item => item.source_level === workLevel.value).at(-1));
 const currentUrl = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.gaussian_url : selectedLod.value?.gaussian_url ??
@@ -81,6 +85,7 @@ async function refresh(): Promise<void> {
           axes: [1, 2, 3], metres_per_unit: 1, source_epsg: Number(loaded.coordinate_metadata?.epsg ?? 0),
         } as EditorGeography);
         coordinateResult.value = null;
+        transformDraft.value = structuredClone(loaded.history[loaded.history_cursor]?.state.transform ?? identityTransform());
       }
       if (!loaded.available_levels.includes(workLevel.value) && loaded.available_levels.length) {
         workLevel.value = loaded.available_levels.at(-1)!;
@@ -173,6 +178,16 @@ async function saveGeography(): Promise<void> {
   }
   await saveEdit('修改坐标原点', { ...currentState.value, geography: frame });
 }
+async function saveTransform(): Promise<void> {
+  const translation = [...transformDraft.value.translation] as XYZ;
+  const rotation_degrees = [...transformDraft.value.rotation_degrees] as XYZ;
+  const scale = transformDraft.value.scale[0];
+  if (![...translation, ...rotation_degrees, scale].every(Number.isFinite) || scale <= 0) {
+    message.value = '请输入有效的平移、旋转和正数缩放'; return;
+  }
+  await saveEdit('修改模型整体变换', { ...currentState.value,
+    transform: { translation, rotation_degrees, scale: [scale, scale, scale] } });
+}
 async function queryCoordinates(): Promise<void> {
   if (!task.value || !lastPoint.value || !currentState.value.geography) {
     message.value = '请先保存坐标设置并在场景中取点'; return;
@@ -196,6 +211,9 @@ async function jump(index: number): Promise<void> {
   if (!task.value) return;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
     if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
+    const selectedTransform = task.value.history[index]?.state.transform ?? identityTransform();
+    transformDraft.value = { translation: [...selectedTransform.translation],
+      rotation_degrees: [...selectedTransform.rotation_degrees], scale: [...selectedTransform.scale] };
     coordinateResult.value = null;
   }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
@@ -266,12 +284,13 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     <div v-else class="editor-stage">
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
-        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" @pick="picked" @notify="message = $event">
+        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform" @pick="picked" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
           <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
           <button type="button" @click="panel = panel === 'coordinates' ? null : 'coordinates'">坐标</button>
+          <button type="button" @click="panel = panel === 'transform' ? null : 'transform'">模型变换</button>
           <button type="button" :disabled="task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
           <button type="button" :disabled="task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
           <button type="button" @click="panel = panel === 'history' ? null : 'history'">历史操作</button>
@@ -280,7 +299,7 @@ async function download(version: string, level: number, format: 'ply' | 'compres
       </EditorViewport>
       <div v-else class="editor-wait" role="status">{{ task.status === 'failed' ? task.error : '正在预读模型并生成轻量场景预览…' }}</div>
       <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
-        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
+        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
@@ -317,6 +336,13 @@ async function download(version: string, level: number, format: 'ply' | 'compres
           <template v-if="clip.mode === 'axis'"><div v-for="(_, axis) in clip.min" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.min[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最小值`"><input v-model.number="clip.max[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最大值`"></div></template>
           <template v-if="clip.mode === 'box'"><div v-for="(_, axis) in clip.center" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.center[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 中心`"><input v-model.number="clip.size[axis]" type="number" min="0.001" step="any" :aria-label="`${['X','Y','Z'][axis]} 尺寸`"></div></template>
           <h3>原点平面</h3><label v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane"><input v-model="clip.planes[plane].visible" type="checkbox">{{ plane.toUpperCase() }}</label>
+        </template>
+        <template v-else-if="panel === 'transform'">
+          <p>变换会预览到工作模型，并在处理选定 LOD 时应用到每个高斯；边界规则使用变换后的场景坐标。</p>
+          <h3>平移 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in transformDraft.translation" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="transformDraft.translation[axis]" type="number" step="any"></div>
+          <h3>旋转角度 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in transformDraft.rotation_degrees" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="transformDraft.rotation_degrees[axis]" type="number" step="any"></div>
+          <label>等比缩放<input v-model.number="transformDraft.scale[0]" type="number" min="0.000001" step="any"></label>
+          <button type="button" @click="saveTransform">保存模型变换</button>
         </template>
         <template v-else-if="panel === 'coordinates'">
           <p>文件坐标保持原值；设置文件参考点及其对应的投影坐标原点。头文件提示仅作预填，请核对 EPSG、轴向和高程基准。</p>

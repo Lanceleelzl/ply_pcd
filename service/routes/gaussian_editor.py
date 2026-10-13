@@ -24,15 +24,19 @@ from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, 
 from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
 from service.routes.streaming import StreamingTasks
+from service.schemas import TransformParameters
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
 from service.streaming_tasks import GAUSSIAN_FORMATS
+from service.transform_math import transform_matrix
 from service.uploads import save_upload_directory_with_sha256, save_upload_with_sha256
+from service.validation import validate_transform
 
 
 class EditState(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     selected_lods: list[int] = Field(default_factory=list)
     geography: dict[str, Any] | None = None
+    transform: TransformParameters = Field(default_factory=TransformParameters)
 
 
 class EditChange(BaseModel):
@@ -141,6 +145,14 @@ class EditorTasks(StreamingTasks):
                               process_progress=None, process_error=None)
                 write_status(directory, status)
                 reference = None
+                transform = state.get("transform") or TransformParameters().model_dump()
+                matrix = transform_matrix(transform)
+                identity = transform == TransformParameters().model_dump()
+
+                def to_common(point: tuple[float, float, float]) -> tuple[float, float, float]:
+                    return tuple(sum(matrix[row][column] * point[column] for column in range(3))
+                                 + matrix[row][3] for row in range(3))  # type: ignore[return-value]
+
                 for index, level in enumerate(levels):
                     status.update(process_level=level, process_phase="转换输入", process_progress=None)
                     write_status(directory, status)
@@ -151,6 +163,7 @@ class EditorTasks(StreamingTasks):
                         raise ValueError(f"LOD {level} 的 EPSG 或投影原点与其他层级不一致")
                     reference = frame
                     destination = workspace / f"lod-{level}.ply"
+                    clipped = workspace / f"clipped-lod-{level}.ply" if not identity else destination
                     last_update = 0.0
 
                     def progress(done: int, total: int) -> None:
@@ -162,7 +175,21 @@ class EditorTasks(StreamingTasks):
                         status.update(process_phase="空间裁剪", process_progress=round(done * 100 / total, 1) if total else 100)
                         write_status(directory, status)
 
-                    count = await asyncio.to_thread(clip_ply, source, destination, state["rules"], progress)
+                    count = await asyncio.to_thread(clip_ply, source, clipped, state["rules"], progress,
+                                                    to_common if not identity else None)
+                    if not identity:
+                        status.update(process_phase="模型整体变换", process_progress=None)
+                        write_status(directory, status)
+                        scale = transform["scale"][0]
+                        rx, ry, rz = transform["rotation_degrees"]
+                        tx, ty, tz = transform["translation"]
+                        command = [*self.converter, str(clipped), "--scale", str(scale),
+                                   "--rotate", f"{-rx},{-ry},{rz}",
+                                   "--translate", f"{-tx},{-ty},{tz}", str(destination)]
+                        converted = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True,
+                                                            encoding="utf-8", errors="replace", timeout=7200, check=False)
+                        if converted.returncode or not destination.is_file():
+                            raise ValueError(converted.stderr.strip() or "模型整体变换失败")
                     result = {"level": level, "count": count, "source_count": layout.count,
                               "path": destination.relative_to(directory).as_posix(), "bytes": destination.stat().st_size}
                     results.append(result)
@@ -357,6 +384,9 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
     def record_edit(task_id: str, change: EditChange):
         try:
             validate_rules(change.state.rules)
+            validate_transform(change.state.transform)
+            if len(set(change.state.transform.scale)) != 1:
+                raise ValueError("整体模型缩放目前只支持等比缩放")
             if change.state.geography is not None:
                 frame = change.state.geography
                 GeographicQuery(point=tuple(frame["reference"]), axes=tuple(frame["axes"]),

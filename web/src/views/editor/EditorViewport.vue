@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue';
 import type { XYZ } from '../../coordinate-math';
+import type { EditorTransform } from '../../api/gaussian-editor-api';
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
-  origin: XYZ; pointCount?: number; lodLabel: string;
+  origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform;
   clip: { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
     planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> } }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string] }>();
@@ -58,7 +59,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     const cloud = await loadPreview(url, request.signal);
     if (request.signal.aborted || canvas.value !== element) return;
     engine = new SingleModelEngine(element, cloud, props.origin,
-      { translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] },
+      props.transform,
       point => { emit('pick', point); if (query.value) queueMicrotask(() => engine?.setQueryPicking(true)); },
       undefined, undefined, undefined, undefined, undefined, 'fly');
     applyClip();
@@ -68,6 +69,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
   }
 }, { immediate: true, flush: 'post' });
 watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
+watch(() => props.transform, value => engine?.applyTransform(value), { deep: true });
 onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer); });
 </script>
 
