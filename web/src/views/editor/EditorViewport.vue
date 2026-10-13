@@ -4,7 +4,7 @@ import type { XYZ } from '../../coordinate-math';
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
-const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string;
+const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string;
   clip: { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
     planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> } }>();
@@ -22,7 +22,7 @@ let statsTimer: ReturnType<typeof setInterval> | null = null;
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
   loading.value = true;
-  try { await engine.showGaussian(props.gaussianUrl, props.filename); loaded.value = true; }
+  try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod); loaded.value = true; }
   catch (error) { emit('notify', error instanceof Error ? error.message : String(error)); }
   finally { loading.value = false; }
 }
@@ -67,7 +67,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     if (!request.signal.aborted) emit('notify', error instanceof Error ? error.message : String(error));
   }
 }, { immediate: true, flush: 'post' });
-watch(() => props.gaussianUrl, () => { displayPoints(); });
+watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
 onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer); });
 </script>
 

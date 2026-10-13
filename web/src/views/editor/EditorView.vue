@@ -58,7 +58,8 @@ const currentState = computed<EditorState>(() => task.value?.history[task.value.
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const selectedDerived = computed(() => task.value?.derived_lods.filter(item => item.source_level === workLevel.value).at(-1));
 const currentUrl = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.gaussian_url : selectedLod.value?.gaussian_url ??
-  (workLevel.value === 0 ? task.value?.gaussian_url : undefined));
+  (task.value?.format === 'lcc' || task.value?.format === 'lcc2' || task.value?.format === 'streamed_sog'
+    || workLevel.value === 0 ? task.value?.gaussian_url : undefined));
 const currentFilename = computed(() => useDerived.value && selectedDerived.value ? 'work-lod.ply' :
   selectedLod.value?.name ?? task.value?.gaussian_filename ?? task.value?.filename ?? 'model.ply');
 const levelCount = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.count :
@@ -264,7 +265,7 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     </template>
     <div v-else class="editor-stage">
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
-        :gaussian-url="currentUrl" :filename="currentFilename" :origin="task.metadata.origin"
+        :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" @pick="picked" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>

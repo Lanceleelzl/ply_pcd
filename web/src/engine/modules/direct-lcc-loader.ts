@@ -15,6 +15,7 @@ export async function loadDirectGaussian(
   app: pc.Application,
   url: string,
   filename: string,
+  lodIndex?: number,
 ): Promise<{ asset: pc.Asset; transform: { translation: pc.Vec3; rotation: pc.Quat; scale: number } }> {
   const splat = await import('@playcanvas/splat-transform');
   splat.WebPCodec.wasmUrl = webpWasmUrl;
@@ -28,7 +29,8 @@ export async function loadDirectGaussian(
   });
   const root = sources[0];
   for (const source of sources.slice(1)) await source.close();
-  const source = root.meta.numLods > 1 ? splat.selectLod(root, selectLodIndex(root.meta.lodCounts)) : root;
+  const source = root.meta.numLods > 1
+    ? splat.selectLod(root, lodIndex ?? selectLodIndex(root.meta.lodCounts)) : root;
   const pool = splat.createChunkDataPool({ chunkSize: source.meta.chunkSize });
   try {
     const table = await splat.materializeToDataTable(source, pool);
