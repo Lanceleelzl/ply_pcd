@@ -158,7 +158,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
     <div class="editor-scene-hint" role="status">WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向</div>
-    <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? '待读取' }} · {{ fps }} FPS</div>
+    <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
   </div>
 </template>
 
