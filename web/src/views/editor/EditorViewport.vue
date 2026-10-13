@@ -5,7 +5,9 @@ import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string;
-  origin: XYZ; pointCount?: number; lodLabel: string }>();
+  origin: XYZ; pointCount?: number; lodLabel: string;
+  clip: { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
+    planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> } }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
@@ -36,6 +38,16 @@ function toggleQuery(): void {
   engine?.setQueryEnabled(query.value);
   engine?.setQueryPicking(query.value);
 }
+function applyClip(): void {
+  if (!engine) return;
+  engine.setAxisClip(props.clip.mode === 'axis', props.clip.min, props.clip.max);
+  engine.setBoxClip(props.clip.mode === 'box', props.clip.center, props.clip.size);
+  for (const plane of ['xoy', 'xoz', 'yoz'] as const) {
+    const value = props.clip.planes[plane];
+    engine.setOriginPlane(plane, value.visible, value.side);
+  }
+}
+watch(() => props.clip, applyClip, { deep: true });
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false;
@@ -49,6 +61,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
       { translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] },
       point => { emit('pick', point); if (query.value) engine?.setQueryPicking(true); },
       undefined, undefined, undefined, undefined, undefined, 'fly');
+    applyClip();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
   } catch (error) {
     if (!request.signal.aborted) emit('notify', error instanceof Error ? error.message : String(error));

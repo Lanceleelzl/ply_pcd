@@ -25,7 +25,14 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const message = ref('');
-const panel = ref<'lod' | 'bounds' | 'history' | 'results' | null>('lod');
+const panel = ref<'lod' | 'bounds' | 'slice' | 'history' | 'results' | null>('lod');
+const clip = ref<{ mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
+  planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }>({
+    mode: 'off', min: [-1e30, -1e30, -1e30], max: [1e30, 1e30, 1e30],
+    center: [0, 0, 0], size: [1, 1, 1],
+    planes: { xoy: { visible: false, side: 1 }, xoz: { visible: false, side: 1 }, yoz: { visible: false, side: 1 } },
+  });
+const clipThickness = ref(1);
 const workLevel = ref(0);
 const useDerived = ref(false);
 const lastPoint = ref<XYZ | null>(null);
@@ -114,6 +121,16 @@ function removeRule(index: number): void {
   void saveEdit('移除边界', { ...currentState.value, rules: currentState.value.rules.filter((_, i) => i !== index) });
 }
 function picked(point: XYZ): void { lastPoint.value = point; polygonDraft.value.push([point[0], point[1]]); }
+function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
+  const bounds = task.value?.metadata?.bounds;
+  if (!bounds || !Number.isFinite(clipThickness.value) || clipThickness.value <= 0) return;
+  const axis = { xoy: 2, xoz: 1, yoz: 0 }[plane];
+  clip.value.min = [...bounds.min]; clip.value.max = [...bounds.max];
+  const middle = (bounds.min[axis] + bounds.max[axis]) / 2;
+  clip.value.min[axis] = middle - clipThickness.value / 2;
+  clip.value.max[axis] = middle + clipThickness.value / 2;
+  clip.value.mode = 'axis';
+}
 async function jump(index: number): Promise<void> {
   if (!task.value) return;
   try { task.value = await jumpEditorHistory(task.value.task_id, index); }
@@ -178,10 +195,11 @@ async function download(version: string, level: number): Promise<void> {
     <div v-else class="editor-stage">
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :origin="task.metadata.origin"
-        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" @pick="picked" @notify="message = $event">
+        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" @pick="picked" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
+          <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
           <button type="button" :disabled="task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
           <button type="button" :disabled="task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
           <button type="button" @click="panel = panel === 'history' ? null : 'history'">历史操作</button>
@@ -190,7 +208,7 @@ async function download(version: string, level: number): Promise<void> {
       </EditorViewport>
       <div v-else class="editor-wait" role="status">{{ task.status === 'failed' ? task.error : '正在预读模型并生成轻量场景预览…' }}</div>
       <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
-        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
+        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
@@ -216,6 +234,15 @@ async function download(version: string, level: number): Promise<void> {
           <button type="button" :disabled="!lastPoint || boxSize.some(value => value <= 0)" @click="addBox">以取点为中心添加长方体</button>
           <h3>已有边界</h3><p v-if="!currentState.rules.length">暂无边界</p>
           <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button type="button" @click="removeRule(index)">移除</button></div>
+        </template>
+        <template v-else-if="panel === 'slice'">
+          <p>剖切仅改变场景显示；裁剪导出请使用「边界」规则。</p>
+          <label>切片厚度<input v-model.number="clipThickness" type="number" min="0.001" step="any"></label>
+          <div><button v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane" type="button" @click="slice(plane)">{{ plane.toUpperCase() }}</button></div>
+          <label>剖切方式<select v-model="clip.mode"><option value="off">关闭</option><option value="axis">三轴范围</option><option value="box">矩形框</option></select></label>
+          <template v-if="clip.mode === 'axis'"><div v-for="(_, axis) in clip.min" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.min[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最小值`"><input v-model.number="clip.max[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最大值`"></div></template>
+          <template v-if="clip.mode === 'box'"><div v-for="(_, axis) in clip.center" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.center[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 中心`"><input v-model.number="clip.size[axis]" type="number" min="0.001" step="any" :aria-label="`${['X','Y','Z'][axis]} 尺寸`"></div></template>
+          <h3>原点平面</h3><label v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane"><input v-model="clip.planes[plane].visible" type="checkbox">{{ plane.toUpperCase() }}</label>
         </template>
         <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
         <template v-else>
@@ -249,6 +276,7 @@ async function download(version: string, level: number): Promise<void> {
 .editor-panel label { display: block; margin: 10px 0; }.editor-panel :is(input[type=number], select) { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
 .editor-panel input[type=checkbox] { margin-right: 7px; }.editor-panel p { color: #c0d1e0; line-height: 1.45; }
 .editor-size { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }.editor-rule { display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid #324b63; }
+.editor-clip-row { display: grid; grid-template-columns: 20px 1fr 1fr; gap: 6px; margin: 6px 0; }.editor-clip-row input { min-width: 0; padding: 6px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
 .editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; }
 .editor-entry-message { margin: 0 auto; width: min(1040px, calc(100% - 40px)); }
