@@ -21,6 +21,7 @@ from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset
 from service.dataset_preparation import _convert_to_ply
 from service.gaussian_editor_rules import clip_ply, validate_rules
+from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
 from service.routes.streaming import StreamingTasks
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
@@ -31,6 +32,7 @@ from service.uploads import save_upload_directory_with_sha256, save_upload_with_
 class EditState(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     selected_lods: list[int] = Field(default_factory=list)
+    geography: dict[str, Any] | None = None
 
 
 class EditChange(BaseModel):
@@ -307,7 +309,13 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
     def record_edit(task_id: str, change: EditChange):
         try:
             validate_rules(change.state.rules)
-        except ValueError as error:
+            if change.state.geography is not None:
+                frame = change.state.geography
+                GeographicQuery(point=tuple(frame["reference"]), axes=tuple(frame["axes"]),
+                                reference=tuple(frame["reference"]), independent_origin=(0, 0, 0),
+                                projected_origin=tuple(frame["projected_origin"]),
+                                metres_per_unit=frame["metres_per_unit"], source_epsg=frame["source_epsg"])
+        except (ValueError, KeyError, TypeError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         directory, status = tasks.read(task_id)
         if status.get("process_status") in {"queued", "running"}:
@@ -331,6 +339,14 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         status["history_cursor"] = index
         write_status(directory, status)
         return tasks.present(status)
+
+    @router.post("/{task_id}/coordinate-query")
+    def coordinate_query(task_id: str, request: GeographicQuery):
+        tasks.read(task_id)
+        try:
+            return query_coordinates(request)
+        except Exception as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/{task_id}/process", status_code=202)
     async def process(task_id: str, request: ProcessRequest):

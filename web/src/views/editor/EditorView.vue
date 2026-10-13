@@ -3,8 +3,8 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
 import { createEditorTask, decimateEditorTask, editorDownloadUrl, jumpEditorHistory,
-  listEditorTasks, loadEditorTask, processEditorTask, recordEditorEdit,
-  type EditorInputKind, type EditorRule, type EditorState, type EditorTask } from '../../api/gaussian-editor-api';
+  listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
+  type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask } from '../../api/gaussian-editor-api';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
@@ -25,7 +25,15 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const message = ref('');
-const panel = ref<'lod' | 'bounds' | 'slice' | 'history' | 'results' | null>('lod');
+const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'history' | 'results' | null>('lod');
+const geographyDraft = ref<EditorGeography>({ reference: [0, 0, 0], projected_origin: [0, 0, 0],
+  axes: [1, 2, 3], metres_per_unit: 1, source_epsg: 0 });
+const coordinateResult = ref<{ independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string } | null>(null);
+const coordinateBusy = ref(false);
+let geographyTaskId = '';
+function copyGeography(frame: EditorGeography): EditorGeography {
+  return { ...frame, reference: [...frame.reference], projected_origin: [...frame.projected_origin], axes: [...frame.axes] };
+}
 const clip = ref<{ mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
   planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }>({
     mode: 'off', min: [-1e30, -1e30, -1e30], max: [1e30, 1e30, 1e30],
@@ -62,6 +70,15 @@ async function refresh(): Promise<void> {
     if (typeof id === 'string') {
       const loaded = await loadEditorTask(id);
       task.value = loaded;
+      if (geographyTaskId !== id) {
+        geographyTaskId = id;
+        geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography ?? {
+          reference: [0, 0, 0],
+          projected_origin: loaded.coordinate_metadata?.offset.map(value => Number(value ?? 0)) ?? [0, 0, 0],
+          axes: [1, 2, 3], metres_per_unit: 1, source_epsg: Number(loaded.coordinate_metadata?.epsg ?? 0),
+        } as EditorGeography);
+        coordinateResult.value = null;
+      }
       if (!loaded.available_levels.includes(workLevel.value) && loaded.available_levels.length) {
         workLevel.value = loaded.available_levels.at(-1)!;
       }
@@ -105,7 +122,7 @@ function addRule(rule: EditorRule, label: string): void {
 }
 function addPolygon(): void {
   if (polygonDraft.value.length < 3) { message.value = '平面边界至少需要三个取点'; return; }
-  addRule({ type: 'polygon', action: boundaryAction.value, points: structuredClone(polygonDraft.value) }, '新增平面边界');
+  addRule({ type: 'polygon', action: boundaryAction.value, points: polygonDraft.value.map(point => [...point]) }, '新增平面边界');
   polygonDraft.value = [];
 }
 function addSphere(): void {
@@ -120,7 +137,28 @@ function addBox(): void {
 function removeRule(index: number): void {
   void saveEdit('移除边界', { ...currentState.value, rules: currentState.value.rules.filter((_, i) => i !== index) });
 }
-function picked(point: XYZ): void { lastPoint.value = point; polygonDraft.value.push([point[0], point[1]]); }
+function picked(point: XYZ): void {
+  lastPoint.value = point;
+  if (panel.value === 'bounds') polygonDraft.value.push([point[0], point[1]]);
+  coordinateResult.value = null;
+}
+async function saveGeography(): Promise<void> {
+  const frame = copyGeography(geographyDraft.value);
+  if (!Number.isInteger(frame.source_epsg) || frame.source_epsg <= 0
+    || frame.metres_per_unit <= 0 || ![...frame.reference, ...frame.projected_origin].every(Number.isFinite)) {
+    message.value = '请输入有效 EPSG、参考坐标、投影原点和单位'; return;
+  }
+  await saveEdit('修改坐标原点', { ...currentState.value, geography: frame });
+}
+async function queryCoordinates(): Promise<void> {
+  if (!task.value || !lastPoint.value || !currentState.value.geography) {
+    message.value = '请先保存坐标设置并在场景中取点'; return;
+  }
+  coordinateBusy.value = true; coordinateResult.value = null;
+  try { coordinateResult.value = await queryEditorCoordinates(task.value.task_id, lastPoint.value, currentState.value.geography); }
+  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { coordinateBusy.value = false; }
+}
 function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
   const bounds = task.value?.metadata?.bounds;
   if (!bounds || !Number.isFinite(clipThickness.value) || clipThickness.value <= 0) return;
@@ -133,7 +171,10 @@ function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
 }
 async function jump(index: number): Promise<void> {
   if (!task.value) return;
-  try { task.value = await jumpEditorHistory(task.value.task_id, index); }
+  try { task.value = await jumpEditorHistory(task.value.task_id, index);
+    if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
+    coordinateResult.value = null;
+  }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
 function toggleLevel(level: number, checked: boolean): void {
@@ -200,6 +241,7 @@ async function download(version: string, level: number): Promise<void> {
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
           <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
+          <button type="button" @click="panel = panel === 'coordinates' ? null : 'coordinates'">坐标</button>
           <button type="button" :disabled="task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
           <button type="button" :disabled="task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
           <button type="button" @click="panel = panel === 'history' ? null : 'history'">历史操作</button>
@@ -208,7 +250,7 @@ async function download(version: string, level: number): Promise<void> {
       </EditorViewport>
       <div v-else class="editor-wait" role="status">{{ task.status === 'failed' ? task.error : '正在预读模型并生成轻量场景预览…' }}</div>
       <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
-        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
+        <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
@@ -243,6 +285,18 @@ async function download(version: string, level: number): Promise<void> {
           <template v-if="clip.mode === 'axis'"><div v-for="(_, axis) in clip.min" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.min[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最小值`"><input v-model.number="clip.max[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最大值`"></div></template>
           <template v-if="clip.mode === 'box'"><div v-for="(_, axis) in clip.center" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.center[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 中心`"><input v-model.number="clip.size[axis]" type="number" min="0.001" step="any" :aria-label="`${['X','Y','Z'][axis]} 尺寸`"></div></template>
           <h3>原点平面</h3><label v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane"><input v-model="clip.planes[plane].visible" type="checkbox">{{ plane.toUpperCase() }}</label>
+        </template>
+        <template v-else-if="panel === 'coordinates'">
+          <p>文件坐标保持原值；设置文件参考点及其对应的投影坐标原点。头文件提示仅作预填，请核对 EPSG、轴向和高程基准。</p>
+          <label>原投影 EPSG<input v-model.number="geographyDraft.source_epsg" type="number" min="1" step="1"></label>
+          <label>文件单位换算为米<input v-model.number="geographyDraft.metres_per_unit" type="number" min="0.000001" step="any"></label>
+          <h3>文件参考点 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.reference" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="geographyDraft.reference[axis]" type="number" step="any"></div>
+          <h3>对应投影坐标 E／N／H</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.projected_origin" :key="axis"><span>{{ ['E','N','H'][axis] }}</span><input v-model.number="geographyDraft.projected_origin[axis]" type="number" step="any"></div>
+          <h3>东／北／上对应文件轴</h3><label v-for="(_, axis) in geographyDraft.axes" :key="axis">{{ ['东','北','上'][axis] }}<select v-model.number="geographyDraft.axes[axis]"><option v-for="candidate in [1,-1,2,-2,3,-3]" :key="candidate" :value="candidate">{{ candidate > 0 ? '+' : '−' }}{{ ['X','Y','Z'][Math.abs(candidate) - 1] }}</option></select></label>
+          <button type="button" @click="saveGeography">保存坐标设置</button>
+          <p v-if="lastPoint">场景／文件坐标：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
+          <button type="button" :disabled="coordinateBusy || !lastPoint || !currentState.geography" @click="queryCoordinates">{{ coordinateBusy ? '正在转换…' : '查询取点坐标' }}</button>
+          <template v-if="coordinateResult"><p>独立场景坐标：{{ coordinateResult.independent.join('，') }}</p><p>原 EPSG 投影坐标：{{ coordinateResult.projected.join('，') }}</p><p>WGS84：{{ coordinateResult.longitude.toFixed(8) }}°，{{ coordinateResult.latitude.toFixed(8) }}°</p><p>{{ coordinateResult.height_note }}</p></template>
         </template>
         <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
         <template v-else>

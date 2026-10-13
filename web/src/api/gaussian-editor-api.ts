@@ -6,13 +6,16 @@ export type EditorRule =
   | { type: 'polygon'; action: 'keep' | 'remove'; points: [number, number][] }
   | { type: 'sphere'; action: 'keep' | 'remove'; center: XYZ; radius: number }
   | { type: 'box'; action: 'keep' | 'remove'; center: XYZ; size: XYZ; rotation: [number, number, number, number] };
-export interface EditorState { rules: EditorRule[]; selected_lods: number[] }
+export interface EditorGeography { reference: XYZ; projected_origin: XYZ; axes: [number, number, number];
+  metres_per_unit: number; source_epsg: number }
+export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null }
 export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string }
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number }
 export interface EditorTask {
   task_id: string; filename: string; input_kind: EditorInputKind; format: string;
   status: 'queued' | 'preparing' | 'ready' | 'failed'; error?: string;
   metadata?: { source_point_count: number; preview_point_count: number; origin: XYZ; bounds: { min: XYZ; max: XYZ } };
+  coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string };
   preview_url?: string | null; gaussian_url?: string | null; gaussian_filename?: string;
   lods: EditorLod[]; derived_lods: Array<{ version: string; count: number; source_level: number; gaussian_url: string }>;
   available_levels: number[];
@@ -85,4 +88,14 @@ export async function decimateEditorTask(taskId: string, level: number, targetCo
 }
 export function editorDownloadUrl(taskId: string, version: string, level: number): string {
   return `${base}/${encodeURIComponent(taskId)}/download/${encodeURIComponent(version)}/${level}`;
+}
+export async function queryEditorCoordinates(taskId: string, point: XYZ, frame: EditorGeography): Promise<{
+  independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string }> {
+  return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/coordinate-query`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      point, axes: frame.axes, reference: frame.reference, independent_origin: [0, 0, 0],
+      projected_origin: frame.projected_origin, metres_per_unit: frame.metres_per_unit,
+      source_epsg: frame.source_epsg, target_epsg: 4326,
+    }),
+  }));
 }
