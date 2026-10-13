@@ -26,6 +26,7 @@ const busy = ref(false);
 const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
+const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const message = ref('');
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
@@ -249,11 +250,15 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     const response = await apiFetch(format === 'ply' ? editorDownloadUrl(task.value.task_id, version, level)
       : editorExportUrl(task.value.task_id, version, level, format));
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
+    const contentLength = Number(response.headers.get('Content-Length'));
+    downloadProgress.value = { loaded: 0, total: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null };
     const writable = await handle.createWritable();
     const reader = response.body.getReader();
-    while (true) { const { value, done } = await reader.read(); if (done) break; await writable.write(value); }
+    while (true) { const { value, done } = await reader.read(); if (done) break; await writable.write(value);
+      downloadProgress.value.loaded += value.byteLength; }
     await writable.close(); message.value = '成果下载完成';
   } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { downloadProgress.value = null; }
 }
 async function downloadManifest(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog'): Promise<void> {
   if (!task.value) return;
@@ -379,6 +384,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
+      <p v-if="downloadProgress" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
       <p v-if="message" class="editor-message" role="status">{{ message }}</p>
     </div>
     <p v-if="message && !task" role="status" class="editor-entry-message">{{ message }}</p>
@@ -408,5 +414,6 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .editor-vertex-row { grid-template-columns: 20px 1fr 1fr auto; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
 .editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; }
+.editor-download-progress { position: absolute; z-index: 6; right: 12px; bottom: 44px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; }
 .editor-entry-message { margin: 0 auto; width: min(1040px, calc(100% - 40px)); }
 </style>
