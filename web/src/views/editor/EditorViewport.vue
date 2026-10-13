@@ -2,15 +2,14 @@
 import * as pc from 'playcanvas';
 import { onUnmounted, ref, watch } from 'vue';
 import type { XYZ } from '../../coordinate-math';
-import type { EditorRule, EditorTransform } from '../../api/gaussian-editor-api';
+import type { EditorDisplayClip, EditorRule, EditorTransform } from '../../api/gaussian-editor-api';
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform;
   rules: EditorRule[]; polygonDraft: [number, number][];
-  clip: { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
-    planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> } }>();
+  clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);

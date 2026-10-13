@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import math
 import secrets
 import subprocess
 import time
@@ -32,11 +33,26 @@ from service.uploads import save_upload_directory_with_sha256, save_upload_with_
 from service.validation import validate_transform
 
 
+class ClipPlane(BaseModel):
+    visible: bool
+    side: Literal[-1, 1]
+
+
+class DisplayClip(BaseModel):
+    mode: Literal["off", "axis", "box"]
+    min: tuple[float, float, float]
+    max: tuple[float, float, float]
+    center: tuple[float, float, float]
+    size: tuple[float, float, float]
+    planes: dict[Literal["xoy", "xoz", "yoz"], ClipPlane]
+
+
 class EditState(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     selected_lods: list[int] = Field(default_factory=list)
     geography: dict[str, Any] | None = None
     transform: TransformParameters = Field(default_factory=TransformParameters)
+    display_clip: DisplayClip | None = None
 
 
 class EditChange(BaseModel):
@@ -388,6 +404,13 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
             validate_transform(change.state.transform)
             if len(set(change.state.transform.scale)) != 1:
                 raise ValueError("整体模型缩放目前只支持等比缩放")
+            if change.state.display_clip is not None:
+                clip = change.state.display_clip
+                if (set(clip.planes) != {"xoy", "xoz", "yoz"}
+                        or not all(math.isfinite(value) for value in (*clip.min, *clip.max, *clip.center, *clip.size))
+                        or any(clip.min[index] > clip.max[index] for index in range(3))
+                        or any(value <= 0 for value in clip.size)):
+                    raise ValueError("显示剖切范围或矩形框尺寸无效")
             if change.state.geography is not None:
                 frame = change.state.geography
                 GeographicQuery(point=tuple(frame["reference"]), axes=tuple(frame["axes"]),

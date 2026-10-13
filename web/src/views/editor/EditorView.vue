@@ -5,7 +5,7 @@ import { apiFetch } from '../../api/api-auth';
 import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl,
   exportEditorResult, jumpEditorHistory,
   listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
-  type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
+  type EditorDisplayClip, type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
   type EditorTransform } from '../../api/gaussian-editor-api';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
@@ -39,12 +39,16 @@ let geographyTaskId = '';
 function copyGeography(frame: EditorGeography): EditorGeography {
   return { ...frame, reference: [...frame.reference], projected_origin: [...frame.projected_origin], axes: [...frame.axes] };
 }
-const clip = ref<{ mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
-  planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }>({
+const defaultClip = (): EditorDisplayClip => ({
     mode: 'off', min: [-1e30, -1e30, -1e30], max: [1e30, 1e30, 1e30],
     center: [0, 0, 0], size: [1, 1, 1],
     planes: { xoy: { visible: false, side: 1 }, xoz: { visible: false, side: 1 }, yoz: { visible: false, side: 1 } },
   });
+const clip = ref<EditorDisplayClip>(defaultClip());
+function copyClip(value: EditorDisplayClip): EditorDisplayClip {
+  return { mode: value.mode, min: [...value.min], max: [...value.max], center: [...value.center], size: [...value.size],
+    planes: { xoy: { ...value.planes.xoy }, xoz: { ...value.planes.xoz }, yoz: { ...value.planes.yoz } } };
+}
 const clipThickness = ref(1);
 const workLevel = ref(0);
 const useDerived = ref(false);
@@ -60,6 +64,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
+watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.display_clip ?? null)], () => {
+  clip.value = currentState.value.display_clip ? copyClip(currentState.value.display_clip) : defaultClip();
+}, { immediate: true });
 const currentTransform = computed(() => currentState.value.transform ?? identityTransform());
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const selectedDerived = computed(() => task.value?.derived_lods.filter(item => item.source_level === workLevel.value).at(-1));
@@ -211,6 +218,14 @@ function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
   clip.value.min[axis] = middle - clipThickness.value / 2;
   clip.value.max[axis] = middle + clipThickness.value / 2;
   clip.value.mode = 'axis';
+  void saveDisplayClip(`设置 ${plane.toUpperCase()} 显示剖切`);
+}
+async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
+  const value = copyClip(clip.value);
+  if (![...value.min, ...value.max, ...value.center, ...value.size].every(Number.isFinite)
+    || value.min.some((minimum, axis) => minimum > value.max[axis])
+    || value.size.some(size => size <= 0)) { message.value = '请输入有效的剖切范围和矩形框尺寸'; return; }
+  await saveEdit(label, { ...currentState.value, display_clip: value });
 }
 async function jump(index: number): Promise<void> {
   if (!task.value) return;
@@ -360,6 +375,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <template v-if="clip.mode === 'axis'"><div v-for="(_, axis) in clip.min" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.min[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最小值`"><input v-model.number="clip.max[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最大值`"></div></template>
           <template v-if="clip.mode === 'box'"><div v-for="(_, axis) in clip.center" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.center[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 中心`"><input v-model.number="clip.size[axis]" type="number" min="0.001" step="any" :aria-label="`${['X','Y','Z'][axis]} 尺寸`"></div></template>
           <h3>原点平面</h3><label v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane"><input v-model="clip.planes[plane].visible" type="checkbox">{{ plane.toUpperCase() }}</label>
+          <button type="button" @click="saveDisplayClip()">保存显示剖切</button>
         </template>
         <template v-else-if="panel === 'transform'">
           <p>变换会预览到工作模型，并在处理选定 LOD 时应用到每个高斯；边界规则使用变换后的场景坐标。</p>
