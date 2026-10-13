@@ -115,3 +115,52 @@ def clip_ply(source: Path, destination: Path, rules: list[dict],
         writer.seek(count_offset)
         writer.write(f"{written:020d}".encode("ascii"))
     return written
+
+
+def convert_ascii_gaussian_ply(source: Path, destination: Path) -> None:
+    """Stream an ASCII vertex-only Gaussian PLY into binary little-endian PLY."""
+    formats = {"char": "b", "uchar": "B", "short": "h", "ushort": "H", "int": "i", "uint": "I",
+               "float": "f", "double": "d", "int8": "b", "uint8": "B", "int16": "h", "uint16": "H",
+               "int32": "i", "uint32": "I", "float32": "f", "float64": "d"}
+    if source.resolve() == destination.resolve() or destination.exists():
+        raise ValueError("转换结果必须写入新文件")
+    with source.open("rb") as reader:
+        header: list[str] = []
+        size = 0
+        while size < 256 * 1024:
+            raw = reader.readline(8192)
+            size += len(raw)
+            if not raw:
+                break
+            line = raw.decode("ascii").strip()
+            header.append(line)
+            if line == "end_header":
+                break
+        if header[:2] != ["ply", "format ascii 1.0"] or header[-1] != "end_header":
+            raise ValueError("仅支持完整的 ASCII PLY 1.0")
+        elements = [line.split() for line in header if line.startswith("element ")]
+        if len(elements) != 1 or elements[0][:2] != ["element", "vertex"]:
+            raise ValueError("ASCII PLY 仅支持单一 vertex 元素")
+        count = int(elements[0][2])
+        if count < 0:
+            raise ValueError("PLY 顶点数量无效")
+        properties = [line.split() for line in header if line.startswith("property ")]
+        if not properties or any(len(item) != 3 or item[1] not in formats for item in properties):
+            raise ValueError("ASCII PLY 含有不支持的属性")
+        if not {"x", "y", "z"}.issubset({item[2] for item in properties}):
+            raise ValueError("PLY 缺少 XYZ 坐标")
+        packer = struct.Struct("<" + "".join(formats[item[1]] for item in properties))
+        binary_header = ["format binary_little_endian 1.0" if line == "format ascii 1.0" else line
+                         for line in header]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("xb") as writer:
+            writer.write(("\n".join(binary_header) + "\n").encode("ascii"))
+            for _ in range(count):
+                fields = reader.readline().split()
+                if len(fields) != len(properties):
+                    raise ValueError("ASCII PLY 顶点数量或属性不完整")
+                values = [float(value) if formats[item[1]] in "fd" else int(value)
+                          for value, item in zip(fields, properties)]
+                if not all(math.isfinite(value) for value in values):
+                    raise ValueError("ASCII PLY 含有非有限数值")
+                writer.write(packer.pack(*values))

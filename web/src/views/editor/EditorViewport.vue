@@ -59,7 +59,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     if (request.signal.aborted || canvas.value !== element) return;
     engine = new SingleModelEngine(element, cloud, props.origin,
       { translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] },
-      point => { emit('pick', point); if (query.value) engine?.setQueryPicking(true); },
+      point => { emit('pick', point); if (query.value) queueMicrotask(() => engine?.setQueryPicking(true)); },
       undefined, undefined, undefined, undefined, undefined, 'fly');
     applyClip();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);

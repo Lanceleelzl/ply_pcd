@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from service.gaussian_editor_rules import clip_ply, keeps_point, validate_rules
+from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, keeps_point, validate_rules
 from service.gaussian_merge import read_layout
 
 
@@ -37,3 +37,14 @@ def test_streamed_clip_preserves_file_and_updates_count(tmp_path: Path):
     assert source.read_bytes() != b""
     with pytest.raises(ValueError):
         clip_ply(source, source, [])
+
+
+def test_ascii_gaussian_ply_converts_before_cross_lod_clip(tmp_path: Path):
+    source = Path(__file__).parent / "gaussian-small.ply"
+    binary = tmp_path / "work.ply"
+    result = tmp_path / "edited.ply"
+    convert_ascii_gaussian_ply(source, binary)
+    assert read_layout(binary).count == 4
+    rules = [{"type": "sphere", "action": "keep", "center": [0, 0, 0], "radius": 0.6}]
+    assert clip_ply(binary, result, rules) == 1
+    assert read_layout(result).count == 1

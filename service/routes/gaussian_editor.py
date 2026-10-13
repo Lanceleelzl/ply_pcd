@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset
 from service.dataset_preparation import _convert_to_ply
-from service.gaussian_editor_rules import clip_ply, validate_rules
+from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
 from service.routes.streaming import StreamingTasks
@@ -114,7 +114,12 @@ class EditorTasks(StreamingTasks):
             source = directory / status["dataset_entrypoint"]
             format_name = status["format"]
         if format_name == "gaussian_ply":
-            return source
+            with source.open("rb") as stream:
+                if b"format binary_little_endian" in stream.read(256):
+                    return source
+            destination = workspace / f"source-lod-{level}.ply"
+            convert_ascii_gaussian_ply(source, destination)
+            return destination
         destination = workspace / f"source-lod-{level}.ply"
         options = ["--select-lod", str(level)] if format_name in {"lcc", "lcc2", "streamed_sog"} else []
         _convert_to_ply(source, destination, self.converter, subprocess.run, options)

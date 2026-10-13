@@ -45,9 +45,11 @@ const workLevel = ref(0);
 const useDerived = ref(false);
 const lastPoint = ref<XYZ | null>(null);
 const polygonDraft = ref<[number, number][]>([]);
+const editingPolygon = ref<number | null>(null);
 const boundaryAction = ref<'keep' | 'remove'>('keep');
 const sphereRadius = ref(1);
 const boxSize = ref<XYZ>([1, 1, 1]);
+const boxRotation = ref<XYZ>([0, 0, 0]);
 const targetCount = ref(100_000);
 let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -112,18 +114,31 @@ async function create(): Promise<void> {
   } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
-async function saveEdit(label: string, state: EditorState): Promise<void> {
-  if (!task.value) return;
-  try { task.value = await recordEditorEdit(task.value.task_id, label, state); message.value = ''; }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+async function saveEdit(label: string, state: EditorState): Promise<boolean> {
+  if (!task.value) return false;
+  try { task.value = await recordEditorEdit(task.value.task_id, label, state); message.value = ''; return true; }
+  catch (error) { message.value = error instanceof Error ? error.message : String(error); return false; }
 }
 function addRule(rule: EditorRule, label: string): void {
   void saveEdit(label, { ...currentState.value, rules: [...currentState.value.rules, rule] });
 }
-function addPolygon(): void {
+async function addPolygon(): Promise<void> {
   if (polygonDraft.value.length < 3) { message.value = '平面边界至少需要三个取点'; return; }
-  addRule({ type: 'polygon', action: boundaryAction.value, points: polygonDraft.value.map(point => [...point]) }, '新增平面边界');
+  const rule: EditorRule = { type: 'polygon', action: boundaryAction.value,
+    points: polygonDraft.value.map(point => [...point]) };
+  const saved = await saveEdit(editingPolygon.value === null ? '新增平面边界' : '修改平面边界',
+    { ...currentState.value, rules: editingPolygon.value === null ? [...currentState.value.rules, rule]
+      : currentState.value.rules.map((item, index) => index === editingPolygon.value ? rule : item) });
+  if (!saved) return;
   polygonDraft.value = [];
+  editingPolygon.value = null;
+}
+function editPolygon(index: number): void {
+  const rule = currentState.value.rules[index];
+  if (rule.type !== 'polygon') return;
+  editingPolygon.value = index;
+  boundaryAction.value = rule.action;
+  polygonDraft.value = rule.points.map(point => [...point]);
 }
 function addSphere(): void {
   if (!lastPoint.value) { message.value = '先在场景中取一个球心'; return; }
@@ -131,8 +146,15 @@ function addSphere(): void {
 }
 function addBox(): void {
   if (!lastPoint.value) { message.value = '先在场景中取一个中心点'; return; }
+  const [x, y, z] = boxRotation.value.map(angle => angle * Math.PI / 360);
+  const [cx, cy, cz] = [Math.cos(x), Math.cos(y), Math.cos(z)];
+  const [sx, sy, sz] = [Math.sin(x), Math.sin(y), Math.sin(z)];
+  const rotation: [number, number, number, number] = [
+    cx * cy * cz + sx * sy * sz, sx * cy * cz - cx * sy * sz,
+    cx * sy * cz + sx * cy * sz, cx * cy * sz - sx * sy * cz,
+  ];
   addRule({ type: 'box', action: boundaryAction.value, center: [...lastPoint.value], size: [...boxSize.value],
-    rotation: [1, 0, 0, 0] }, '新增长方体边界');
+    rotation }, '新增长方体边界');
 }
 function removeRule(index: number): void {
   void saveEdit('移除边界', { ...currentState.value, rules: currentState.value.rules.filter((_, i) => i !== index) });
@@ -274,15 +296,17 @@ async function download(version: string, level: number, format: 'ply' | 'compres
           <p>开启场景取点后逐点点击；平面边界沿模型全高生效。</p>
           <p v-if="lastPoint">当前取点：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
           <label>边界规则<select v-model="boundaryAction"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
-          <p>平面草稿：{{ polygonDraft.length }} 点</p>
-          <button type="button" :disabled="polygonDraft.length < 3" @click="addPolygon">完成 2D 平面边界</button>
-          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []">清空草稿</button>
+          <p>{{ editingPolygon === null ? '平面草稿' : '正在编辑平面边界' }}：{{ polygonDraft.length }} 点</p>
+          <div v-for="(point, index) in polygonDraft" :key="index" class="editor-clip-row editor-vertex-row"><span>{{ index + 1 }}</span><input v-model.number="point[0]" type="number" step="any" :aria-label="`顶点 ${index + 1} X`"><input v-model.number="point[1]" type="number" step="any" :aria-label="`顶点 ${index + 1} Y`"><button type="button" @click="polygonDraft.splice(index, 1)">删点</button></div>
+          <button type="button" :disabled="polygonDraft.length < 3" @click="addPolygon">{{ editingPolygon === null ? '完成 2D 平面边界' : '保存平面边界' }}</button>
+          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []; editingPolygon = null">清空草稿</button>
           <label>球半径<input v-model.number="sphereRadius" type="number" min="0.001" step="any"></label>
           <button type="button" :disabled="!lastPoint || sphereRadius <= 0" @click="addSphere">以取点为球心添加球体</button>
           <div class="editor-size"><label v-for="(_, axis) in boxSize" :key="axis">{{ ['X','Y','Z'][axis] }} 尺寸<input v-model.number="boxSize[axis]" type="number" min="0.001" step="any"></label></div>
+          <div class="editor-size"><label v-for="(_, axis) in boxRotation" :key="axis">{{ ['X','Y','Z'][axis] }} 旋转角度<input v-model.number="boxRotation[axis]" type="number" step="any"></label></div>
           <button type="button" :disabled="!lastPoint || boxSize.some(value => value <= 0)" @click="addBox">以取点为中心添加长方体</button>
           <h3>已有边界</h3><p v-if="!currentState.rules.length">暂无边界</p>
-          <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button type="button" @click="removeRule(index)">移除</button></div>
+          <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button v-if="rule.type === 'polygon'" type="button" @click="editPolygon(index)">编辑顶点</button><button type="button" @click="removeRule(index)">移除</button></div>
         </template>
         <template v-else-if="panel === 'slice'">
           <p>剖切仅改变场景显示；裁剪导出请使用「边界」规则。</p>
@@ -339,6 +363,7 @@ async function download(version: string, level: number, format: 'ply' | 'compres
 .editor-panel input[type=checkbox] { margin-right: 7px; }.editor-panel p { color: #c0d1e0; line-height: 1.45; }
 .editor-size { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }.editor-rule { display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid #324b63; }
 .editor-clip-row { display: grid; grid-template-columns: 20px 1fr 1fr; gap: 6px; margin: 6px 0; }.editor-clip-row input { min-width: 0; padding: 6px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
+.editor-vertex-row { grid-template-columns: 20px 1fr 1fr auto; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
 .editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; }
 .editor-entry-message { margin: 0 auto; width: min(1040px, calc(100% - 40px)); }
