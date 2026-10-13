@@ -172,6 +172,9 @@ function picked(point: XYZ): void {
   if (panel.value === 'bounds') polygonDraft.value.push([point[0], point[1]]);
   coordinateResult.value = null;
 }
+function movePolygonVertex(index: number, point: [number, number]): void {
+  polygonDraft.value[index] = point;
+}
 async function saveGeography(): Promise<void> {
   const frame = copyGeography(geographyDraft.value);
   if (!Number.isInteger(frame.source_epsg) || frame.source_epsg <= 0
@@ -304,7 +307,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
-        :rules="currentState.rules" :polygon-draft="polygonDraft" @pick="picked" @notify="message = $event">
+        :rules="currentState.rules" :polygon-draft="polygonDraft" @pick="picked"
+        @move-vertex="movePolygonVertex" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
