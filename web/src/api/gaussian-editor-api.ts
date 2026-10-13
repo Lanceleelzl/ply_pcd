@@ -26,6 +26,9 @@ export interface EditorTask {
   process_error?: string; process_results?: EditorResult[]; process_version?: string;
   decimate_status: string; decimate_phase?: string; decimate_progress?: number | null;
   decimate_error?: string;
+  export_status?: string; export_phase?: string; export_progress?: number | null;
+  export_error?: string; export_request?: { version: string; level: number; format: 'compressed_ply' | 'sog' };
+  exports?: Array<{ version: string; level: number; format: 'compressed_ply' | 'sog'; path: string; bytes: number }>;
   versions: Array<{ version: string; created_at_unix: number; history_cursor: number; levels: EditorResult[] }>;
   created_at_unix: number; updated_at_unix?: number;
 }
@@ -88,6 +91,17 @@ export async function decimateEditorTask(taskId: string, level: number, targetCo
 }
 export function editorDownloadUrl(taskId: string, version: string, level: number): string {
   return `${base}/${encodeURIComponent(taskId)}/download/${encodeURIComponent(version)}/${level}`;
+}
+export async function exportEditorResult(taskId: string, version: string, level: number,
+  format: 'compressed_ply' | 'sog'): Promise<EditorTask> {
+  return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/exports`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, level, format }),
+  }));
+}
+export function editorExportUrl(taskId: string, version: string, level: number,
+  format: 'compressed_ply' | 'sog'): string {
+  return `${base}/${encodeURIComponent(taskId)}/exports/${encodeURIComponent(version)}/${level}/${format}`;
 }
 export async function queryEditorCoordinates(taskId: string, point: XYZ, frame: EditorGeography): Promise<{
   independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string }> {

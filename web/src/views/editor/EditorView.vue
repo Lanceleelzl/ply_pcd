@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
-import { createEditorTask, decimateEditorTask, editorDownloadUrl, jumpEditorHistory,
+import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, exportEditorResult, jumpEditorHistory,
   listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
   type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask } from '../../api/gaussian-editor-api';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
@@ -191,14 +191,21 @@ async function decimate(): Promise<void> {
   try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, targetCount.value); panel.value = 'lod'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
-async function download(version: string, level: number): Promise<void> {
+async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
+  if (!task.value) return;
+  try { task.value = await exportEditorResult(task.value.task_id, version, level, format); panel.value = 'results'; }
+  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+}
+async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' = 'ply'): Promise<void> {
   if (!task.value) return;
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
     Promise<{ createWritable(): Promise<{ write(value: Uint8Array): Promise<void>; close(): Promise<void> }> }> }).showSaveFilePicker;
   if (!picker) { message.value = '当前浏览器不支持大文件流式保存，请使用 Chrome 或 Edge'; return; }
   try {
-    const handle = await picker({ suggestedName: `lod-${level}-edited.ply` });
-    const response = await apiFetch(editorDownloadUrl(task.value.task_id, version, level));
+    const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
+    const handle = await picker({ suggestedName: `lod-${level}-edited.${suffix}` });
+    const response = await apiFetch(format === 'ply' ? editorDownloadUrl(task.value.task_id, version, level)
+      : editorExportUrl(task.value.task_id, version, level, format));
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
     const writable = await handle.createWritable();
     const reader = response.body.getReader();
@@ -301,7 +308,8 @@ async function download(version: string, level: number): Promise<void> {
         <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
         <template v-else>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
-          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯 <button type="button" @click="download(version.version, item.level)">下载 PLY</button></p></section>
+          <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template> {{ task.export_error }}</p>
+          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><button type="button" @click="download(version.version, item.level)">下载 PLY</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><button v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)" type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button v-else type="button" :disabled="task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">生成 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button></template></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>

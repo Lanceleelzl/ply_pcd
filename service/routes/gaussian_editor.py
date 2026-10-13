@@ -10,7 +10,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -49,6 +49,12 @@ class DecimateRequest(BaseModel):
     target_count: int = Field(gt=0)
 
 
+class ExportRequest(BaseModel):
+    version: str
+    level: int = Field(ge=0)
+    format: Literal["compressed_ply", "sog"]
+
+
 class EditorTasks(StreamingTasks):
     def __init__(self, runtime_root: Path, converter: list[str], worker: str, retention_hours: int) -> None:
         super().__init__(runtime_root, converter, worker, retention_hours)
@@ -75,7 +81,7 @@ class EditorTasks(StreamingTasks):
                 continue
             status = read_status(directory)
             changed = False
-            for operation in ("process", "decimate"):
+            for operation in ("process", "decimate", "export"):
                 if status.get(f"{operation}_status") in {"queued", "running"}:
                     status[f"{operation}_status"] = "failed"
                     status[f"{operation}_error"] = "服务重启中断了处理；原始文件和已完成成果已保留，请重新提交"
@@ -209,6 +215,42 @@ class EditorTasks(StreamingTasks):
                 status.update(decimate_status="failed", decimate_error=str(error), decimate_progress=None)
                 write_status(directory, status)
 
+    def start_export(self, task_id: str, request: ExportRequest, source_path: str) -> None:
+        job = asyncio.create_task(self._export(task_id, request, source_path))
+        self.running[task_id] = job
+        job.add_done_callback(lambda completed, key=task_id: self.running.pop(key, None))
+
+    async def _export(self, task_id: str, request: ExportRequest, source_path: str) -> None:
+        async with self.semaphore:
+            directory = self.directory(task_id)
+            status = read_status(directory)
+            suffix = ".compressed.ply" if request.format == "compressed_ply" else ".sog"
+            destination = directory / "exports" / request.version / f"lod-{request.level}{suffix}"
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                status.update(export_status="running", export_phase="格式转换中", export_progress=None,
+                              export_error=None)
+                write_status(directory, status)
+                result = await asyncio.to_thread(subprocess.run,
+                    [*self.converter, str(directory / source_path), str(destination)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=7200, check=False)
+                if result.returncode or not destination.is_file():
+                    raise ValueError(result.stderr.strip() or "格式转换失败")
+                probe = probe_dataset(destination)
+                if probe.format != request.format:
+                    raise ValueError("导出格式校验失败")
+                exports = [item for item in status.get("exports", []) if not (
+                    item["version"] == request.version and item["level"] == request.level
+                    and item["format"] == request.format)]
+                exports.append({"version": request.version, "level": request.level,
+                                "format": request.format, "path": destination.relative_to(directory).as_posix(),
+                                "bytes": destination.stat().st_size})
+                status.update(exports=exports, export_status="ready", export_phase="完成", export_progress=100)
+                write_status(directory, status)
+            except Exception as error:
+                status.update(export_status="failed", export_error=str(error), export_progress=None)
+                write_status(directory, status)
+
 
 def create_editor_router(tasks: EditorTasks) -> APIRouter:
     router = APIRouter(prefix="/api/v2/gaussian-editor-tasks")
@@ -241,7 +283,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                                   "source_available": True, "source_expires_at_unix": now + tasks.retention_hours * 3600,
                                   "history": [{"label": "导入模型", "state": initial_state, "at": now}],
                                   "history_cursor": 0, "versions": [], "process_status": "not_requested",
-                                  "decimate_status": "not_requested"}
+                                  "decimate_status": "not_requested", "export_status": "not_requested",
+                                  "exports": []}
         try:
             if input_kind == "lod_group":
                 lods = []
@@ -377,6 +420,35 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         write_status(directory, status)
         tasks.start_decimate(task_id, request.level, request.target_count, version)
         return tasks.present(status)
+
+    @router.post("/{task_id}/exports", status_code=202)
+    async def export(task_id: str, request: ExportRequest):
+        directory, status = tasks.read(task_id)
+        if status.get("status") != "ready" or task_id in tasks.running:
+            raise HTTPException(status_code=409, detail="Editor task is not ready")
+        entry = next((item for group in status.get("versions", []) if group["version"] == request.version
+                      for item in group["levels"] if item["level"] == request.level), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Editor result is unavailable")
+        status.update(export_status="queued", export_phase="等待格式转换", export_progress=None,
+                      export_error=None, export_request=request.model_dump())
+        write_status(directory, status)
+        tasks.start_export(task_id, request, entry["path"])
+        return tasks.present(status)
+
+    @router.get("/{task_id}/exports/{version}/{level}/{format_name}")
+    def download_export(task_id: str, version: str, level: int, format_name: str):
+        directory, status = tasks.read(task_id)
+        entry = next((item for item in status.get("exports", []) if item["version"] == version
+                      and item["level"] == level and item["format"] == format_name), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Editor export is unavailable")
+        path = directory / entry["path"]
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Editor export is missing")
+        suffix = ".compressed.ply" if format_name == "compressed_ply" else ".sog"
+        return FileResponse(path, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited{suffix}')}"})
 
     @router.get("/{task_id}/preview")
     def preview(task_id: str):
