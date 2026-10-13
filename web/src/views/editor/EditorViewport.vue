@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import * as pc from 'playcanvas';
 import { onUnmounted, ref, watch } from 'vue';
 import type { XYZ } from '../../coordinate-math';
-import type { EditorTransform } from '../../api/gaussian-editor-api';
+import type { EditorRule, EditorTransform } from '../../api/gaussian-editor-api';
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform;
+  rules: EditorRule[]; polygonDraft: [number, number][];
   clip: { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
     planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> } }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string] }>();
@@ -16,9 +18,31 @@ const loaded = ref(false);
 const topView = ref(false);
 const query = ref(false);
 const fps = ref(0);
+const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean }>>([]);
+const sceneSize = ref({ width: 1, height: 1 });
 let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
+let boundaryTimer: ReturnType<typeof setInterval> | null = null;
+
+function updateBoundaryLines(): void {
+  if (!engine || !canvas.value) return;
+  const component = engine.application.camera.camera;
+  if (!component) return;
+  const bounds = engine.scene.bounds();
+  const z = (bounds.min.z + bounds.max.z) / 2;
+  const origin = engine.scene.displayOrigin;
+  const project = (vertices: [number, number][], closed = false) => (closed ? [...vertices, vertices[0]] : vertices).map(([x, y]) => {
+    const screen = component.worldToScreen(new pc.Vec3(x - origin[0], y - origin[1], z));
+    return `${screen.x.toFixed(1)},${screen.y.toFixed(1)}`;
+  }).join(' ');
+  const lines = props.rules.flatMap((rule, index) => rule.type === 'polygon'
+    ? [{ key: `rule-${index}`, points: project(rule.points, true), action: rule.action, draft: false }] : []);
+  if (props.polygonDraft.length) lines.push({ key: 'draft', points: project(props.polygonDraft), action: 'keep', draft: true });
+  const width = canvas.value.clientWidth, height = canvas.value.clientHeight;
+  if (width !== sceneSize.value.width || height !== sceneSize.value.height) sceneSize.value = { width, height };
+  if (JSON.stringify(lines) !== JSON.stringify(boundaryLines.value)) boundaryLines.value = lines;
+}
 
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
@@ -53,6 +77,7 @@ watch(() => props.clip, applyClip, { deep: true });
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  if (boundaryTimer) { clearInterval(boundaryTimer); boundaryTimer = null; }
   if (!element || !url) return;
   const request = new AbortController(); aborter = request;
   try {
@@ -64,18 +89,24 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
       undefined, undefined, undefined, undefined, undefined, 'fly');
     applyClip();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
+    boundaryTimer = setInterval(updateBoundaryLines, 50);
   } catch (error) {
     if (!request.signal.aborted) emit('notify', error instanceof Error ? error.message : String(error));
   }
 }, { immediate: true, flush: 'post' });
 watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
 watch(() => props.transform, value => engine?.applyTransform(value), { deep: true });
-onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer); });
+onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer);
+  if (boundaryTimer) clearInterval(boundaryTimer); });
 </script>
 
 <template>
   <div class="editor-scene">
     <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景"></canvas>
+    <svg class="editor-boundary-overlay" :viewBox="`0 0 ${sceneSize.width} ${sceneSize.height}`" aria-hidden="true">
+      <polyline v-for="line in boundaryLines" :key="line.key" :points="line.points"
+        :class="[line.action, { draft: line.draft }]" :fill="line.draft ? 'none' : undefined" />
+    </svg>
     <div class="editor-scene-tools">
       <button type="button" @click="fit">适配视角</button>
       <button type="button" :class="{ active: topView }" @click="toggleTop">{{ topView ? '返回三维' : '俯视' }}</button>
@@ -96,6 +127,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 <style scoped>
 .editor-scene { position: relative; width: 100%; height: 100%; min-height: 0; overflow: hidden; background: #060d17; }
 .editor-scene canvas { display: block; width: 100%; height: 100%; outline: none; }
+.editor-boundary-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.editor-boundary-overlay polyline { fill: #56dd9a18; stroke: #56dd9a; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.editor-boundary-overlay polyline.remove { fill: #ff826a18; stroke: #ff826a; }
+.editor-boundary-overlay polyline.draft { stroke-dasharray: 6 4; }
 .editor-scene canvas:focus-visible { outline: 2px solid #78d6b8; outline-offset: -2px; }
 .editor-scene-tools { position: absolute; z-index: 3; top: 12px; left: 12px; right: 96px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .editor-scene-tools :deep(*) { pointer-events: auto; }
