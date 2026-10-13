@@ -3,6 +3,7 @@ import type { TransformParameters, XYZ } from '../../coordinate-math';
 import type { PreviewCloud } from '../../point-cloud';
 import { RegistrationApplication } from './Application';
 import { InputController } from './InputController';
+import { SceneNavigationController } from './SceneNavigationController';
 import { ViewportCameraController } from './ViewportCameraController';
 import { SingleModelScene } from '../modules/SingleModelScene';
 import { SingleGaussianDisplay } from '../modules/SingleGaussianDisplay';
@@ -20,6 +21,7 @@ export class SingleModelEngine {
   readonly scene: SingleModelScene;
   readonly camera: ViewportCameraController;
   readonly input: InputController;
+  readonly flyNavigation: SceneNavigationController | null = null;
   readonly gaussian: SingleGaussianDisplay;
   readonly tools = new ToolManager<SingleModelTool>();
   readonly clippingHandles: ClippingHandles;
@@ -52,7 +54,8 @@ export class SingleModelEngine {
     onToolChanged?: (tool: SingleModelTool) => void,
     private readonly onPickingChanged?: (picking: boolean) => void,
     private readonly onCapture?: (capture: { point: XYZ; x: number; y: number } | null) => void,
-    private readonly onSceneAxes?: (labels: Array<{ text: string; x: number; y: number; color: string }>) => void) {
+    private readonly onSceneAxes?: (labels: Array<{ text: string; x: number; y: number; color: string }>) => void,
+    navigationMode: 'orbit' | 'fly' = 'orbit') {
     this.application = new RegistrationApplication({ canvas, viewport: canvas.parentElement! });
     try {
       this.scene = new SingleModelScene(this.application.app, cloud, origin, transform);
@@ -118,6 +121,7 @@ export class SingleModelEngine {
         () => this.clipHelpersVisible, () => {}, { set() {} },
       );
       this.input = new InputController(canvas, this.camera, {
+        navigationMode: () => navigationMode,
         pointerMove: event => {
           if (this.queryPicking && this.tools.isActive('coordinate-query')) {
             canvas.style.cursor = 'crosshair';
@@ -166,6 +170,17 @@ export class SingleModelEngine {
           || (event.button === 0 && this.clipGizmoInput.hovered),
         dragBlocked: () => this.clippingHandles.dragging || this.gizmoTransforming || this.queryDragging,
       });
+      if (navigationMode === 'fly') {
+        this.flyNavigation = new SceneNavigationController({ canvas,
+          camera: { move: (forward, right, up) => this.camera.moveByLocal(forward, right, up),
+            look: (dx, dy) => this.camera.lookByPixels(dx, dy),
+            pan: (dx, dy) => this.camera.panByPixels(dx, dy),
+            dolly: delta => this.camera.dolly(delta) },
+          speed: () => Math.max(this.scene.baseDiagonal * 0.25, 0.1),
+          blocked: () => this.tools.isActive('coordinate-query') && this.queryPicking
+            || this.clippingHandles.dragging || this.gizmoTransforming || this.queryDragging,
+          keyboardOnly: true });
+      }
       this.application.app.on('update', this.updateHelpers, this);
     } catch (error) {
       this.application.destroy();
@@ -353,11 +368,13 @@ export class SingleModelEngine {
     this.camera.setViewDirection(new pc.Vec3(...up), new pc.Vec3(...north));
     this.camera.setProjection(true);
   }
+
+  perspectiveView(): void { this.camera.setProjection(false); this.camera.fit(); }
   destroy(): void {
     this.application.app.off('update', this.updateHelpers, this);
     this.clipGizmoInput.destroy(); this.clipTranslate.destroy(); this.clipRotate.destroy();
     this.queryGizmo.destroy(); this.queryAnchor.destroy();
-    this.input.destroy(); this.clippingHandles.destroy(); this.tools.destroy(); this.clipBox.destroy();
+    this.flyNavigation?.destroy(); this.input.destroy(); this.clippingHandles.destroy(); this.tools.destroy(); this.clipBox.destroy();
     this.gaussian.destroy(); this.scene.destroy(); this.application.destroy();
   }
 }

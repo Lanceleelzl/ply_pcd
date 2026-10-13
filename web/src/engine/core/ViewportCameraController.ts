@@ -8,6 +8,7 @@ export interface ViewportBounds {
 }
 
 export interface ViewportInputDelegate {
+  navigationMode?(): 'orbit' | 'fly';
   orbitEnabled?(): boolean;
   pointerMove?(event: PointerEvent): boolean;
   pointerLeave?(): void;
@@ -62,6 +63,29 @@ export class ViewportCameraController {
 
   orbitByPixels(dx: number, dy: number): void {
     this.orbit(dx * 180 / Math.max(1, this.canvas.clientWidth), dy * 180 / Math.max(1, this.canvas.clientHeight));
+  }
+
+  lookByPixels(dx: number, dy: number): void {
+    const position = this.camera.getPosition().clone();
+    this.orbitByPixels(dx, dy);
+    this.target.copy(position).sub(this.direction.clone().mulScalar(this.distance));
+    this.update();
+  }
+
+  moveByLocal(forward: number, right: number, vertical: number): void {
+    const rightAxis = new pc.Vec3().cross(this.up, this.direction).normalize();
+    this.target.add(this.direction.clone().mulScalar(-forward))
+      .add(rightAxis.mulScalar(right)).add(this.zUp.clone().mulScalar(vertical));
+    this.update();
+  }
+
+  dolly(deltaY: number): void {
+    if (this.camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC) {
+      this.zoom(deltaY);
+      return;
+    }
+    this.target.add(this.direction.clone().mulScalar(deltaY * this.baseDiagonal * 0.002));
+    this.update();
   }
 
   panByPixels(dx: number, dy: number): void {

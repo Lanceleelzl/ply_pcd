@@ -54,6 +54,14 @@ def create_web_router(
     async def merge_task_page(task_id: str) -> Response:
         return web_index()
 
+    @router.get("/editor")
+    async def editor_home() -> Response:
+        return web_index()
+
+    @router.get("/editor/{task_id}")
+    async def editor_task_page(task_id: str) -> Response:
+        return web_index()
+
     @router.get("/registration/{session_id}")
     async def model_registration_page(session_id: str) -> Response:
         status = read_status(session_directory(session_id))

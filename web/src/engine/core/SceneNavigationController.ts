@@ -11,6 +11,7 @@ export interface SceneNavigationOptions {
   canvas: HTMLCanvasElement;
   speed: () => number;
   blocked?: () => boolean;
+  keyboardOnly?: boolean;
   frame?: (callback: FrameRequestCallback) => number;
   cancelFrame?: (handle: number) => void;
 }
@@ -38,8 +39,8 @@ export class SceneNavigationController {
   constructor(private readonly options: SceneNavigationOptions) {
     const { canvas } = options;
     const { signal } = this.events;
-    this.frame = options.frame ?? requestAnimationFrame;
-    this.cancelFrame = options.cancelFrame ?? cancelAnimationFrame;
+    this.frame = options.frame ?? (callback => window.requestAnimationFrame(callback));
+    this.cancelFrame = options.cancelFrame ?? (handle => window.cancelAnimationFrame(handle));
     canvas.tabIndex = canvas.tabIndex < 0 ? 0 : canvas.tabIndex;
     canvas.addEventListener('keydown', event => {
       if (!/^Key[WASDQE]$/.test(event.code) && event.code !== 'ShiftLeft' && event.code !== 'ShiftRight') return;
@@ -50,14 +51,14 @@ export class SceneNavigationController {
     canvas.addEventListener('keyup', event => { this.keys.delete(event.code); }, { signal });
     canvas.addEventListener('blur', () => this.clear(), { signal });
     window.addEventListener('blur', () => this.clear(), { signal });
-    canvas.addEventListener('pointerdown', event => {
+    if (!options.keyboardOnly) canvas.addEventListener('pointerdown', event => {
       if (this.blocked() || (event.button !== 0 && event.button !== 1)) return;
       canvas.focus();
       this.dragging = event.button === 1 ? 'pan' : 'look';
       this.pointer = { x: event.clientX, y: event.clientY };
       if (event.button === 1) event.preventDefault();
     }, { signal });
-    window.addEventListener('pointermove', event => {
+    if (!options.keyboardOnly) window.addEventListener('pointermove', event => {
       if (!this.dragging || this.blocked()) return;
       const dx = event.clientX - this.pointer.x;
       const dy = event.clientY - this.pointer.y;
@@ -65,8 +66,8 @@ export class SceneNavigationController {
       if (this.dragging === 'look') options.camera.look(dx, dy);
       else options.camera.pan(dx, dy);
     }, { signal });
-    window.addEventListener('pointerup', () => { this.dragging = null; }, { signal });
-    canvas.addEventListener('wheel', event => {
+    if (!options.keyboardOnly) window.addEventListener('pointerup', () => { this.dragging = null; }, { signal });
+    if (!options.keyboardOnly) canvas.addEventListener('wheel', event => {
       if (this.blocked()) return;
       event.preventDefault();
       options.camera.dolly(event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1));

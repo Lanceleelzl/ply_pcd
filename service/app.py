@@ -37,6 +37,7 @@ from service.routes.coarse_registrations import create_coarse_registration_route
 from service.routes.sessions import create_session_router
 from service.routes.streaming import StreamingTasks, create_streaming_resource_router, create_streaming_router
 from service.routes.gaussian_merge import MergeTasks, create_merge_router, create_merge_resource_router
+from service.routes.gaussian_editor import EditorTasks, create_editor_router, create_editor_resource_router
 from service.routes.web import create_web_router
 from service.routes.uploads import create_upload_router
 from service.routes.gaussian_resources import create_gaussian_resource_router
@@ -87,6 +88,7 @@ _running_processes: dict[str, asyncio.subprocess.Process] = {}
 _object_storage = create_object_storage(OBJECT_STORAGE_SETTINGS)
 _streaming_tasks = StreamingTasks(RUNTIME_ROOT, [NODE_PATH, SPLAT_TRANSFORM_PATH], WORKER_PATH, SOURCE_RETENTION_HOURS)
 _merge_tasks = MergeTasks(RUNTIME_ROOT, [NODE_PATH, SPLAT_TRANSFORM_PATH])
+_editor_tasks = EditorTasks(RUNTIME_ROOT, [NODE_PATH, SPLAT_TRANSFORM_PATH], WORKER_PATH, SOURCE_RETENTION_HOURS)
 
 
 def _start_model_preview(session_id: str, command: list[str]) -> asyncio.Task[None]:
@@ -145,6 +147,8 @@ app.include_router(create_streaming_resource_router(_streaming_tasks))
 app.include_router(create_streaming_router(_streaming_tasks))
 app.include_router(create_merge_resource_router(_merge_tasks))
 app.include_router(create_merge_router(_merge_tasks))
+app.include_router(create_editor_resource_router(_editor_tasks))
+app.include_router(create_editor_router(_editor_tasks))
 
 
 def _write_v2_history(session_directory: Path, session_status: dict[str, Any]) -> dict[str, Any] | None:
@@ -340,6 +344,7 @@ async def _cleanup_loop() -> None:
 async def start_cleanup() -> None:
     _streaming_tasks.recover()
     _merge_tasks.recover()
+    _editor_tasks.recover()
     recover_registration_queue(
         RUNTIME_ROOT,
         read_status=_read_status,

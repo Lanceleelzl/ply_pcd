@@ -70,7 +70,8 @@ def keeps_point(rules: list[dict], point: tuple[float, float, float]) -> bool:
 
 
 def clip_ply(source: Path, destination: Path, rules: list[dict],
-             progress: Callable[[int, int], None] | None = None) -> int:
+             progress: Callable[[int, int], None] | None = None,
+             to_common: Callable[[tuple[float, float, float]], tuple[float, float, float]] | None = None) -> int:
     """Write a new binary PLY while copying every retained Gaussian attribute unchanged."""
     validate_rules(rules)
     if destination.resolve() == source.resolve() or destination.exists():
@@ -101,8 +102,9 @@ def clip_ply(source: Path, destination: Path, rules: list[dict],
                 record = memoryview(data)[index * layout.stride:(index + 1) * layout.stride]
                 point = tuple(struct.unpack_from("<" + field[0], record, field[1])[0]
                               for field in (x_field, y_field, z_field))
-                if (not keep_rules or any(contains(rule, point) for rule in keep_rules)) and not any(
-                    contains(rule, point) for rule in remove_rules
+                common_point = to_common(point) if to_common else point
+                if (not keep_rules or any(contains(rule, common_point) for rule in keep_rules)) and not any(
+                    contains(rule, common_point) for rule in remove_rules
                 ):
                     kept.extend(record)
                     written += 1

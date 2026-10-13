@@ -28,6 +28,11 @@ const workspace = useWorkspaceStore();
           <p>对齐多个高斯模型，在俯视图绘制重叠取舍与删减范围，逐层合并 PLY，并按需生成流式数据。</p>
           <strong>进入工具 <span aria-hidden="true">→</span></strong>
         </RouterLink>
+        <RouterLink class="toolkit-card" to="/editor">
+          <h2>高斯编辑</h2>
+          <p>浏览单个高斯模型或 LOD 文件组，抽稀工作层，设置空间裁剪边界并将规则应用到选定层级。</p>
+          <strong>进入工具 <span aria-hidden="true">→</span></strong>
+        </RouterLink>
       </div>
       <small class="toolkit-workspace">当前工作区：{{ workspace.workspaceId.slice(0, 8) }}</small>
     </div>
