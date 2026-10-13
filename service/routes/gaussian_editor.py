@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from service.auth import current_principal
@@ -199,7 +199,8 @@ class EditorTasks(StreamingTasks):
                     write_status(directory, status)
                 versions = status.get("versions", [])
                 versions.append({"version": version, "created_at_unix": time.time(),
-                                 "history_cursor": status["history_cursor"], "levels": results})
+                                 "history_cursor": status["history_cursor"], "state": state,
+                                 "levels": results})
                 status.update(versions=versions, process_status="ready", process_phase="完成",
                               process_level=None, process_progress=100)
                 write_status(directory, status)
@@ -508,6 +509,29 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
             raise HTTPException(status_code=404, detail="Editor result is missing")
         return FileResponse(path, media_type="application/octet-stream", headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited.ply')}"})
+
+    @router.get("/{task_id}/manifest/{version}/{level}/{format_name}")
+    def result_manifest(task_id: str, version: str, level: int, format_name: str):
+        directory, status = tasks.read(task_id)
+        if format_name not in {"ply", "compressed_ply", "sog"}:
+            raise HTTPException(status_code=422, detail="Unsupported result format")
+        group = next((item for item in status.get("versions", []) if item["version"] == version), None)
+        result = next((item for item in group["levels"] if item["level"] == level), None) if group else None
+        if not result:
+            raise HTTPException(status_code=404, detail="Editor result is unavailable")
+        if format_name != "ply" and not any(item["version"] == version and item["level"] == level
+                                            and item["format"] == format_name for item in status.get("exports", [])):
+            raise HTTPException(status_code=404, detail="Editor export is unavailable")
+        snapshot = group.get("state")
+        if snapshot is None and group.get("history_cursor", -1) < len(status["history"]):
+            snapshot = status["history"][group["history_cursor"]]["state"]
+        return JSONResponse({"task_id": task_id, "version": version, "source_name": status["filename"],
+                             "source_format": status["format"], "source_coordinate_hints": status.get("coordinate_metadata"),
+                             "level": level, "source_gaussians": result["source_count"],
+                             "result_gaussians": result["count"], "result_format": format_name,
+                             "edit_state": snapshot,
+                             "coordinate_note": "输出格式可能不保留源 PLY 坐标注释；请以本说明中的坐标框架为准。高程基准未自动转换。"},
+                            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited-{format_name}-manifest.json')}"})
 
     return router
 

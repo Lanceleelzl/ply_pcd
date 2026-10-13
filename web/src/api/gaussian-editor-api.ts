@@ -105,6 +105,10 @@ export function editorExportUrl(taskId: string, version: string, level: number,
   format: 'compressed_ply' | 'sog'): string {
   return `${base}/${encodeURIComponent(taskId)}/exports/${encodeURIComponent(version)}/${level}/${format}`;
 }
+export function editorManifestUrl(taskId: string, version: string, level: number,
+  format: 'ply' | 'compressed_ply' | 'sog'): string {
+  return `${base}/${encodeURIComponent(taskId)}/manifest/${encodeURIComponent(version)}/${level}/${format}`;
+}
 export async function queryEditorCoordinates(taskId: string, point: XYZ, frame: EditorGeography): Promise<{
   independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string }> {
   return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/coordinate-query`, {

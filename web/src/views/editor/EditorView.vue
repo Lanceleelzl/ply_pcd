@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
-import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, exportEditorResult, jumpEditorHistory,
+import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl,
+  exportEditorResult, jumpEditorHistory,
   listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
   type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
   type EditorTransform } from '../../api/gaussian-editor-api';
@@ -254,6 +255,19 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     await writable.close(); message.value = '成果下载完成';
   } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
+async function downloadManifest(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog'): Promise<void> {
+  if (!task.value) return;
+  try {
+    const response = await apiFetch(editorManifestUrl(task.value.task_id, version, level, format));
+    if (!response.ok) throw new Error(`坐标说明下载失败：HTTP ${response.status}`);
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `lod-${level}-edited-${format}-manifest.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+}
 </script>
 
 <template>
@@ -360,7 +374,7 @@ async function download(version: string, level: number, format: 'ply' | 'compres
         <template v-else>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template> {{ task.export_error }}</p>
-          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><button type="button" @click="download(version.version, item.level)">下载 PLY</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><button v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)" type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button v-else type="button" :disabled="task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">生成 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button></template></p></section>
+          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><button type="button" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">生成 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button></template></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
