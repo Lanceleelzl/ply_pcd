@@ -327,15 +327,31 @@ class EditorTasks(StreamingTasks):
                 if target_count >= source_count:
                     raise ValueError("抽稀目标数量必须小于原层级")
                 destination = workspace / "work-lod.ply"
+                hints = read_ply_coordinates(source)
+                comments = ({"source": hints["source"]} if hints["source"] else {})
+                if hints["epsg"]:
+                    comments["epsg"] = hints["epsg"]
+                for kind in ("offset", "shift", "scale"):
+                    comments.update({f"{kind}{axis}": value for axis, value in zip("xyz", hints[kind])
+                                     if value is not None})
+                raw_destination = workspace / "work-lod-raw.ply" if comments else destination
                 workspace.mkdir(parents=True, exist_ok=True)
                 status.update(decimate_phase="抽稀并写出")
                 write_status(directory, status)
-                command = [*self.converter, str(source), "--decimate", str(target_count), str(destination)]
+                command = [*self.converter, str(source), "--decimate", str(target_count), str(raw_destination)]
                 result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True,
                                                  encoding="utf-8", errors="replace", timeout=7200, check=False)
-                if result.returncode != 0 or not destination.is_file():
+                if result.returncode != 0 or not raw_destination.is_file():
                     raise ValueError(result.stderr.strip() or "抽稀处理失败")
+                if comments:
+                    status.update(decimate_phase="保留坐标头信息")
+                    write_status(directory, status)
+                    await asyncio.to_thread(clip_ply, raw_destination, destination, [],
+                                            strip_coordinates=True, coordinate_comments=comments)
                 count = read_layout(destination).count
+                output_hints = read_ply_coordinates(destination)
+                if any(output_hints[key] != hints[key] for key in ("source", "epsg", "offset", "shift", "scale")):
+                    raise ValueError("抽稀工作层坐标头信息校验失败")
                 derived = status.get("derived_lods", [])
                 derived.append({"version": version, "source_level": level, "source_count": source_count,
                                 "target_count": target_count, "count": count,
@@ -552,7 +568,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         state = status["history"][status["history_cursor"]]["state"]
         validate_rules(state["rules"])
         version = str(uuid.uuid4())
-        status.update(process_status="queued", process_version=version, process_completed=0,
+        status.update(process_status="queued", process_phase="等待处理", process_progress=None, process_level=None,
+                      process_version=version, process_completed=0,
                       process_total=len(levels), process_results=[], process_error=None)
         write_status(directory, status)
         tasks.start_process(task_id, levels, state, version)
@@ -566,7 +583,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         if request.level not in tasks.levels(status, directory):
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
         version = str(uuid.uuid4())
-        status.update(decimate_status="queued", decimate_version=version, decimate_error=None)
+        status.update(decimate_status="queued", decimate_phase="等待抽稀", decimate_progress=None,
+                      decimate_version=version, decimate_error=None)
         write_status(directory, status)
         tasks.start_decimate(task_id, request.level, request.target_count, version)
         return tasks.present(status)
