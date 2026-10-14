@@ -55,6 +55,12 @@ const useDerived = ref(false);
 const lastPoint = ref<XYZ | null>(null);
 const polygonDraft = ref<[number, number][]>([]);
 const editingPolygon = ref<number | null>(null);
+const editingVolume = ref<number | null>(null);
+const volumeDraft = ref<Extract<EditorRule, { type: 'sphere' | 'box' }> | null>(null);
+function copyVolume(rule: Extract<EditorRule, { type: 'sphere' | 'box' }>): typeof rule {
+  return rule.type === 'sphere' ? { ...rule, center: [...rule.center] }
+    : { ...rule, center: [...rule.center], size: [...rule.size], rotation: [...rule.rotation] };
+}
 const boundaryAction = ref<'keep' | 'remove'>('keep');
 const sphereRadius = ref(1);
 const boxSize = ref<XYZ>([1, 1, 1]);
@@ -64,6 +70,8 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
+const displayRules = computed(() => currentState.value.rules.map((rule, index) =>
+  index === editingVolume.value && volumeDraft.value ? volumeDraft.value : rule));
 watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.display_clip ?? null)], () => {
   clip.value = currentState.value.display_clip ? copyClip(currentState.value.display_clip) : defaultClip();
 }, { immediate: true });
@@ -93,6 +101,8 @@ async function refresh(): Promise<void> {
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
+        editingVolume.value = null;
+        volumeDraft.value = null;
         geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography ?? {
           reference: [0, 0, 0],
           projected_origin: loaded.coordinate_metadata?.offset.map(value => Number(value ?? 0)) ?? [0, 0, 0],
@@ -160,6 +170,35 @@ function editPolygon(index: number): void {
   boundaryAction.value = rule.action;
   polygonDraft.value = rule.points.map(point => [...point]);
 }
+function editVolume(index: number): void {
+  const rule = currentState.value.rules[index];
+  if (rule.type === 'polygon') return;
+  editingVolume.value = index;
+  volumeDraft.value = copyVolume(rule);
+}
+function moveVolumeCenter(point: [number, number]): void {
+  if (!volumeDraft.value) return;
+  volumeDraft.value.center[0] = point[0];
+  volumeDraft.value.center[1] = point[1];
+}
+async function saveVolume(): Promise<void> {
+  if (editingVolume.value === null || !volumeDraft.value) return;
+  const rule = copyVolume(volumeDraft.value);
+  if (!rule.center.every(Number.isFinite) || (rule.type === 'sphere'
+    ? !Number.isFinite(rule.radius) || rule.radius <= 0
+    : !rule.size.every(value => Number.isFinite(value) && value > 0)
+      || !rule.rotation.every(Number.isFinite) || Math.hypot(...rule.rotation) < 1e-8)) {
+    message.value = '请输入有效的边界中心、尺寸及旋转参数'; return;
+  }
+  if (rule.type === 'box') {
+    const length = Math.hypot(...rule.rotation);
+    rule.rotation = rule.rotation.map(value => value / length) as [number, number, number, number];
+  }
+  const index = editingVolume.value;
+  if (await saveEdit(`修改${rule.type === 'sphere' ? '球形' : '长方体'}边界`, {
+    ...currentState.value, rules: currentState.value.rules.map((item, ruleIndex) => ruleIndex === index ? rule : item),
+  })) { editingVolume.value = null; volumeDraft.value = null; }
+}
 function addSphere(): void {
   if (!lastPoint.value) { message.value = '先在场景中取一个球心'; return; }
   addRule({ type: 'sphere', action: boundaryAction.value, center: [...lastPoint.value], radius: sphereRadius.value }, '新增球形边界');
@@ -177,6 +216,7 @@ function addBox(): void {
     rotation }, '新增长方体边界');
 }
 function removeRule(index: number): void {
+  editingVolume.value = null; volumeDraft.value = null;
   void saveEdit('移除边界', { ...currentState.value, rules: currentState.value.rules.filter((_, i) => i !== index) });
 }
 function picked(point: XYZ): void {
@@ -235,6 +275,7 @@ async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
 async function jump(index: number): Promise<void> {
   if (!task.value) return;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
+    editingVolume.value = null; volumeDraft.value = null;
     if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
     const selectedTransform = task.value.history[index]?.state.transform ?? identityTransform();
     transformDraft.value = { translation: [...selectedTransform.translation],
@@ -327,8 +368,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
-        :rules="currentState.rules" :polygon-draft="polygonDraft" :large-original-bytes="largeOriginalBytes" @pick="picked"
-        @move-vertex="movePolygonVertex" @notify="message = $event">
+        :rules="displayRules" :polygon-draft="polygonDraft" :editing-volume-index="editingVolume" :large-original-bytes="largeOriginalBytes" @pick="picked"
+        @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
@@ -371,7 +412,21 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <div class="editor-size"><label v-for="(_, axis) in boxRotation" :key="axis">{{ ['X','Y','Z'][axis] }} 旋转角度<input v-model.number="boxRotation[axis]" type="number" step="any"></label></div>
           <button type="button" :disabled="!lastPoint || boxSize.some(value => value <= 0)" @click="addBox">以取点为中心添加长方体</button>
           <h3>已有边界</h3><p v-if="!currentState.rules.length">暂无边界</p>
-          <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button v-if="rule.type === 'polygon'" type="button" @click="editPolygon(index)">编辑顶点</button><button type="button" @click="removeRule(index)">移除</button></div>
+          <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button v-if="rule.type === 'polygon'" type="button" @click="editPolygon(index)">编辑顶点</button><button v-else type="button" @click="editVolume(index)">编辑体积</button><button type="button" @click="removeRule(index)">移除</button></div>
+          <template v-if="volumeDraft">
+            <h3>编辑{{ volumeDraft.type === 'sphere' ? '球形' : '长方体' }}边界</h3>
+            <p>拖动场景中的中心手柄调整 X／Y；Z 可在下方输入。保存后写入一条历史记录。</p>
+            <label>范围规则<select v-model="volumeDraft.action"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
+            <div class="editor-size"><label v-for="(_, axis) in volumeDraft.center" :key="axis">中心 {{ ['X','Y','Z'][axis] }}<input v-model.number="volumeDraft.center[axis]" type="number" step="any"></label></div>
+            <label v-if="volumeDraft.type === 'sphere'">球半径<input v-model.number="volumeDraft.radius" type="number" min="0.001" step="any"></label>
+            <template v-else>
+              <div class="editor-size"><label v-for="(_, axis) in volumeDraft.size" :key="axis">{{ ['X','Y','Z'][axis] }} 尺寸<input v-model.number="volumeDraft.size[axis]" type="number" min="0.001" step="any"></label></div>
+              <p>旋转四元数按 W／X／Y／Z 输入，保存时归一化。</p>
+              <div class="editor-size editor-quaternion"><label v-for="(_, axis) in volumeDraft.rotation" :key="axis">{{ ['W','X','Y','Z'][axis] }}<input v-model.number="volumeDraft.rotation[axis]" type="number" step="any"></label></div>
+            </template>
+            <button type="button" @click="saveVolume">保存体积边界</button>
+            <button type="button" @click="editingVolume = null; volumeDraft = null">取消编辑</button>
+          </template>
         </template>
         <template v-else-if="panel === 'slice'">
           <p>剖切仅改变场景显示；裁剪导出请使用「边界」规则。</p>
@@ -436,6 +491,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .editor-panel label { display: block; margin: 10px 0; }.editor-panel :is(input[type=number], select) { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
 .editor-panel input[type=checkbox] { margin-right: 7px; }.editor-panel p { color: #c0d1e0; line-height: 1.45; }
 .editor-size { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }.editor-rule { display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid #324b63; }
+.editor-quaternion { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .editor-clip-row { display: grid; grid-template-columns: 20px 1fr 1fr; gap: 6px; margin: 6px 0; }.editor-clip-row input { min-width: 0; padding: 6px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
 .editor-vertex-row { grid-template-columns: 20px 1fr 1fr auto; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
