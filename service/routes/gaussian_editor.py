@@ -112,12 +112,32 @@ def exported_gaussian_count(path: Path, format_name: str, entrypoint: str) -> in
     if format_name == "sog":
         with zipfile.ZipFile(path) as archive:
             count = json.loads(archive.read(entrypoint)).get("count")
+            if archive.testzip() is not None:
+                raise ValueError("SOG 压缩包校验失败")
     else:
         with path.open("rb") as stream:
-            header = stream.read(256 * 1024).split(b"end_header", 1)[0]
-        counts = [int(line.split()[2]) for line in header.splitlines()
+            header = stream.read(256 * 1024)
+        marker = header.find(b"end_header\n")
+        if marker < 0:
+            raise ValueError("Compressed PLY 头文件不完整")
+        data_start = marker + len(b"end_header\n")
+        type_bytes = {"char": 1, "uchar": 1, "short": 2, "ushort": 2,
+                      "int": 4, "uint": 4, "float": 4, "double": 8}
+        elements: list[list[int]] = []
+        for line in header[:marker].decode("ascii").splitlines():
+            fields = line.split()
+            if fields[:2] == ["element", "chunk"] or fields[:2] == ["element", "vertex"]:
+                elements.append([int(fields[2]), 0])
+            elif fields[:1] == ["property"] and elements:
+                if len(fields) != 3 or fields[1] not in type_bytes:
+                    raise ValueError("Compressed PLY 含有不支持的属性")
+                elements[-1][1] += type_bytes[fields[1]]
+        counts = [int(line.split()[2]) for line in header[:marker].splitlines()
                   if line.startswith(b"element vertex ")]
-        count = counts[0] if len(counts) == 1 else None
+        count = counts[0] if len(counts) == 1 and len(elements) == 2 else None
+        if any(item[0] < 0 or item[1] <= 0 for item in elements) or (
+                data_start + sum(item[0] * item[1] for item in elements) != path.stat().st_size):
+            raise ValueError("Compressed PLY 数据长度与头文件不一致")
     if type(count) is not int or count < 0:
         raise ValueError("导出成果缺少有效的高斯数量")
     return count
@@ -348,11 +368,15 @@ class EditorTasks(StreamingTasks):
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=7200, check=False)
                 if result.returncode or not destination.is_file():
                     raise ValueError(result.stderr.strip() or "格式转换失败")
+                status.update(export_phase="成果校验中")
+                write_status(directory, status)
                 probe = probe_dataset(destination)
                 if probe.format != request.format:
                     raise ValueError("导出格式校验失败")
                 source_count = read_layout(directory / source_path).count
-                if exported_gaussian_count(destination, request.format, probe.entrypoint) != source_count:
+                output_count = await asyncio.to_thread(exported_gaussian_count, destination, request.format,
+                                                       probe.entrypoint)
+                if output_count != source_count:
                     raise ValueError("导出成果高斯数量与 PLY 成果不一致")
                 exports = [item for item in status.get("exports", []) if not (
                     item["version"] == request.version and item["level"] == request.level
