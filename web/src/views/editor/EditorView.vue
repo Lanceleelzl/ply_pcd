@@ -89,9 +89,11 @@ const largeOriginalBytes = computed(() => {
   return bytes > 256 * 1024 * 1024 ? bytes : 0;
 });
 const levelCount = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.count :
-  selectedLod.value?.count ?? (selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
+  selectedLod.value?.count ?? task.value?.level_counts?.[workLevel.value] ?? (selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
   ? task.value?.metadata?.source_point_count : undefined));
+const largeOriginalCount = computed(() => !useDerived.value && task.value?.input_kind === 'dataset'
+  && (levelCount.value ?? 0) > 20_000_000 ? levelCount.value : 0);
 
 async function refresh(): Promise<void> {
   const id = route.params.taskId;
@@ -101,12 +103,15 @@ async function refresh(): Promise<void> {
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
+        workLevel.value = loaded.input_kind === 'dataset' ? loaded.available_levels.at(-1) ?? 0 : loaded.available_levels[0] ?? 0;
+        useDerived.value = false;
         editingVolume.value = null;
         volumeDraft.value = null;
         geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography ?? {
           reference: [0, 0, 0],
           projected_origin: loaded.coordinate_metadata?.offset.map(value => Number(value ?? 0)) ?? [0, 0, 0],
-          axes: [1, 2, 3], metres_per_unit: 1, source_epsg: Number(loaded.coordinate_metadata?.epsg ?? 0),
+          axes: loaded.coordinate_metadata?.axes ?? [1, 2, 3], metres_per_unit: 1,
+          source_epsg: Number(loaded.coordinate_metadata?.epsg ?? 0),
         } as EditorGeography);
         coordinateResult.value = null;
         transformDraft.value = structuredClone(loaded.history[loaded.history_cursor]?.state.transform ?? identityTransform());
@@ -380,7 +385,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
-        :rules="displayRules" :polygon-draft="polygonDraft" :editing-volume-index="editingVolume" :large-original-bytes="largeOriginalBytes" @pick="picked"
+        :rules="displayRules" :polygon-draft="polygonDraft" :editing-volume-index="editingVolume"
+        :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
         @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
         @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event">
@@ -403,6 +409,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
           <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，建议先抽稀再浏览；直接加载前会再次提示。</p>
+          <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，建议选择较粗 LOD 或先抽稀；直接加载前会再次提示。</p>
           <label>抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>

@@ -8,6 +8,7 @@ import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
+  largeOriginalCount?: number;
   rules: EditorRule[]; polygonDraft: [number, number][]; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]];
@@ -321,7 +322,7 @@ function endBoxRotation(event: PointerEvent): void {
 
 async function displayGaussian(confirmed = false): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
-  if (props.largeOriginalBytes && !confirmed) { confirmLargeLoad.value = true; return; }
+  if ((props.largeOriginalBytes || props.largeOriginalCount) && !confirmed) { confirmLargeLoad.value = true; return; }
   confirmLargeLoad.value = false;
   loading.value = true;
   try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod); loaded.value = true; }
@@ -414,7 +415,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     </div>
     <div v-if="confirmLargeLoad" class="editor-load-backdrop">
       <div class="editor-load-dialog" role="alertdialog" aria-modal="true" aria-label="加载大文件确认">
-        <p>原始文件约 {{ (largeOriginalBytes! / 1048576).toFixed(1) }} MiB，直接加载可能耗尽浏览器内存。建议先生成轻量工作层。</p>
+        <p>{{ largeOriginalCount ? `当前层约 ${largeOriginalCount.toLocaleString()} 个高斯` : `原始文件约 ${(largeOriginalBytes! / 1048576).toFixed(1)} MiB` }}，直接加载可能耗尽浏览器内存。建议选择较粗 LOD 或先生成轻量工作层。</p>
         <button type="button" @click="confirmLargeLoad = false">取消加载</button>
         <button type="button" @click="displayGaussian(true)">仍要加载原件</button>
       </div>

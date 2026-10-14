@@ -1,7 +1,8 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
-from service.ply_coordinates import read_ply_coordinates
+from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
 
 
 class PlyCoordinateTests(unittest.TestCase):
@@ -33,3 +34,21 @@ class PlyCoordinateTests(unittest.TestCase):
                            (b"ply\n" + b"a" * (1024 * 1024) + b"\nend_header\n", "model.ply"),
                            (b"ply\ncomment epsg 32651\nend_header\n", "model.sog")):
             self.assertEqual(self.read(data, name)["epsg"], "")
+
+    def test_lcc_geographic_hints_use_reader_axis_transform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in ("lcc", "lcc2"):
+                path = Path(directory) / f"scene.{suffix}"
+                path.write_text(json.dumps({"epsg": 32650, "offset": [788279.625, 3152314.25, 64.2993],
+                                            "shift": [0, 0, 0], "scale": [1, 1, 1], "dataType": "L2Pro"}),
+                                encoding="utf-8")
+                hints = read_model_coordinates(path)
+                self.assertEqual(hints["epsg"], "32650")
+                self.assertEqual(hints["offset"], ["788279.625", "3152314.25", "64.2993"])
+                self.assertEqual(hints["axes"], [-1, 3, 2])
+
+    def test_lcc_result_does_not_claim_converted_ply_has_source_axes(self):
+        from service.routes.gaussian_editor import output_coordinate_comments
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "converted.ply"
+            self.assertEqual(output_coordinate_comments(source, None, True, "lcc2"), ("manifest", None))

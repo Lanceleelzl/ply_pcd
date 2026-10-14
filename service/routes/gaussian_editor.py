@@ -27,7 +27,7 @@ from service.dataset_preparation import _convert_to_ply, _ply_vertex_count
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
-from service.ply_coordinates import read_ply_coordinates
+from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
 from service.routes.streaming import StreamingTasks
 from service.schemas import TransformParameters
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
@@ -80,9 +80,10 @@ class ExportRequest(BaseModel):
 
 
 def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
-                               identity_transform: bool) -> tuple[str, dict[str, str] | None]:
+                               identity_transform: bool, source_format: str = "gaussian_ply"
+                               ) -> tuple[str, dict[str, str] | None]:
     if geography is None and identity_transform:
-        return "source", None
+        return ("manifest", None) if source_format in {"lcc", "lcc2"} else ("source", None)
     if geography is None or not identity_transform:
         return "manifest", None
     hints = read_ply_coordinates(source)
@@ -151,6 +152,14 @@ class EditorTasks(StreamingTasks):
     def present(self, status: dict[str, Any]) -> dict[str, Any]:
         result = dict(status)
         task_id, token = status["task_id"], status["resource_token"]
+        if status.get("format") in {"lcc", "lcc2"} and status.get("dataset_entrypoint"):
+            entrypoint = self.directory(task_id) / status["dataset_entrypoint"]
+            if entrypoint.is_file():
+                result["coordinate_metadata"] = read_model_coordinates(entrypoint)
+                metadata = json.loads(entrypoint.read_text(encoding="utf-8-sig"))
+                counts = metadata.get("splats" if status["format"] == "lcc" else "lodSplats")
+                if isinstance(counts, list) and all(type(value) is int and value >= 0 for value in counts):
+                    result["level_counts"] = counts
         prefix = f"/gaussian-editor-resources/{task_id}/{token}/"
         result["preview_url"] = f"/api/v2/gaussian-editor-tasks/{task_id}/preview" if status.get("status") == "ready" else None
         result["gaussian_url"] = prefix + status["gaussian_path"] if status.get("gaussian_path") else None
@@ -249,7 +258,7 @@ class EditorTasks(StreamingTasks):
                     destination = workspace / f"lod-{level}.ply"
                     clipped = workspace / f"clipped-lod-{level}.ply" if not identity else destination
                     coordinate_mode, coordinate_comments = output_coordinate_comments(
-                        source, state.get("geography"), identity)
+                        source, state.get("geography"), identity, status["format"])
                     last_update = 0.0
 
                     def progress(done: int, total: int) -> None:
@@ -667,7 +676,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         if format_name != "ply":
             coordinate_note += " 转换格式可能不保留坐标注释，请以本说明中的坐标框架为准。"
         return JSONResponse({"task_id": task_id, "version": version, "source_name": status["filename"],
-                             "source_format": status["format"], "source_coordinate_hints": status.get("coordinate_metadata"),
+                             "source_format": status["format"], "source_coordinate_hints": tasks.present(status).get("coordinate_metadata"),
                              "level": level, "source_gaussians": result["source_count"],
                              "result_gaussians": result["count"], "result_format": format_name,
                              "edit_state": snapshot, "coordinate_mode": coordinate_mode,
