@@ -71,9 +71,13 @@ def keeps_point(rules: list[dict], point: tuple[float, float, float]) -> bool:
 
 def clip_ply(source: Path, destination: Path, rules: list[dict],
              progress: Callable[[int, int], None] | None = None,
-             to_common: Callable[[tuple[float, float, float]], tuple[float, float, float]] | None = None) -> int:
+             to_common: Callable[[tuple[float, float, float]], tuple[float, float, float]] | None = None,
+             strip_coordinates: bool = False,
+             coordinate_comments: dict[str, str] | None = None) -> int:
     """Write a new binary PLY while copying every retained Gaussian attribute unchanged."""
     validate_rules(rules)
+    if coordinate_comments and not strip_coordinates:
+        raise ValueError("写入新坐标注释前必须移除旧注释")
     if destination.resolve() == source.resolve() or destination.exists():
         raise ValueError("裁剪成果必须写入新的文件")
     layout = read_layout(source)
@@ -83,8 +87,16 @@ def clip_ply(source: Path, destination: Path, rules: list[dict],
     output_header = []
     bound_offsets: dict[str, list[int]] = {}
     header_size = 0
+    coordinate_keys = {"epsg", *(f"{kind}{axis}" for kind in ("offset", "shift", "scale") for axis in "xyz")}
     for line in layout.header:
         parts = line.split(maxsplit=2)
+        if strip_coordinates and len(parts) >= 2 and parts[0] == "comment" and parts[1].lower() in coordinate_keys:
+            continue
+        if line == "end_header" and coordinate_comments:
+            for key, value in coordinate_comments.items():
+                encoded = f"comment {key} {value}\n".encode("ascii")
+                output_header.append(encoded)
+                header_size += len(encoded)
         if line.startswith("element vertex "):
             encoded = ("element vertex " + "0" * 20 + "\n").encode("ascii")
         elif len(parts) >= 2 and parts[0] == "comment" and parts[1] in {

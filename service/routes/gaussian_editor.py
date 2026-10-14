@@ -17,6 +17,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from pyproj import CRS
+from pyproj.exceptions import CRSError
 
 from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset
@@ -24,6 +26,7 @@ from service.dataset_preparation import _convert_to_ply
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
+from service.ply_coordinates import read_ply_coordinates
 from service.routes.streaming import StreamingTasks
 from service.schemas import TransformParameters
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
@@ -73,6 +76,35 @@ class ExportRequest(BaseModel):
     version: str
     level: int = Field(ge=0)
     format: Literal["compressed_ply", "sog"]
+
+
+def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
+                               identity_transform: bool) -> tuple[str, dict[str, str] | None]:
+    if geography is None and identity_transform:
+        return "source", None
+    if geography is None or not identity_transform:
+        return "manifest", None
+    hints = read_ply_coordinates(source)
+    if (geography["axes"] != [1, 2, 3] or not math.isclose(geography["metres_per_unit"], 1)
+            or any(value is not None and not math.isclose(float(value), 0) for value in hints["shift"])
+            or any(value is not None and not math.isclose(float(value), 1) for value in hints["scale"])):
+        return "manifest", None
+    try:
+        crs = CRS.from_epsg(geography["source_epsg"])
+        axes = crs.axis_info[:2]
+        if (not crs.is_projected or len(axes) != 2
+                or [axis.direction for axis in axes] != ["east", "north"]
+                or any(not math.isclose(axis.unit_conversion_factor, 1) for axis in axes)):
+            return "manifest", None
+    except (CRSError, ValueError, TypeError):
+        return "manifest", None
+    offsets = [geography["projected_origin"][index] - geography["reference"][index]
+               for index in range(3)]
+    comments = {"epsg": str(geography["source_epsg"]),
+                **{f"offset{axis}": f"{offsets[index]:.17g}" for index, axis in enumerate("xyz")},
+                **{f"shift{axis}": "0" for axis in "xyz"},
+                **{f"scale{axis}": "1" for axis in "xyz"}}
+    return "embedded", comments
 
 
 class EditorTasks(StreamingTasks):
@@ -180,6 +212,8 @@ class EditorTasks(StreamingTasks):
                     reference = frame
                     destination = workspace / f"lod-{level}.ply"
                     clipped = workspace / f"clipped-lod-{level}.ply" if not identity else destination
+                    coordinate_mode, coordinate_comments = output_coordinate_comments(
+                        source, state.get("geography"), identity)
                     last_update = 0.0
 
                     def progress(done: int, total: int) -> None:
@@ -192,7 +226,8 @@ class EditorTasks(StreamingTasks):
                         write_status(directory, status)
 
                     count = await asyncio.to_thread(clip_ply, source, clipped, state["rules"], progress,
-                                                    to_common if not identity else None)
+                                                    to_common if not identity else None,
+                                                    coordinate_mode != "source", coordinate_comments)
                     if not identity:
                         status.update(process_phase="模型整体变换", process_progress=None)
                         write_status(directory, status)
@@ -207,11 +242,23 @@ class EditorTasks(StreamingTasks):
                         if converted.returncode or not destination.is_file():
                             raise ValueError(converted.stderr.strip() or "模型整体变换失败")
                     result = {"level": level, "count": count, "source_count": layout.count,
-                              "path": destination.relative_to(directory).as_posix(), "bytes": destination.stat().st_size}
-                    results.append(result)
-                    status.update(process_phase="逐层校验", process_progress=100, process_completed=index + 1,
-                                  process_results=results)
+                              "path": destination.relative_to(directory).as_posix(), "bytes": destination.stat().st_size,
+                              "coordinate_mode": coordinate_mode}
+                    status.update(process_phase="逐层校验", process_progress=100)
+                    write_status(directory, status)
                     read_layout(destination)
+                    output_hints = read_ply_coordinates(destination)
+                    if coordinate_mode == "manifest" and (output_hints["epsg"] or any(
+                            value is not None for value in output_hints["offset"])):
+                        raise ValueError("成果仍包含旧投影注释，坐标导出已中止")
+                    if coordinate_mode == "embedded" and (output_hints["epsg"] != coordinate_comments["epsg"]
+                            or any(output_hints["offset"][axis] is None
+                                   or not math.isclose(float(output_hints["offset"][axis]),
+                                                    float(coordinate_comments[f"offset{'xyz'[axis]}"]), abs_tol=1e-6)
+                                   for axis in range(3))):
+                        raise ValueError("成果坐标原点写出校验失败")
+                    results.append(result)
+                    status.update(process_completed=index + 1, process_results=results)
                     write_status(directory, status)
                 versions = status.get("versions", [])
                 versions.append({"version": version, "created_at_unix": time.time(),
@@ -548,12 +595,22 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         snapshot = group.get("state")
         if snapshot is None and group.get("history_cursor", -1) < len(status["history"]):
             snapshot = status["history"][group["history_cursor"]]["state"]
+        coordinate_mode = result.get("coordinate_mode", "legacy")
+        coordinate_note = {
+            "source": "PLY 沿用处理输入的坐标注释；若头文件中没有地理信息，本成果也不提供地理定位。高程基准未自动转换。",
+            "embedded": "PLY 头文件已写入编辑后的 EPSG 与投影原点；高程基准未自动转换。",
+            "manifest": "坐标框架无法无损写入 PLY 简单注释，PLY 已移除旧地理注释；请随成果保留本说明。",
+            "legacy": "旧版成果的坐标写出方式未核验，请核对 PLY 头文件和本说明。",
+        }[coordinate_mode]
+        if format_name != "ply":
+            coordinate_note += " 转换格式可能不保留坐标注释，请以本说明中的坐标框架为准。"
         return JSONResponse({"task_id": task_id, "version": version, "source_name": status["filename"],
                              "source_format": status["format"], "source_coordinate_hints": status.get("coordinate_metadata"),
                              "level": level, "source_gaussians": result["source_count"],
                              "result_gaussians": result["count"], "result_format": format_name,
-                             "edit_state": snapshot,
-                             "coordinate_note": "输出格式可能不保留源 PLY 坐标注释；请以本说明中的坐标框架为准。高程基准未自动转换。"},
+                             "edit_state": snapshot, "coordinate_mode": coordinate_mode,
+                             "result_ply_coordinate_hints": read_ply_coordinates(directory / result["path"]),
+                             "coordinate_note": coordinate_note},
                             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited-{format_name}-manifest.json')}"})
 
     return router
