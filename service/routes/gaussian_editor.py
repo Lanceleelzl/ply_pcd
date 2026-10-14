@@ -10,6 +10,7 @@ import secrets
 import subprocess
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -105,6 +106,21 @@ def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
                 **{f"shift{axis}": "0" for axis in "xyz"},
                 **{f"scale{axis}": "1" for axis in "xyz"}}
     return "embedded", comments
+
+
+def exported_gaussian_count(path: Path, format_name: str, entrypoint: str) -> int:
+    if format_name == "sog":
+        with zipfile.ZipFile(path) as archive:
+            count = json.loads(archive.read(entrypoint)).get("count")
+    else:
+        with path.open("rb") as stream:
+            header = stream.read(256 * 1024).split(b"end_header", 1)[0]
+        counts = [int(line.split()[2]) for line in header.splitlines()
+                  if line.startswith(b"element vertex ")]
+        count = counts[0] if len(counts) == 1 else None
+    if type(count) is not int or count < 0:
+        raise ValueError("导出成果缺少有效的高斯数量")
+    return count
 
 
 class EditorTasks(StreamingTasks):
@@ -335,6 +351,9 @@ class EditorTasks(StreamingTasks):
                 probe = probe_dataset(destination)
                 if probe.format != request.format:
                     raise ValueError("导出格式校验失败")
+                source_count = read_layout(directory / source_path).count
+                if exported_gaussian_count(destination, request.format, probe.entrypoint) != source_count:
+                    raise ValueError("导出成果高斯数量与 PLY 成果不一致")
                 exports = [item for item in status.get("exports", []) if not (
                     item["version"] == request.version and item["level"] == request.level
                     and item["format"] == request.format)]
