@@ -81,14 +81,30 @@ def clip_ply(source: Path, destination: Path, rules: list[dict],
     remove_rules = [rule for rule in rules if rule["action"] == "remove"]
     x_field, y_field, z_field = (layout.field(axis) for axis in "xyz")
     output_header = []
+    bound_offsets: dict[str, list[int]] = {}
+    header_size = 0
     for line in layout.header:
-        output_header.append("element vertex " + "0" * 20 if line.startswith("element vertex ") else line)
-    header = ("\n".join(output_header) + "\n").encode("ascii")
+        parts = line.split(maxsplit=2)
+        if line.startswith("element vertex "):
+            encoded = ("element vertex " + "0" * 20 + "\n").encode("ascii")
+        elif len(parts) >= 2 and parts[0] == "comment" and parts[1] in {
+                "minx", "miny", "minz", "maxx", "maxy", "maxz"}:
+            key = parts[1]
+            prefix = f"comment {key} ".encode("ascii")
+            bound_offsets.setdefault(key, []).append(header_size + len(prefix))
+            encoded = prefix + b" " * 30 + b"\n"
+        else:
+            encoded = (line + "\n").encode("ascii")
+        output_header.append(encoded)
+        header_size += len(encoded)
+    header = b"".join(output_header)
     marker = b"element vertex " + b"0" * 20
     count_offset = header.index(marker) + len(b"element vertex ")
     destination.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     processed = 0
+    minimum = [math.inf] * 3
+    maximum = [-math.inf] * 3
     with source.open("rb") as reader, destination.open("xb") as writer:
         writer.write(header)
         reader.seek(layout.data_start)
@@ -108,12 +124,23 @@ def clip_ply(source: Path, destination: Path, rules: list[dict],
                 ):
                     kept.extend(record)
                     written += 1
+                    for axis, value in enumerate(point):
+                        if math.isfinite(value):
+                            minimum[axis] = min(minimum[axis], value)
+                            maximum[axis] = max(maximum[axis], value)
             writer.write(kept)
             processed += batch_size
             if progress:
                 progress(processed, layout.count)
         writer.seek(count_offset)
         writer.write(f"{written:020d}".encode("ascii"))
+        for key, offsets in bound_offsets.items():
+            axis = "xyz".index(key[-1])
+            value = minimum[axis] if key.startswith("min") else maximum[axis]
+            encoded = f"{value if math.isfinite(value) else 0:.17g}".rjust(30).encode("ascii")
+            for offset in offsets:
+                writer.seek(offset)
+                writer.write(encoded)
     return written
 
 
