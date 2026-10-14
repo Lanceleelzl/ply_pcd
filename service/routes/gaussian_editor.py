@@ -23,7 +23,7 @@ from pyproj.exceptions import CRSError
 
 from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset
-from service.dataset_preparation import _convert_to_ply
+from service.dataset_preparation import _convert_to_ply, _ply_vertex_count
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicQuery, query_coordinates
 from service.gaussian_merge import read_layout
@@ -440,7 +440,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                     seen.add(digest)
                     lods.append({"level": level, "name": Path(upload.filename or "").name,
                                  "path": path.relative_to(directory).as_posix(), "bytes": size,
-                                 "sha256": digest, "format": probe.format})
+                                 "sha256": digest, "format": probe.format,
+                                 "count": _ply_vertex_count(path)})
                 status.update(lods=lods, format="lod_group", filename=lods[0]["name"])
             else:
                 suffix = Path(file.filename or "").suffix.lower() if file else ".zip"

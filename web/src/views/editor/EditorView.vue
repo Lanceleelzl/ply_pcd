@@ -89,9 +89,9 @@ const largeOriginalBytes = computed(() => {
   return bytes > 256 * 1024 * 1024 ? bytes : 0;
 });
 const levelCount = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.count :
-  selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
+  selectedLod.value?.count ?? (selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
-  ? task.value?.metadata?.source_point_count : undefined);
+  ? task.value?.metadata?.source_point_count : undefined));
 
 async function refresh(): Promise<void> {
   const id = route.params.taskId;

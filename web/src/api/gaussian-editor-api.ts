@@ -13,7 +13,7 @@ export interface EditorDisplayClip { mode: 'off' | 'axis' | 'box'; min: XYZ; max
   planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }
 export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null;
   transform?: EditorTransform; display_clip?: EditorDisplayClip | null }
-export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string }
+export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string; count?: number }
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number;
   coordinate_mode?: 'source' | 'embedded' | 'manifest' }
 export interface EditorTask {
