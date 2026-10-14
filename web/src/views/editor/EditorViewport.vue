@@ -11,7 +11,8 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   rules: EditorRule[]; polygonDraft: [number, number][]; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]];
-  moveVolumeCenter: [point: [number, number]]; moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number] }>();
+  moveVolumeCenter: [point: [number, number]]; moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
+  rotateBox: [rotation: [number, number, number, number]] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const loaded = ref(false);
@@ -24,11 +25,13 @@ const vertexHandles = ref<Array<{ index: number; x: number; y: number }>>([]);
 const volumeCenterHandle = ref<{ x: number; y: number } | null>(null);
 const volumeRadiusHandle = ref<{ x: number; y: number } | null>(null);
 const boxSizeHandles = ref<Array<{ axis: number; x: number; y: number }>>([]);
+const boxRotationHandles = ref<Array<{ axis: number; x: number; y: number }>>([]);
 const sceneSize = ref({ width: 1, height: 1 });
 let draggingVertex: number | null = null;
 let draggingVolume = false;
 let draggingRadius = false;
 let draggingBoxAxis: number | null = null;
+let draggingRotation: { axis: XYZ; reference: XYZ; center: XYZ; base: [number, number, number, number] } | null = null;
 let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
@@ -116,6 +119,15 @@ function updateBoundaryLines(): void {
     return { axis, x: screen.x, y: screen.y };
   }) : [];
   if (JSON.stringify(boxHandles) !== JSON.stringify(boxSizeHandles.value)) boxSizeHandles.value = boxHandles;
+  const rotationHandles = selected?.type === 'box' ? ([0, 1, 2] as const).map(axis => {
+    const local: XYZ = [0, 0, 0];
+    local[(axis + 1) % 3] = Math.max(...selected.size) * 0.7;
+    const rotated = rotateBoxVector(local, selected.rotation);
+    const screen = component.worldToScreen(new pc.Vec3(...rotated.map((value, index) =>
+      value + selected.center[index] - origin[index])));
+    return { axis, x: screen.x, y: screen.y };
+  }) : [];
+  if (JSON.stringify(rotationHandles) !== JSON.stringify(boxRotationHandles.value)) boxRotationHandles.value = rotationHandles;
 }
 
 function moveVertex(event: PointerEvent): void {
@@ -222,6 +234,53 @@ function endBoxSizeDrag(event: PointerEvent): void {
   draggingBoxAxis = null;
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
+function startBoxRotation(axisIndex: number, event: PointerEvent): void {
+  if (props.editingVolumeIndex == null) return;
+  const rule = props.rules[props.editingVolumeIndex];
+  if (rule?.type !== 'box') return;
+  const length = Math.hypot(...rule.rotation);
+  if (length < 1e-8) return;
+  const base = rule.rotation.map(value => value / length) as [number, number, number, number];
+  const localAxis: XYZ = [0, 0, 0], localReference: XYZ = [0, 0, 0];
+  localAxis[axisIndex] = 1;
+  localReference[(axisIndex + 1) % 3] = 1;
+  draggingRotation = { axis: rotateBoxVector(localAxis, base), reference: rotateBoxVector(localReference, base),
+    center: [...rule.center], base };
+  (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
+  event.stopPropagation();
+}
+function moveBoxRotation(event: PointerEvent): void {
+  if (!draggingRotation || !engine || !canvas.value) return;
+  const camera = engine.application.camera.camera;
+  if (!camera) return;
+  const bounds = canvas.value.getBoundingClientRect();
+  const near = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.nearClip);
+  const far = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.farClip);
+  const ray = far.sub(near);
+  const axis = new pc.Vec3(...draggingRotation.axis);
+  const denominator = ray.dot(axis);
+  if (Math.abs(denominator) < 1e-6) return;
+  const origin = engine.scene.displayOrigin;
+  const center = new pc.Vec3(...draggingRotation.center.map((value, index) => value - origin[index]));
+  const ratio = center.clone().sub(near).dot(axis) / denominator;
+  if (ratio < 0 || ratio > 1) return;
+  const direction = near.add(ray.mulScalar(ratio)).sub(center).normalize();
+  const reference = new pc.Vec3(...draggingRotation.reference);
+  const cross = new pc.Vec3().cross(reference, direction);
+  const angle = Math.atan2(axis.dot(cross), reference.dot(direction));
+  const half = angle / 2, sine = Math.sin(half);
+  const [w, x, y, z] = draggingRotation.base;
+  const [dx, dy, dz] = draggingRotation.axis.map(value => value * sine);
+  const dw = Math.cos(half);
+  emit('rotateBox', [dw * w - dx * x - dy * y - dz * z,
+    dw * x + dx * w + dy * z - dz * y,
+    dw * y - dx * z + dy * w + dz * x,
+    dw * z + dx * y - dy * x + dz * w]);
+}
+function endBoxRotation(event: PointerEvent): void {
+  draggingRotation = null;
+  (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
+}
 
 async function displayGaussian(confirmed = false): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
@@ -297,6 +356,11 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       <circle v-for="handle in boxSizeHandles" :key="handle.axis" class="box-size" :class="`axis-${handle.axis}`"
         :cx="handle.x" :cy="handle.y" r="8" @pointerdown="startBoxSizeDrag(handle.axis, $event)"
         @pointermove="moveBoxSize" @pointerup="endBoxSizeDrag" @pointercancel="endBoxSizeDrag" />
+      <circle v-for="handle in boxRotationHandles" :key="handle.axis" class="box-rotation" :class="`axis-${handle.axis}`"
+        :cx="handle.x" :cy="handle.y" r="10" @pointerdown="startBoxRotation(handle.axis, $event)"
+        @pointermove="moveBoxRotation" @pointerup="endBoxRotation" @pointercancel="endBoxRotation">
+        <title>绕局部{{ ['X', 'Y', 'Z'][handle.axis] }}轴旋转</title>
+      </circle>
     </svg>
     <div class="editor-scene-tools">
       <button type="button" @click="fit">适配视角</button>
@@ -317,7 +381,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
-    <div class="editor-scene-hint" role="status">{{ volumeRadiusHandle ? '拖动青色手柄移动球心 · 拖动黄色手柄调整半径 · 在边界面板保存' : boxSizeHandles.length ? '拖动青色手柄移动中心 · 拖动红／绿／蓝手柄调整 X／Y／Z 尺寸 · 在边界面板保存' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ volumeRadiusHandle ? '拖动青色手柄移动球心 · 拖动黄色手柄调整半径 · 在边界面板保存' : boxSizeHandles.length ? '拖动实心手柄调整尺寸 · 拖动空心手柄绕对应局部轴旋转 · 在边界面板保存' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
   </div>
 </template>
@@ -337,6 +401,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay circle.axis-0 { fill: #f47878; }
 .editor-boundary-overlay circle.axis-1 { fill: #71d690; }
 .editor-boundary-overlay circle.axis-2 { fill: #6ea9ff; }
+.editor-boundary-overlay circle.box-rotation { fill: #07121e; stroke-width: 3; cursor: grab; }
+.editor-boundary-overlay circle.box-rotation.axis-0 { stroke: #f47878; }
+.editor-boundary-overlay circle.box-rotation.axis-1 { stroke: #71d690; }
+.editor-boundary-overlay circle.box-rotation.axis-2 { stroke: #6ea9ff; }
 .editor-load-backdrop { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: #030a12a8; }
 .editor-load-dialog { box-sizing: border-box; width: min(390px, calc(100% - 32px)); padding: 18px; border: 1px solid #6b879e; border-radius: 9px; background: #102136; box-shadow: 0 16px 40px #0008; }
 .editor-load-dialog p { margin: 0 0 16px; line-height: 1.5; }
