@@ -181,6 +181,9 @@ function moveVolumeCenter(point: [number, number]): void {
   volumeDraft.value.center[0] = point[0];
   volumeDraft.value.center[1] = point[1];
 }
+function moveVolumeHeight(height: number): void {
+  if (volumeDraft.value) volumeDraft.value.center[2] = height;
+}
 function moveVolumeRadius(radius: number): void {
   if (volumeDraft.value?.type === 'sphere') volumeDraft.value.radius = radius;
 }
@@ -378,7 +381,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
         :rules="displayRules" :polygon-draft="polygonDraft" :editing-volume-index="editingVolume" :large-original-bytes="largeOriginalBytes" @pick="picked"
-        @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @move-volume-radius="moveVolumeRadius"
+        @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
+        @move-volume-radius="moveVolumeRadius"
         @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
@@ -425,7 +429,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <div v-for="(rule, index) in currentState.rules" :key="index" class="editor-rule"><span>{{ index + 1 }}．{{ { polygon: '平面', sphere: '球体', box: '长方体' }[rule.type] }} · {{ rule.action === 'keep' ? '保留内部' : '剔除内部' }}</span><button v-if="rule.type === 'polygon'" type="button" @click="editPolygon(index)">编辑顶点</button><button v-else type="button" @click="editVolume(index)">编辑体积</button><button type="button" @click="removeRule(index)">移除</button></div>
           <template v-if="volumeDraft">
             <h3>编辑{{ volumeDraft.type === 'sphere' ? '球形' : '长方体' }}边界</h3>
-            <p>拖动中心手柄调整 X／Y；{{ volumeDraft.type === 'sphere' ? '拖动外圈手柄调整半径；' : '拖动实心手柄调整三轴尺寸，空心手柄绕对应局部轴旋转；' }}中心 Z 可在下方输入。保存后写入一条历史记录。</p>
+            <p>拖动青色手柄调整中心 X／Y、紫色手柄调整中心 Z；{{ volumeDraft.type === 'sphere' ? '拖动黄色手柄调整半径；' : '拖动实心手柄调整三轴尺寸，空心手柄绕对应局部轴旋转；' }}保存后写入一条历史记录。</p>
             <label>范围规则<select v-model="volumeDraft.action"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
             <div class="editor-size"><label v-for="(_, axis) in volumeDraft.center" :key="axis">中心 {{ ['X','Y','Z'][axis] }}<input v-model.number="volumeDraft.center[axis]" type="number" step="any"></label></div>
             <label v-if="volumeDraft.type === 'sphere'">球半径<input v-model.number="volumeDraft.radius" type="number" min="0.001" step="any"></label>
