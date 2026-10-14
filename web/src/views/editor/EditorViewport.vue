@@ -11,7 +11,7 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   rules: EditorRule[]; polygonDraft: [number, number][]; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]];
-  moveVolumeCenter: [point: [number, number]]; moveVolumeRadius: [radius: number] }>();
+  moveVolumeCenter: [point: [number, number]]; moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const loaded = ref(false);
@@ -23,14 +23,24 @@ const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 
 const vertexHandles = ref<Array<{ index: number; x: number; y: number }>>([]);
 const volumeCenterHandle = ref<{ x: number; y: number } | null>(null);
 const volumeRadiusHandle = ref<{ x: number; y: number } | null>(null);
+const boxSizeHandles = ref<Array<{ axis: number; x: number; y: number }>>([]);
 const sceneSize = ref({ width: 1, height: 1 });
 let draggingVertex: number | null = null;
 let draggingVolume = false;
 let draggingRadius = false;
+let draggingBoxAxis: number | null = null;
 let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
+
+function rotateBoxVector(local: XYZ, [w, qx, qy, qz]: [number, number, number, number]): XYZ {
+  const cross: XYZ = [qy * local[2] - qz * local[1], qz * local[0] - qx * local[2], qx * local[1] - qy * local[0]];
+  const t = cross.map(value => 2 * value) as XYZ;
+  return [local[0] + w * t[0] + qy * t[2] - qz * t[1],
+    local[1] + w * t[1] + qz * t[0] - qx * t[2],
+    local[2] + w * t[2] + qx * t[1] - qy * t[0]];
+}
 
 function updateBoundaryLines(): void {
   if (!engine || !canvas.value) return;
@@ -62,14 +72,9 @@ function updateBoundaryLines(): void {
           action: rule.action, draft: false, volume: true });
       }
     } else {
-      const [w, qx, qy, qz] = rule.rotation;
       const corners: XYZ[] = Array.from({ length: 8 }, (_, corner) => {
         const local = rule.size.map((size, axis) => size * (corner & (1 << axis) ? 0.5 : -0.5)) as XYZ;
-        const cross: XYZ = [qy * local[2] - qz * local[1], qz * local[0] - qx * local[2], qx * local[1] - qy * local[0]];
-        const t = cross.map(value => 2 * value) as XYZ;
-        const rotated: XYZ = [local[0] + w * t[0] + qy * t[2] - qz * t[1],
-          local[1] + w * t[1] + qz * t[0] - qx * t[2],
-          local[2] + w * t[2] + qx * t[1] - qy * t[0]];
+        const rotated = rotateBoxVector(local, rule.rotation);
         return rotated.map((value, axis) => value + rule.center[axis]) as XYZ;
       });
       for (let corner = 0; corner < 8; corner++) for (let axis = 0; axis < 3; axis++) {
@@ -102,6 +107,15 @@ function updateBoundaryLines(): void {
     if (volumeRadiusHandle.value?.x !== screen.x || volumeRadiusHandle.value?.y !== screen.y)
       volumeRadiusHandle.value = { x: screen.x, y: screen.y };
   } else if (volumeRadiusHandle.value) volumeRadiusHandle.value = null;
+  const boxHandles = selected?.type === 'box' ? ([0, 1, 2] as const).map(axis => {
+    const local: XYZ = [0, 0, 0];
+    local[axis] = selected.size[axis] / 2;
+    const rotated = rotateBoxVector(local, selected.rotation);
+    const screen = component.worldToScreen(new pc.Vec3(...rotated.map((value, index) =>
+      value + selected.center[index] - origin[index])));
+    return { axis, x: screen.x, y: screen.y };
+  }) : [];
+  if (JSON.stringify(boxHandles) !== JSON.stringify(boxSizeHandles.value)) boxSizeHandles.value = boxHandles;
 }
 
 function moveVertex(event: PointerEvent): void {
@@ -179,6 +193,35 @@ function endRadiusDrag(event: PointerEvent): void {
   draggingRadius = false;
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
+function moveBoxSize(event: PointerEvent): void {
+  if (draggingBoxAxis === null || !engine || !canvas.value || props.editingVolumeIndex == null) return;
+  const rule = props.rules[props.editingVolumeIndex];
+  const camera = engine.application.camera.camera;
+  if (rule?.type !== 'box' || !camera) return;
+  const bounds = canvas.value.getBoundingClientRect();
+  const near = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.nearClip);
+  const far = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.farClip);
+  const direction = far.sub(near).normalize();
+  const origin = engine.scene.displayOrigin;
+  const offset = new pc.Vec3(near.x + origin[0] - rule.center[0],
+    near.y + origin[1] - rule.center[1], near.z + origin[2] - rule.center[2]);
+  const local: XYZ = [0, 0, 0]; local[draggingBoxAxis] = 1;
+  const axis = new pc.Vec3(...rotateBoxVector(local, rule.rotation)).normalize();
+  const alignment = axis.dot(direction);
+  const denominator = 1 - alignment * alignment;
+  if (denominator < 1e-5) return;
+  const distance = (axis.dot(offset) - alignment * direction.dot(offset)) / denominator;
+  emit('moveBoxSize', draggingBoxAxis, Math.max(0.001, 2 * distance));
+}
+function startBoxSizeDrag(axis: number, event: PointerEvent): void {
+  draggingBoxAxis = axis;
+  (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
+  event.stopPropagation();
+}
+function endBoxSizeDrag(event: PointerEvent): void {
+  draggingBoxAxis = null;
+  (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
+}
 
 async function displayGaussian(confirmed = false): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
@@ -251,6 +294,9 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
         @pointerdown="startVolumeDrag" @pointermove="moveVolume" @pointerup="endVolumeDrag" @pointercancel="endVolumeDrag" />
       <circle v-if="volumeRadiusHandle" class="volume-radius" :cx="volumeRadiusHandle.x" :cy="volumeRadiusHandle.y" r="8"
         @pointerdown="startRadiusDrag" @pointermove="moveVolumeRadius" @pointerup="endRadiusDrag" @pointercancel="endRadiusDrag" />
+      <circle v-for="handle in boxSizeHandles" :key="handle.axis" class="box-size" :class="`axis-${handle.axis}`"
+        :cx="handle.x" :cy="handle.y" r="8" @pointerdown="startBoxSizeDrag(handle.axis, $event)"
+        @pointermove="moveBoxSize" @pointerup="endBoxSizeDrag" @pointercancel="endBoxSizeDrag" />
     </svg>
     <div class="editor-scene-tools">
       <button type="button" @click="fit">适配视角</button>
@@ -271,7 +317,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
-    <div class="editor-scene-hint" role="status">{{ volumeRadiusHandle ? '拖动青色手柄移动球心 · 拖动黄色手柄调整半径 · 在边界面板保存' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ volumeRadiusHandle ? '拖动青色手柄移动球心 · 拖动黄色手柄调整半径 · 在边界面板保存' : boxSizeHandles.length ? '拖动青色手柄移动中心 · 拖动红／绿／蓝手柄调整 X／Y／Z 尺寸 · 在边界面板保存' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
   </div>
 </template>
@@ -287,6 +333,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay circle { fill: #f6d265; stroke: #193a39; stroke-width: 2; pointer-events: all; cursor: move; }
 .editor-boundary-overlay circle.volume-center { fill: #8fe3ff; stroke: #104a64; stroke-width: 3; }
 .editor-boundary-overlay circle.volume-radius { fill: #f6d265; stroke: #55420d; stroke-width: 3; cursor: ew-resize; }
+.editor-boundary-overlay circle.box-size { stroke: #07121e; stroke-width: 3; }
+.editor-boundary-overlay circle.axis-0 { fill: #f47878; }
+.editor-boundary-overlay circle.axis-1 { fill: #71d690; }
+.editor-boundary-overlay circle.axis-2 { fill: #6ea9ff; }
 .editor-load-backdrop { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: #030a12a8; }
 .editor-load-dialog { box-sizing: border-box; width: min(390px, calc(100% - 32px)); padding: 18px; border: 1px solid #6b879e; border-radius: 9px; background: #102136; box-shadow: 0 16px 40px #0008; }
 .editor-load-dialog p { margin: 0 0 16px; line-height: 1.5; }
