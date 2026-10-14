@@ -17,6 +17,7 @@ export interface EditorLod { level: number; name: string; bytes: number; format:
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number }
 export interface EditorTask {
   task_id: string; filename: string; input_kind: EditorInputKind; format: string;
+  source_bytes?: number;
   status: 'queued' | 'preparing' | 'ready' | 'failed'; error?: string;
   metadata?: { source_point_count: number; preview_point_count: number; origin: XYZ; bounds: { min: XYZ; max: XYZ } };
   coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string };

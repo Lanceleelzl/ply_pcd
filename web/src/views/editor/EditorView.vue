@@ -75,6 +75,11 @@ const currentUrl = computed(() => useDerived.value && selectedDerived.value ? se
     || workLevel.value === 0 ? task.value?.gaussian_url : undefined));
 const currentFilename = computed(() => useDerived.value && selectedDerived.value ? 'work-lod.ply' :
   selectedLod.value?.name ?? task.value?.gaussian_filename ?? task.value?.filename ?? 'model.ply');
+const largeOriginalBytes = computed(() => {
+  if (useDerived.value || !task.value || task.value.input_kind === 'dataset') return 0;
+  const bytes = selectedLod.value?.bytes ?? task.value.source_bytes ?? 0;
+  return bytes > 256 * 1024 * 1024 ? bytes : 0;
+});
 const levelCount = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.count :
   selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
@@ -322,7 +327,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
-        :rules="currentState.rules" :polygon-draft="polygonDraft" @pick="picked"
+        :rules="currentState.rules" :polygon-draft="polygonDraft" :large-original-bytes="largeOriginalBytes" @pick="picked"
         @move-vertex="movePolygonVertex" @notify="message = $event">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
@@ -342,6 +347,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
+          <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，建议先抽稀再浏览；直接加载前会再次提示。</p>
           <label>抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>

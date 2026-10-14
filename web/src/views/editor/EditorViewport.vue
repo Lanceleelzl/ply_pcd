@@ -7,13 +7,14 @@ import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
-  origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform;
+  origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
   rules: EditorRule[]; polygonDraft: [number, number][];
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const loaded = ref(false);
+const confirmLargeLoad = ref(false);
 const topView = ref(false);
 const query = ref(false);
 const fps = ref(0);
@@ -113,14 +114,16 @@ function endVertexDrag(event: PointerEvent): void {
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
 
-async function displayGaussian(): Promise<void> {
+async function displayGaussian(confirmed = false): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value) return;
+  if (props.largeOriginalBytes && !confirmed) { confirmLargeLoad.value = true; return; }
+  confirmLargeLoad.value = false;
   loading.value = true;
   try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod); loaded.value = true; }
   catch (error) { emit('notify', error instanceof Error ? error.message : String(error)); }
   finally { loading.value = false; }
 }
-function displayPoints(): void { engine?.showPoints(); loaded.value = false; }
+function displayPoints(): void { engine?.showPoints(); loaded.value = false; confirmLargeLoad.value = false; }
 function fit(): void { engine?.fit(); }
 function toggleTop(): void {
   topView.value = !topView.value;
@@ -188,6 +191,13 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       </button>
       <slot name="tools" />
     </div>
+    <div v-if="confirmLargeLoad" class="editor-load-backdrop">
+      <div class="editor-load-dialog" role="alertdialog" aria-modal="true" aria-label="加载大文件确认">
+        <p>原始文件约 {{ (largeOriginalBytes! / 1048576).toFixed(1) }} MiB，直接加载可能耗尽浏览器内存。建议先生成轻量工作层。</p>
+        <button type="button" @click="confirmLargeLoad = false">取消加载</button>
+        <button type="button" @click="displayGaussian(true)">仍要加载原件</button>
+      </div>
+    </div>
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
@@ -205,6 +215,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay polyline.draft { fill: none; stroke-dasharray: 6 4; }
 .editor-boundary-overlay polyline.volume { fill: none; stroke-width: 1.5; }
 .editor-boundary-overlay circle { fill: #f6d265; stroke: #193a39; stroke-width: 2; pointer-events: all; cursor: move; }
+.editor-load-backdrop { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: #030a12a8; }
+.editor-load-dialog { box-sizing: border-box; width: min(390px, calc(100% - 32px)); padding: 18px; border: 1px solid #6b879e; border-radius: 9px; background: #102136; box-shadow: 0 16px 40px #0008; }
+.editor-load-dialog p { margin: 0 0 16px; line-height: 1.5; }
+.editor-load-dialog button { margin-right: 8px; padding: 7px 10px; border: 1px solid #61809a; border-radius: 5px; color: #edf5ff; background: #17334c; cursor: pointer; }
 .editor-scene canvas:focus-visible { outline: 2px solid #78d6b8; outline-offset: -2px; }
 .editor-scene-tools { position: absolute; z-index: 3; top: 12px; left: 12px; right: 96px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .editor-scene-tools :deep(*) { pointer-events: auto; }
