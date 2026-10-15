@@ -11,6 +11,7 @@ import subprocess
 import time
 import uuid
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -144,6 +145,28 @@ def exported_gaussian_count(path: Path, format_name: str, entrypoint: str) -> in
     return count
 
 
+def streamed_sog_level_counts(metadata: dict[str, Any]) -> list[int]:
+    levels = metadata.get("lodLevels")
+    if type(levels) is not int or not 0 < levels <= 128:
+        raise ValueError("Streamed SOG 的 LOD 数量无效")
+    counts = [0] * levels
+    pending = [metadata["tree"]]
+    while pending:
+        node = pending.pop()
+        pending.extend(node.get("children") or [])
+        for level, item in (node.get("lods") or {}).items():
+            index = int(level)
+            if 0 <= index < levels:
+                counts[index] += item["count"]
+    return counts
+
+
+@lru_cache(maxsize=32)
+def read_streamed_sog_level_counts(entrypoint: Path) -> tuple[int, ...]:
+    metadata = json.loads(entrypoint.read_text(encoding="utf-8-sig"))
+    return tuple(streamed_sog_level_counts(metadata))
+
+
 class EditorTasks(StreamingTasks):
     def __init__(self, runtime_root: Path, converter: list[str], worker: str, retention_hours: int) -> None:
         super().__init__(runtime_root, converter, worker, retention_hours)
@@ -160,6 +183,10 @@ class EditorTasks(StreamingTasks):
                 counts = metadata.get("splats" if status["format"] == "lcc" else "lodSplats")
                 if isinstance(counts, list) and all(type(value) is int and value >= 0 for value in counts):
                     result["level_counts"] = counts
+        if status.get("format") == "streamed_sog" and status.get("dataset_entrypoint"):
+            entrypoint = self.directory(task_id) / status["dataset_entrypoint"]
+            if entrypoint.is_file():
+                result["level_counts"] = read_streamed_sog_level_counts(entrypoint)
         prefix = f"/gaussian-editor-resources/{task_id}/{token}/"
         result["preview_url"] = f"/api/v2/gaussian-editor-tasks/{task_id}/preview" if status.get("status") == "ready" else None
         result["gaussian_url"] = prefix + status["gaussian_path"] if status.get("gaussian_path") else None

@@ -98,7 +98,6 @@ const levelCount = computed(() => useDerived.value && selectedDerived.value ? se
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
   ? task.value?.metadata?.source_point_count : undefined));
 const largeOriginalCount = computed(() => !useDerived.value && task.value?.input_kind === 'dataset'
-  && task.value.format !== 'streamed_sog'
   && (levelCount.value ?? 0) > 20_000_000 ? levelCount.value : 0);
 
 async function refresh(): Promise<void> {
