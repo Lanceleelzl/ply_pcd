@@ -13,6 +13,7 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   snappingPolygon?: boolean; drawingPolygon?: boolean; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, number]];
+  insertVertex: [index: number, point: [number, number]];
   notify: [message: string]; moveVertex: [index: number, point: [number, number]];
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
   moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
@@ -27,6 +28,7 @@ const fps = ref(0);
 const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean; volume: boolean }>>([]);
 const vertexHandles = ref<Array<{ index: number; x: number; y: number }>>([]);
 const snapHint = ref<{ x: number; y: number; kind: 'vertex' | 'midpoint' | 'edge' } | null>(null);
+const insertHint = ref<{ x: number; y: number } | null>(null);
 const volumeCenterHandle = ref<{ x: number; y: number } | null>(null);
 const volumeHeightHandle = ref<{ x: number; y: number } | null>(null);
 const volumeRadiusHandle = ref<{ x: number; y: number } | null>(null);
@@ -45,6 +47,54 @@ let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
 let lastPointer: [number, number] | null = null;
 let polygonPointerDown: [number, number] | null = null;
+
+function projectedSegmentPoint(a: [number, number], b: [number, number], pointer: [number, number],
+  project: (point: [number, number]) => [number, number], maxDistance: number) {
+  const sa = project(a), sb = project(b);
+  const dx = sb[0] - sa[0], dy = sb[1] - sa[1], length = dx * dx + dy * dy;
+  if (!length) return null;
+  const u = Math.max(0, Math.min(1, ((pointer[0] - sa[0]) * dx + (pointer[1] - sa[1]) * dy) / length));
+  if (Math.hypot(pointer[0] - sa[0] - u * dx, pointer[1] - sa[1] - u * dy) >= maxDistance) return null;
+  const axis = Math.abs(dx) >= Math.abs(dy) ? 0 : 1;
+  const target = sa[axis] + u * (sb[axis] - sa[axis]);
+  let low = 0, high = 1;
+  for (let step = 0; step < 12; step++) {
+    const middle = (low + high) / 2;
+    const candidate: [number, number] = [a[0] + middle * (b[0] - a[0]), a[1] + middle * (b[1] - a[1])];
+    const projected = project(candidate)[axis];
+    if ((projected < target) === (sb[axis] > sa[axis])) low = middle;
+    else high = middle;
+  }
+  const t = (low + high) / 2;
+  const point: [number, number] = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+  const screen = project(point);
+  return { point, screen, distance: Math.hypot(pointer[0] - screen[0], pointer[1] - screen[1]) };
+}
+
+function hitDraftSegment(pointer: [number, number]) {
+  if (props.editingPolygonIndex == null || props.polygonDraft.length < 3 || !engine) return null;
+  const camera = engine.application.camera.camera;
+  if (!camera) return null;
+  const bounds = engine.scene.bounds(), origin = engine.scene.displayOrigin;
+  const z = (bounds.min.z + bounds.max.z) / 2;
+  const project = (point: [number, number]): [number, number] => {
+    const screen = camera.worldToScreen(new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z));
+    return [screen.x, screen.y];
+  };
+  let best = 8;
+  let hit: { index: number; point: [number, number]; x: number; y: number } | null = null;
+  for (let index = 0; index < props.polygonDraft.length; index++) {
+    const a = props.polygonDraft[index], b = props.polygonDraft[(index + 1) % props.polygonDraft.length];
+    if (Math.hypot(...project(a).map((value, axis) => pointer[axis] - value)) < 10
+      || Math.hypot(...project(b).map((value, axis) => pointer[axis] - value)) < 10) continue;
+    const candidate = projectedSegmentPoint(a, b, pointer, project, best);
+    if (candidate && candidate.distance < best) {
+      best = candidate.distance;
+      hit = { index: index + 1, point: candidate.point, x: candidate.screen[0], y: candidate.screen[1] };
+    }
+  }
+  return hit;
+}
 
 function snapPolygon(screenPoint: [number, number]): { point: [number, number]; x: number; y: number;
   kind: 'vertex' | 'midpoint' | 'edge' } | null {
@@ -71,23 +121,9 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
         point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         screen = project(point);
       } else {
-        const dx = sb[0] - sa[0], dy = sb[1] - sa[1], length = dx * dx + dy * dy;
-        if (!length) continue;
-        const u = Math.max(0, Math.min(1, ((screenPoint[0] - sa[0]) * dx + (screenPoint[1] - sa[1]) * dy) / length));
-        if (Math.hypot(screenPoint[0] - sa[0] - u * dx, screenPoint[1] - sa[1] - u * dy) >= best) continue;
-        const axis = Math.abs(dx) >= Math.abs(dy) ? 0 : 1;
-        const target = sa[axis] + u * (sb[axis] - sa[axis]);
-        let low = 0, high = 1;
-        for (let step = 0; step < 12; step++) {
-          const middle = (low + high) / 2;
-          const candidate: [number, number] = [a[0] + middle * (b[0] - a[0]), a[1] + middle * (b[1] - a[1])];
-          const projected = project(candidate)[axis];
-          if ((projected < target) === (sb[axis] > sa[axis])) low = middle;
-          else high = middle;
-        }
-        const t = (low + high) / 2;
-        point = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-        screen = project(point);
+        const candidate = projectedSegmentPoint(a, b, screenPoint, project, best);
+        if (!candidate) continue;
+        point = candidate.point; screen = candidate.screen;
       }
       const distance = Math.hypot(screenPoint[0] - screen[0], screenPoint[1] - screen[1]);
       if (distance < best) { best = distance; result = { point: [...point], x: screen[0], y: screen[1], kind }; }
@@ -97,23 +133,32 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
   return result;
 }
 function updateSnapHint(event: PointerEvent): void {
-  if (!canvas.value || !props.drawingPolygon) { snapHint.value = null; return; }
+  if (!canvas.value || !props.snappingPolygon) { snapHint.value = null; insertHint.value = null; return; }
   const rect = canvas.value.getBoundingClientRect();
   lastPointer = [event.clientX - rect.left, event.clientY - rect.top];
-  const candidate = snapPolygon(lastPointer);
+  const candidate = props.drawingPolygon ? snapPolygon(lastPointer) : null;
   snapHint.value = candidate ? { x: candidate.x, y: candidate.y, kind: candidate.kind } : null;
+  const segment = !props.drawingPolygon ? hitDraftSegment(lastPointer) : null;
+  insertHint.value = segment ? { x: segment.x, y: segment.y } : null;
 }
 function startPolygonPick(event: PointerEvent): void {
   updateSnapHint(event);
-  polygonPointerDown = props.drawingPolygon && event.button === 0 && lastPointer ? [...lastPointer] : null;
+  polygonPointerDown = props.snappingPolygon && (props.drawingPolygon || props.editingPolygonIndex != null)
+    && event.button === 0 && lastPointer ? [...lastPointer] : null;
 }
 function finishPolygonPick(event: PointerEvent): void {
   const start = polygonPointerDown;
   polygonPointerDown = null;
-  if (!start || !props.drawingPolygon || !canvas.value || !engine) return;
+  if (!start || !props.snappingPolygon || !canvas.value || !engine) return;
   const rect = canvas.value.getBoundingClientRect();
   const screen: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
   if (Math.hypot(screen[0] - start[0], screen[1] - start[1]) > 4) return;
+  if (!props.drawingPolygon) {
+    const segment = hitDraftSegment(screen);
+    if (segment) emit('insertVertex', segment.index, segment.point);
+    insertHint.value = null;
+    return;
+  }
   const snapped = snapPolygon(screen);
   if (snapped) { emit('pickPolygon', snapped.point); return; }
   const camera = engine.application.camera.camera;
@@ -444,7 +489,7 @@ function applyClip(): void {
   }
 }
 watch(() => props.clip, applyClip, { deep: true });
-watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; lastPointer = null; } });
+watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; insertHint.value = null; lastPointer = null; } });
 watch(() => props.drawingPolygon, value => {
   polygonPointerDown = null;
   if (!value) snapHint.value = null;
@@ -487,7 +532,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
   <div class="editor-scene">
     <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景" @pointerdown="startPolygonPick"
       @pointerup="finishPolygonPick" @pointercancel="polygonPointerDown = null"
-      @pointermove="updateSnapHint" @pointerleave="snapHint = null; lastPointer = null"></canvas>
+      @pointermove="updateSnapHint" @pointerleave="snapHint = null; insertHint = null; lastPointer = null"></canvas>
     <svg class="editor-boundary-overlay" :viewBox="`0 0 ${sceneSize.width} ${sceneSize.height}`" aria-hidden="true">
       <polyline v-for="line in boundaryLines" :key="line.key" :points="line.points"
         :class="[line.action, { draft: line.draft, volume: line.volume }]" />
@@ -496,6 +541,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
         <path v-else-if="snapHint.kind === 'midpoint'" :d="`M ${snapHint.x} ${snapHint.y - 7} L ${snapHint.x - 7} ${snapHint.y + 5} L ${snapHint.x + 7} ${snapHint.y + 5} Z`" />
         <circle v-else :cx="snapHint.x" :cy="snapHint.y" r="6" />
         <text :x="snapHint.x + 11" :y="snapHint.y - 9">{{ { vertex: '端点', midpoint: '中点', edge: '边线' }[snapHint.kind] }}</text>
+      </g>
+      <g v-if="insertHint" class="editor-insert-hint">
+        <circle :cx="insertHint.x" :cy="insertHint.y" r="8" />
+        <text :x="insertHint.x + 12" :y="insertHint.y - 10">＋ 点击添加点</text>
       </g>
       <circle v-for="handle in vertexHandles" :key="handle.index" :cx="handle.x" :cy="handle.y" r="6"
         @pointerdown="startVertexDrag(handle.index, $event)" @pointermove="moveVertex" @pointerup="endVertexDrag"
@@ -536,7 +585,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
-    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
   </div>
 </template>
@@ -551,6 +600,8 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay polyline.volume { fill: none; stroke-width: 1.5; }
 .editor-boundary-overlay .editor-snap-hint :is(rect, path, circle) { fill: none; stroke: #f6d265; stroke-width: 2; pointer-events: none; }
 .editor-boundary-overlay .editor-snap-hint text { fill: #f6d265; font-size: 13px; paint-order: stroke; stroke: #07121e; stroke-width: 3px; }
+.editor-boundary-overlay .editor-insert-hint circle { fill: none; stroke: #8fe3ff; stroke-width: 2; pointer-events: none; }
+.editor-boundary-overlay .editor-insert-hint text { fill: #8fe3ff; font-size: 13px; paint-order: stroke; stroke: #07121e; stroke-width: 3px; }
 .editor-boundary-overlay circle { fill: #f6d265; stroke: #193a39; stroke-width: 2; pointer-events: all; cursor: move; }
 .editor-boundary-overlay circle.volume-center { fill: #8fe3ff; stroke: #104a64; stroke-width: 3; }
 .editor-boundary-overlay circle.volume-height { fill: #cb93ff; stroke: #422361; stroke-width: 3; }

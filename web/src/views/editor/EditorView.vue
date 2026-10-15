@@ -246,6 +246,9 @@ function picked(point: XYZ): void {
 function movePolygonVertex(index: number, point: [number, number]): void {
   polygonDraft.value[index] = point;
 }
+function insertPolygonVertex(index: number, point: [number, number]): void {
+  polygonDraft.value.splice(index, 0, point);
+}
 async function saveGeography(): Promise<void> {
   const frame = copyGeography(geographyDraft.value);
   if (!Number.isInteger(frame.source_epsg) || frame.source_epsg <= 0
@@ -391,7 +394,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && drawingPolygon"
         :editing-volume-index="editingVolume" @pick-polygon="polygonDraft.push($event)"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
-        @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
+        @move-vertex="movePolygonVertex" @insert-vertex="insertPolygonVertex"
+        @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
         @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event">
         <template #tools>
