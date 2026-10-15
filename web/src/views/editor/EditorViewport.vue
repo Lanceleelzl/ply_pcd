@@ -21,7 +21,6 @@ const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, num
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const loaded = ref(false);
-const confirmLargeLoad = ref(false);
 const topView = ref(false);
 const query = ref(false);
 const fps = ref(0);
@@ -458,16 +457,14 @@ function endBoxRotation(event: PointerEvent): void {
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
 
-async function displayGaussian(confirmed = false): Promise<void> {
-  if (!engine || !props.gaussianUrl || loading.value) return;
-  if ((props.largeOriginalBytes || props.largeOriginalCount) && !confirmed) { confirmLargeLoad.value = true; return; }
-  confirmLargeLoad.value = false;
+async function displayGaussian(): Promise<void> {
+  if (!engine || !props.gaussianUrl || loading.value || props.largeOriginalBytes || props.largeOriginalCount) return;
   loading.value = true;
   try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod); loaded.value = true; }
   catch (error) { emit('notify', error instanceof Error ? error.message : String(error)); }
   finally { loading.value = false; }
 }
-function displayPoints(): void { engine?.showPoints(); loaded.value = false; confirmLargeLoad.value = false; }
+function displayPoints(): void { engine?.showPoints(); loaded.value = false; }
 function fit(): void { engine?.fit(); }
 function toggleTop(): void {
   topView.value = !topView.value;
@@ -570,17 +567,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       <button type="button" @click="fit">适配视角</button>
       <button type="button" :class="{ active: topView }" @click="toggleTop">{{ topView ? '返回三维' : '俯视' }}</button>
       <button type="button" :class="{ active: query }" @click="toggleQuery">场景取点</button>
-      <button type="button" :disabled="!gaussianUrl || loading" @click="loaded ? displayPoints() : displayGaussian()">
+      <button type="button" :disabled="!gaussianUrl || loading || (!!(largeOriginalBytes || largeOriginalCount) && !loaded)" @click="loaded ? displayPoints() : displayGaussian()">
         {{ loading ? '加载高斯中…' : loaded ? '中心点' : '显示高斯' }}
       </button>
       <slot name="tools" />
-    </div>
-    <div v-if="confirmLargeLoad" class="editor-load-backdrop">
-      <div class="editor-load-dialog" role="alertdialog" aria-modal="true" aria-label="加载大文件确认">
-        <p>{{ largeOriginalCount ? `当前层约 ${largeOriginalCount.toLocaleString()} 个高斯` : `原始文件约 ${(largeOriginalBytes! / 1048576).toFixed(1)} MiB` }}，直接加载可能耗尽浏览器内存。建议选择较粗 LOD 或先生成轻量工作层。</p>
-        <button type="button" @click="confirmLargeLoad = false">取消加载</button>
-        <button type="button" @click="displayGaussian(true)">仍要加载原件</button>
-      </div>
     </div>
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
@@ -614,10 +604,6 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay circle.box-rotation.axis-0 { stroke: #f47878; }
 .editor-boundary-overlay circle.box-rotation.axis-1 { stroke: #71d690; }
 .editor-boundary-overlay circle.box-rotation.axis-2 { stroke: #6ea9ff; }
-.editor-load-backdrop { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; background: #030a12a8; }
-.editor-load-dialog { box-sizing: border-box; width: min(390px, calc(100% - 32px)); padding: 18px; border: 1px solid #6b879e; border-radius: 9px; background: #102136; box-shadow: 0 16px 40px #0008; }
-.editor-load-dialog p { margin: 0 0 16px; line-height: 1.5; }
-.editor-load-dialog button { margin-right: 8px; padding: 7px 10px; border: 1px solid #61809a; border-radius: 5px; color: #edf5ff; background: #17334c; cursor: pointer; }
 .editor-scene canvas:focus-visible { outline: 2px solid #78d6b8; outline-offset: -2px; }
 .editor-scene-tools { position: absolute; z-index: 3; top: 12px; left: 12px; right: 96px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .editor-scene-tools :deep(*) { pointer-events: auto; }

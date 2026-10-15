@@ -94,6 +94,7 @@ const levelCount = computed(() => useDerived.value && selectedDerived.value ? se
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
   ? task.value?.metadata?.source_point_count : undefined));
 const largeOriginalCount = computed(() => !useDerived.value && task.value?.input_kind === 'dataset'
+  && task.value.format !== 'streamed_sog'
   && (levelCount.value ?? 0) > 20_000_000 ? levelCount.value : 0);
 
 async function refresh(): Promise<void> {
@@ -416,8 +417,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
-          <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，建议先抽稀再浏览；直接加载前会再次提示。</p>
-          <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，建议选择较粗 LOD 或先抽稀；直接加载前会再次提示。</p>
+          <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
+          <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <label>抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>
