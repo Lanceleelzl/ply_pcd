@@ -25,10 +25,11 @@ export class SingleGaussianDisplay {
     if (this.destroyed) return;
     const generation = ++this.generation;
     this.release();
+    const editorStream = this.clipMode === 'editor' && filename === 'lod-meta.json';
     let direct: Awaited<ReturnType<typeof import('./direct-lcc-loader').loadDirectGaussian>> | null = null;
     let asset: pc.Asset;
     try {
-      direct = /\.(?:spz|lcc2?)$/i.test(filename) || filename === 'lod-meta.json'
+      direct = /\.(?:spz|lcc2?)$/i.test(filename) || filename === 'lod-meta.json' && !editorStream
         ? await import('./direct-lcc-loader').then(module => module.loadDirectGaussian(this.app, url, filename, lodIndex))
         : null;
       asset = direct?.asset ?? new pc.Asset('Single model Gaussian', 'gsplat', { url, filename });
@@ -38,6 +39,8 @@ export class SingleGaussianDisplay {
         return;
       }
       this.asset = asset;
+      if (editorStream)
+        this.app.scene.gsplat.splatBudget = 5_000_000;
       if (!direct) {
         this.app.assets.add(asset);
         await new Promise<void>((resolve, reject) => {
@@ -50,6 +53,10 @@ export class SingleGaussianDisplay {
       const entity = new pc.Entity('Single model Gaussian');
       this.entity = entity;
       entity.addComponent('gsplat', { asset });
+      if (editorStream && lodIndex !== undefined) {
+        entity.gsplat!.lodRangeMin = lodIndex;
+        entity.gsplat!.lodRangeMax = lodIndex;
+      }
       entity.setLocalPosition((direct?.transform.translation.x ?? 0) - this.origin[0],
         (direct?.transform.translation.y ?? 0) - this.origin[1],
         (direct?.transform.translation.z ?? 0) - this.origin[2]);
