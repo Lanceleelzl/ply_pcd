@@ -69,13 +69,25 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
       if (kind === 'vertex') { point = a; screen = sa; }
       else if (kind === 'midpoint') {
         point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        screen = [(sa[0] + sb[0]) / 2, (sa[1] + sb[1]) / 2];
+        screen = project(point);
       } else {
         const dx = sb[0] - sa[0], dy = sb[1] - sa[1], length = dx * dx + dy * dy;
         if (!length) continue;
-        const t = Math.max(0, Math.min(1, ((screenPoint[0] - sa[0]) * dx + (screenPoint[1] - sa[1]) * dy) / length));
+        const u = Math.max(0, Math.min(1, ((screenPoint[0] - sa[0]) * dx + (screenPoint[1] - sa[1]) * dy) / length));
+        if (Math.hypot(screenPoint[0] - sa[0] - u * dx, screenPoint[1] - sa[1] - u * dy) >= best) continue;
+        const axis = Math.abs(dx) >= Math.abs(dy) ? 0 : 1;
+        const target = sa[axis] + u * (sb[axis] - sa[axis]);
+        let low = 0, high = 1;
+        for (let step = 0; step < 12; step++) {
+          const middle = (low + high) / 2;
+          const candidate: [number, number] = [a[0] + middle * (b[0] - a[0]), a[1] + middle * (b[1] - a[1])];
+          const projected = project(candidate)[axis];
+          if ((projected < target) === (sb[axis] > sa[axis])) low = middle;
+          else high = middle;
+        }
+        const t = (low + high) / 2;
         point = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-        screen = [sa[0] + t * dx, sa[1] + t * dy];
+        screen = project(point);
       }
       const distance = Math.hypot(screenPoint[0] - screen[0], screenPoint[1] - screen[1]);
       if (distance < best) { best = distance; result = { point: [...point], x: screen[0], y: screen[1], kind }; }
