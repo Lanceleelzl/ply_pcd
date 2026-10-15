@@ -10,9 +10,10 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
   largeOriginalCount?: number;
   rules: EditorRule[]; polygonDraft: [number, number][]; editingPolygonIndex?: number | null;
-  snappingPolygon?: boolean; editingVolumeIndex?: number | null;
+  snappingPolygon?: boolean; drawingPolygon?: boolean; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
-const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]];
+const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, number]];
+  notify: [message: string]; moveVertex: [index: number, point: [number, number]];
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
   moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
   rotateBox: [rotation: [number, number, number, number]] }>();
@@ -43,6 +44,7 @@ let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
 let lastPointer: [number, number] | null = null;
+let polygonPointerDown: [number, number] | null = null;
 
 function snapPolygon(screenPoint: [number, number]): { point: [number, number]; x: number; y: number;
   kind: 'vertex' | 'midpoint' | 'edge' } | null {
@@ -83,11 +85,37 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
   return result;
 }
 function updateSnapHint(event: PointerEvent): void {
-  if (!canvas.value || !props.snappingPolygon) { snapHint.value = null; return; }
+  if (!canvas.value || !props.drawingPolygon) { snapHint.value = null; return; }
   const rect = canvas.value.getBoundingClientRect();
   lastPointer = [event.clientX - rect.left, event.clientY - rect.top];
   const candidate = snapPolygon(lastPointer);
   snapHint.value = candidate ? { x: candidate.x, y: candidate.y, kind: candidate.kind } : null;
+}
+function startPolygonPick(event: PointerEvent): void {
+  updateSnapHint(event);
+  polygonPointerDown = props.drawingPolygon && event.button === 0 && lastPointer ? [...lastPointer] : null;
+}
+function finishPolygonPick(event: PointerEvent): void {
+  const start = polygonPointerDown;
+  polygonPointerDown = null;
+  if (!start || !props.drawingPolygon || !canvas.value || !engine) return;
+  const rect = canvas.value.getBoundingClientRect();
+  const screen: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
+  if (Math.hypot(screen[0] - start[0], screen[1] - start[1]) > 4) return;
+  const snapped = snapPolygon(screen);
+  if (snapped) { emit('pickPolygon', snapped.point); return; }
+  const camera = engine.application.camera.camera;
+  if (!camera) return;
+  const bounds = engine.scene.bounds(), origin = engine.scene.displayOrigin;
+  const z = (bounds.min.z + bounds.max.z) / 2;
+  const near = camera.screenToWorld(screen[0], screen[1], camera.nearClip);
+  const far = camera.screenToWorld(screen[0], screen[1], camera.farClip);
+  const delta = far.z - near.z;
+  if (Math.abs(delta) < 1e-8) { emit('notify', '当前视角与平面平行，请切换俯视后绘制'); return; }
+  const ratio = (z - near.z) / delta;
+  if (ratio < 0 || ratio > 1) return;
+  emit('pickPolygon', [near.x + (far.x - near.x) * ratio + origin[0],
+    near.y + (far.y - near.y) * ratio + origin[1]]);
 }
 
 function rotateBoxVector(local: XYZ, [w, qx, qy, qz]: [number, number, number, number]): XYZ {
@@ -391,8 +419,8 @@ function toggleTop(): void {
 }
 function toggleQuery(): void {
   query.value = !query.value;
-  engine?.setQueryEnabled(query.value);
-  engine?.setQueryPicking(query.value);
+  engine?.setQueryEnabled(query.value && !props.drawingPolygon);
+  engine?.setQueryPicking(query.value && !props.drawingPolygon);
 }
 function applyClip(): void {
   if (!engine) return;
@@ -405,6 +433,12 @@ function applyClip(): void {
 }
 watch(() => props.clip, applyClip, { deep: true });
 watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; lastPointer = null; } });
+watch(() => props.drawingPolygon, value => {
+  polygonPointerDown = null;
+  if (!value) snapHint.value = null;
+  engine?.setQueryEnabled(query.value && !value);
+  engine?.setQueryPicking(query.value && !value);
+});
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false;
@@ -418,17 +452,12 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     engine = new SingleModelEngine(element, cloud, props.origin,
       props.transform,
       point => {
-        if (props.snappingPolygon && engine) {
-          const bounds = engine.scene.bounds(), origin = engine.scene.displayOrigin;
-          const screen = engine.application.camera.camera?.worldToScreen(new pc.Vec3(
-            point[0] - origin[0], point[1] - origin[1], (bounds.min.z + bounds.max.z) / 2));
-          const snapped = snapPolygon(lastPointer ?? (screen ? [screen.x, screen.y] : [Infinity, Infinity]));
-          if (snapped) point = [snapped.point[0], snapped.point[1], point[2]];
-        }
         emit('pick', point);
-        if (query.value) queueMicrotask(() => engine?.setQueryPicking(true));
+        if (query.value && !props.drawingPolygon) queueMicrotask(() => engine?.setQueryPicking(true));
       },
       undefined, undefined, undefined, undefined, undefined, 'fly');
+    engine.setQueryEnabled(query.value && !props.drawingPolygon);
+    engine.setQueryPicking(query.value && !props.drawingPolygon);
     applyClip();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
     boundaryTimer = setInterval(updateBoundaryLines, 50);
@@ -444,7 +473,8 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 
 <template>
   <div class="editor-scene">
-    <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景" @pointerdown="updateSnapHint"
+    <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景" @pointerdown="startPolygonPick"
+      @pointerup="finishPolygonPick" @pointercancel="polygonPointerDown = null"
       @pointermove="updateSnapHint" @pointerleave="snapHint = null; lastPointer = null"></canvas>
     <svg class="editor-boundary-overlay" :viewBox="`0 0 ${sceneSize.width} ${sceneSize.height}`" aria-hidden="true">
       <polyline v-for="line in boundaryLines" :key="line.key" :points="line.points"
@@ -494,7 +524,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
-    <div class="editor-scene-hint" role="status">{{ volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
   </div>
 </template>

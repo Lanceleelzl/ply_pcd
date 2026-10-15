@@ -54,6 +54,7 @@ const workLevel = ref(0);
 const useDerived = ref(false);
 const lastPoint = ref<XYZ | null>(null);
 const polygonDraft = ref<[number, number][]>([]);
+const drawingPolygon = ref(false);
 const editingPolygon = ref<number | null>(null);
 const editingVolume = ref<number | null>(null);
 const volumeDraft = ref<Extract<EditorRule, { type: 'sphere' | 'box' }> | null>(null);
@@ -166,12 +167,14 @@ async function addPolygon(): Promise<void> {
       : currentState.value.rules.map((item, index) => index === editingPolygon.value ? rule : item) });
   if (!saved) return;
   polygonDraft.value = [];
+  drawingPolygon.value = false;
   editingPolygon.value = null;
 }
 function editPolygon(index: number): void {
   const rule = currentState.value.rules[index];
   if (rule.type !== 'polygon') return;
   editingPolygon.value = index;
+  drawingPolygon.value = false;
   boundaryAction.value = rule.action;
   polygonDraft.value = rule.points.map(point => [...point]);
 }
@@ -238,7 +241,6 @@ function removeRule(index: number): void {
 }
 function picked(point: XYZ): void {
   lastPoint.value = point;
-  if (panel.value === 'bounds') polygonDraft.value.push([point[0], point[1]]);
   coordinateResult.value = null;
 }
 function movePolygonVertex(index: number, point: [number, number]): void {
@@ -386,7 +388,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
         :rules="displayRules" :polygon-draft="polygonDraft" :editing-polygon-index="editingPolygon"
-        :snapping-polygon="panel === 'bounds'" :editing-volume-index="editingVolume"
+        :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && drawingPolygon"
+        :editing-volume-index="editingVolume" @pick-polygon="polygonDraft.push($event)"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
         @move-vertex="movePolygonVertex" @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
@@ -421,13 +424,14 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" :disabled="!currentState.selected_lods.length || task.process_status === 'running' || task.process_status === 'queued'" @click="run">处理选中层级</button>
         </template>
         <template v-else-if="panel === 'bounds'">
-          <p>开启场景取点后逐点点击；平面边界沿模型全高生效。</p>
+          <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
           <p v-if="lastPoint">当前取点：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
           <label>边界规则<select v-model="boundaryAction"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
+          <button type="button" @click="drawingPolygon = !drawingPolygon">{{ drawingPolygon ? '结束 2D 绘制' : '开始 2D 绘制' }}</button>
           <p>{{ editingPolygon === null ? '平面草稿' : '正在编辑平面边界' }}：{{ polygonDraft.length }} 点</p>
           <div v-for="(point, index) in polygonDraft" :key="index" class="editor-clip-row editor-vertex-row"><span>{{ index + 1 }}</span><input v-model.number="point[0]" type="number" step="any" :aria-label="`顶点 ${index + 1} X`"><input v-model.number="point[1]" type="number" step="any" :aria-label="`顶点 ${index + 1} Y`"><button type="button" @click="polygonDraft.splice(index, 1)">删点</button></div>
           <button type="button" :disabled="polygonDraft.length < 3" @click="addPolygon">{{ editingPolygon === null ? '完成 2D 平面边界' : '保存平面边界' }}</button>
-          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []; editingPolygon = null">清空草稿</button>
+          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []; editingPolygon = null; drawingPolygon = false">清空草稿</button>
           <label>球半径<input v-model.number="sphereRadius" type="number" min="0.001" step="any"></label>
           <button type="button" :disabled="!lastPoint || sphereRadius <= 0" @click="addSphere">以取点为球心添加球体</button>
           <div class="editor-size"><label v-for="(_, axis) in boxSize" :key="axis">{{ ['X','Y','Z'][axis] }} 尺寸<input v-model.number="boxSize[axis]" type="number" min="0.001" step="any"></label></div>
