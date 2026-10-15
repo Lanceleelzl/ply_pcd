@@ -8,7 +8,8 @@ import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 import { keepsEditorPoint } from './editor-rule-preview';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
-  origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
+  origin: XYZ; pointCount?: number; lodLabel: string; previewLodLabel: string; previewPointCount?: number;
+  transform: EditorTransform; largeOriginalBytes?: number;
   largeOriginalCount?: number;
   rules: EditorRule[]; polygonDraft: [number, number][]; editingPolygonIndex?: number | null;
   snappingPolygon?: boolean; drawingPolygon?: boolean; editingVolumeIndex?: number | null;
@@ -588,7 +589,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
     <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
-    <div class="editor-scene-stats">{{ lodLabel }} · 层级高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }}<template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
+    <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '层级高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>
 

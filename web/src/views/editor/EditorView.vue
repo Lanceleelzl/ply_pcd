@@ -80,6 +80,7 @@ watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.displa
   clip.value = currentState.value.display_clip ? copyClip(currentState.value.display_clip) : defaultClip();
 }, { immediate: true });
 const currentTransform = computed(() => currentState.value.transform ?? identityTransform());
+const previewLevel = computed(() => task.value?.input_kind === 'single' ? 0 : task.value?.available_levels.at(-1) ?? 0);
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const selectedDerived = computed(() => task.value?.derived_lods.filter(item => item.source_level === workLevel.value).at(-1));
 const currentUrl = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.gaussian_url : selectedLod.value?.gaussian_url ??
@@ -393,7 +394,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
     <div v-else class="editor-stage">
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
-        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :clip="clip" :transform="currentTransform"
+        :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :preview-lod-label="`LOD ${previewLevel}`"
+        :preview-point-count="task.metadata.source_point_count" :clip="clip" :transform="currentTransform"
         :rules="displayRules" :polygon-draft="polygonDraft" :editing-polygon-index="editingPolygon"
         :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && drawingPolygon"
         :editing-volume-index="editingVolume" @pick-polygon="polygonDraft.push($event)"
@@ -419,7 +421,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel" @change="useDerived = false"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
-          <p>只加载当前工作层；其他层级在执行时由服务端处理。</p>
+          <p>点云预览来自 LOD {{ previewLevel }}；显示高斯时加载选定工作层，其他目标层在执行时由服务端处理。</p>
           <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <label>抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
