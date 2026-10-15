@@ -3,19 +3,23 @@ import type { XYZ } from '../../coordinate-math';
 import { GaussianClipController } from '../../gaussian-clipping.ts';
 import { MergeGaussianClip } from '../../views/merge/MergeGaussianClip';
 import type { Region } from '../../api/merge-api';
+import type { EditorRule } from '../../api/gaussian-editor-api';
+import { EditorGaussianClip } from '../../views/editor/EditorGaussianClip';
 
 export class SingleGaussianDisplay {
   private asset: pc.Asset | null = null;
   private entity: pc.Entity | null = null;
   private clip: GaussianClipController | null = null;
   private mergeClip: MergeGaussianClip | null = null;
+  private editorClip: EditorGaussianClip | null = null;
   private mergeRules: { regions: Region[]; model: number; enabled: boolean } | null = null;
+  private editorRules: { rules: EditorRule[]; origin: XYZ } | null = null;
   private generation = 0;
   private destroyed = false;
 
   constructor(private readonly app: pc.Application, private readonly parent: pc.Entity,
     private readonly origin: XYZ, private readonly pointsVisible: (visible: boolean) => void,
-    private readonly clipMode: 'standard' | 'merge' = 'standard') {}
+    private readonly clipMode: 'standard' | 'merge' | 'editor' = 'standard') {}
 
   async show(url: string, filename: string, lodIndex?: number): Promise<void> {
     if (this.destroyed) return;
@@ -57,6 +61,10 @@ export class SingleGaussianDisplay {
       if (this.clipMode === 'merge') {
         this.mergeClip = new MergeGaussianClip(this.app, entity.gsplat!);
         if (this.mergeRules) this.mergeClip.setRules(this.mergeRules.regions, this.mergeRules.model, this.mergeRules.enabled);
+      } else if (this.clipMode === 'editor') {
+        this.editorClip = new EditorGaussianClip(this.app, entity.gsplat!);
+        this.editorClip.setRules(this.editorRules?.rules ?? [], this.editorRules?.origin ?? this.origin);
+        this.clip = this.editorClip;
       } else this.clip = new GaussianClipController(entity.gsplat!);
       this.pointsVisible(false);
     } catch (error) {
@@ -75,6 +83,11 @@ export class SingleGaussianDisplay {
     this.mergeClip?.setRules(regions, model, enabled);
   }
 
+  setEditorRules(rules: EditorRule[], origin: XYZ): void {
+    this.editorRules = { rules, origin };
+    this.editorClip?.setRules(rules, origin);
+  }
+
   showPoints(): void { if (!this.destroyed) { ++this.generation; this.release(); } }
 
   destroy(): void {
@@ -84,6 +97,7 @@ export class SingleGaussianDisplay {
 
   private release(): void {
     this.clip = null;
+    this.editorClip?.destroy(); this.editorClip = null;
     this.mergeClip?.destroy(); this.mergeClip = null;
     this.entity?.destroy();
     if (this.asset) { this.asset.unload(); this.app.assets.remove(this.asset); }

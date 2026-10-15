@@ -5,6 +5,7 @@ import type { XYZ } from '../../coordinate-math';
 import type { EditorDisplayClip, EditorRule, EditorTransform } from '../../api/gaussian-editor-api';
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
+import { keepsEditorPoint } from './editor-rule-preview';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
@@ -24,6 +25,8 @@ const loaded = ref(false);
 const topView = ref(false);
 const query = ref(false);
 const fps = ref(0);
+const previewCount = ref<number | null>(null);
+const sampleCount = ref(0);
 const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean; volume: boolean }>>([]);
 const vertexHandles = ref<Array<{ index: number; x: number; y: number }>>([]);
 const snapHint = ref<{ x: number; y: number; kind: 'vertex' | 'midpoint' | 'edge' } | null>(null);
@@ -485,7 +488,14 @@ function applyClip(): void {
     engine.setOriginPlane(plane, value.visible, value.side);
   }
 }
+function applyRules(): void {
+  if (!engine) return;
+  previewCount.value = engine.setPointRuleFilter(props.rules.length
+    ? point => keepsEditorPoint(props.rules, point) : null);
+  engine.gaussian.setEditorRules(props.rules, engine.scene.displayOrigin);
+}
 watch(() => props.clip, applyClip, { deep: true });
+watch(() => JSON.stringify(props.rules), applyRules);
 watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; insertHint.value = null; lastPointer = null; } });
 watch(() => props.drawingPolygon, value => {
   polygonPointerDown = null;
@@ -495,7 +505,7 @@ watch(() => props.drawingPolygon, value => {
 });
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
-  aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false;
+  aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false; previewCount.value = null; sampleCount.value = 0;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
   if (boundaryTimer) { clearInterval(boundaryTimer); boundaryTimer = null; }
   if (!element || !url) return;
@@ -503,16 +513,18 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
   try {
     const cloud = await loadPreview(url, request.signal);
     if (request.signal.aborted || canvas.value !== element) return;
+    sampleCount.value = cloud.count;
     engine = new SingleModelEngine(element, cloud, props.origin,
       props.transform,
       point => {
         emit('pick', point);
         if (query.value && !props.drawingPolygon) queueMicrotask(() => engine?.setQueryPicking(true));
       },
-      undefined, undefined, undefined, undefined, undefined, 'fly');
+      undefined, undefined, undefined, undefined, undefined, 'fly', 'editor');
     engine.setQueryEnabled(query.value && !props.drawingPolygon);
     engine.setQueryPicking(query.value && !props.drawingPolygon);
     applyClip();
+    applyRules();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
     boundaryTimer = setInterval(updateBoundaryLines, 50);
   } catch (error) {
@@ -520,7 +532,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
   }
 }, { immediate: true, flush: 'post' });
 watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
-watch(() => props.transform, value => engine?.applyTransform(value), { deep: true });
+watch(() => JSON.stringify(props.transform), () => { engine?.applyTransform(props.transform); applyRules(); });
 onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer);
   if (boundaryTimer) clearInterval(boundaryTimer); });
 </script>
@@ -576,7 +588,7 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
     <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
-    <div class="editor-scene-stats">{{ lodLabel }} · 高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }} · {{ fps }} FPS</div>
+    <div class="editor-scene-stats">{{ lodLabel }} · 层级高斯 {{ pointCount?.toLocaleString() ?? (loaded ? '已加载（数量未知）' : '待读取') }}<template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>
 

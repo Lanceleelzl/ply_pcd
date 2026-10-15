@@ -16,6 +16,9 @@ export class SingleModelScene {
   private axesVisible = false;
   private readonly originFrame = new pc.Entity('Single model file origin');
   private visiblePoint: (point: pc.Vec3) => boolean = () => true;
+  private visibleClipPoint: (point: pc.Vec3) => boolean = () => true;
+  private ruleFilter: (point: XYZ) => boolean = () => true;
+  private hasRuleFilter = false;
 
   constructor(app: pc.Application, readonly cloud: PreviewCloud, readonly fileOrigin: XYZ,
     transform: TransformParameters) {
@@ -57,6 +60,34 @@ export class SingleModelScene {
     const [rx, ry, rz] = transform.rotation_degrees;
     this.root.setLocalEulerAngles(rx, ry, rz);
     this.root.setLocalScale(...transform.scale);
+    if (this.hasRuleFilter) this.refreshRulePreview();
+  }
+
+  setRuleFilter(filter: ((point: XYZ) => boolean) | null): number {
+    this.ruleFilter = filter ?? (() => true);
+    this.hasRuleFilter = filter !== null;
+    this.visiblePoint = point => this.visibleClipPoint(point)
+      && this.ruleFilter([point.x + this.displayOrigin[0], point.y + this.displayOrigin[1],
+        point.z + this.displayOrigin[2]]);
+    return this.refreshRulePreview();
+  }
+
+  private refreshRulePreview(): number {
+    const source = this.cloud.positions;
+    const output = new Float32Array(source.length);
+    const matrix = transformParametersMatrix(this.transform);
+    let visible = 0;
+    for (let offset = 0; offset < source.length; offset += 3) {
+      const point = transformXYZ(matrix, [this.fileOrigin[0] + source[offset],
+        this.fileOrigin[1] + source[offset + 1], this.fileOrigin[2] + source[offset + 2]]);
+      if (!this.ruleFilter(point)) continue;
+      output.set(source.subarray(offset, offset + 3), visible * 3);
+      visible++;
+    }
+    const mesh = this.points.render!.meshInstances[0].mesh;
+    mesh.setPositions(output.subarray(0, visible * 3));
+    mesh.update(pc.PRIMITIVE_POINTS, false);
+    return visible;
   }
 
   setPointsVisible(visible: boolean): void { this.points.render!.enabled = visible; }
@@ -68,7 +99,7 @@ export class SingleModelScene {
     worldToBox: pc.Mat4, originSides: pc.Vec3, worldToOrigin: pc.Mat4): void {
     this.material.setClipState(enabled, min, max, boxEnabled, worldToBox, originSides, worldToOrigin);
     const boxPoint = new pc.Vec3(); const originPoint = new pc.Vec3();
-    this.visiblePoint = point => {
+    this.visibleClipPoint = point => {
       if (enabled) {
         if (point.x < min.x || point.y < min.y || point.z < min.z
           || point.x > max.x || point.y > max.y || point.z > max.z) return false;
@@ -82,6 +113,9 @@ export class SingleModelScene {
         && (originSides.y === 0 || originSides.y * originPoint.y >= 0)
         && (originSides.z === 0 || originSides.z * originPoint.z >= 0);
     };
+    this.visiblePoint = point => this.visibleClipPoint(point)
+      && this.ruleFilter([point.x + this.displayOrigin[0], point.y + this.displayOrigin[1],
+        point.z + this.displayOrigin[2]]);
   }
 
   pickPoint(camera: pc.Entity, screenX: number, screenY: number): XYZ | null {

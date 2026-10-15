@@ -1,6 +1,6 @@
 import * as pc from 'playcanvas';
 
-const shaderGLSL = /* glsl */`
+export const shaderGLSL = /* glsl */`
 uniform float uClipEnabled;
 uniform vec3 uClipMin;
 uniform vec3 uClipMax;
@@ -26,7 +26,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
 void modifySplatColor(vec3 center, inout vec4 color) {}
 `;
 
-const shaderWGSL = /* wgsl */`
+export const shaderWGSL = /* wgsl */`
 uniform uClipEnabled: f32;
 uniform uClipMin: vec3f;
 uniform uClipMax: vec3f;
@@ -74,9 +74,9 @@ export class GaussianClipController {
   private applied: ClipValues | null = null;
   private lastAppliedAt = Number.NEGATIVE_INFINITY;
 
-  constructor(component: pc.GSplatComponent) {
+  constructor(component: pc.GSplatComponent, modifier: { glsl: string; wgsl: string } = { glsl: shaderGLSL, wgsl: shaderWGSL }) {
     this.component = component;
-    component.setWorkBufferModifier({ glsl: shaderGLSL, wgsl: shaderWGSL });
+    component.setWorkBufferModifier(modifier);
   }
 
   setClipState(

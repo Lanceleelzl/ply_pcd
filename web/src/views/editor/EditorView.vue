@@ -71,8 +71,11 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
-const displayRules = computed(() => currentState.value.rules.map((rule, index) =>
-  index === editingVolume.value && volumeDraft.value ? volumeDraft.value : rule));
+const displayRules = computed(() => currentState.value.rules.map((rule, index) => {
+  if (index === editingPolygon.value && rule.type === 'polygon' && polygonDraft.value.length >= 3)
+    return { type: 'polygon', action: boundaryAction.value, points: polygonDraft.value } as EditorRule;
+  return index === editingVolume.value && volumeDraft.value ? volumeDraft.value : rule;
+}));
 watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.display_clip ?? null)], () => {
   clip.value = currentState.value.display_clip ? copyClip(currentState.value.display_clip) : defaultClip();
 }, { immediate: true });

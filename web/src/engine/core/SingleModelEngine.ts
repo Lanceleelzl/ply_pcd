@@ -55,12 +55,12 @@ export class SingleModelEngine {
     private readonly onPickingChanged?: (picking: boolean) => void,
     private readonly onCapture?: (capture: { point: XYZ; x: number; y: number } | null) => void,
     private readonly onSceneAxes?: (labels: Array<{ text: string; x: number; y: number; color: string }>) => void,
-    navigationMode: 'orbit' | 'fly' = 'orbit') {
+    navigationMode: 'orbit' | 'fly' = 'orbit', gaussianClipMode: 'standard' | 'editor' = 'standard') {
     this.application = new RegistrationApplication({ canvas, viewport: canvas.parentElement! });
     try {
       this.scene = new SingleModelScene(this.application.app, cloud, origin, transform);
       this.gaussian = new SingleGaussianDisplay(this.application.app, this.scene.root, origin,
-        visible => this.scene.setPointsVisible(visible));
+        visible => this.scene.setPointsVisible(visible), gaussianClipMode);
       this.camera = new ViewportCameraController({ camera: this.application.camera, canvas,
         orientationChanged: () => {}, baseDiagonal: this.scene.baseDiagonal,
         getBounds: () => this.scene.bounds() });
@@ -192,6 +192,9 @@ export class SingleModelEngine {
     this.scene.applyTransform(value);
     const bounds = this.scene.bounds(); this.handleBounds.min.copy(bounds.min); this.handleBounds.max.copy(bounds.max);
     this.refreshClip();
+  }
+  setPointRuleFilter(filter: ((point: XYZ) => boolean) | null): number {
+    return this.scene.setRuleFilter(filter);
   }
   get pickEnabled(): boolean { return this.tools.isActive('coordinate-query'); }
   set pickEnabled(enabled: boolean) { this.setQueryEnabled(enabled); }
