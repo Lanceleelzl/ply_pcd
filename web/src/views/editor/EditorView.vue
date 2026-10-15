@@ -10,6 +10,7 @@ import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUr
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
+import { pickDirectory } from '../../shared/directory-selection';
 import type { XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
 import '../../styles/module-entry.css';
@@ -22,6 +23,8 @@ const history = ref<EditorTask[]>([]);
 const kind = ref<EditorInputKind>('single');
 const files = ref<File[]>([]);
 const paths = ref<string[]>([]);
+const datasetDirectory = ref(false);
+const fallbackDirectoryInput = ref<HTMLInputElement>();
 const busy = ref(false);
 const phase = ref('');
 const uploaded = ref(0);
@@ -138,14 +141,25 @@ function selectFiles(event: Event): void {
   const input = event.target as HTMLInputElement;
   files.value = Array.from(input.files ?? []);
   paths.value = files.value.map(file => (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+  datasetDirectory.value = files.value.some(file => Boolean((file as File & { webkitRelativePath?: string }).webkitRelativePath));
+}
+async function selectDirectory(): Promise<void> {
+  try {
+    const selection = await pickDirectory(() => fallbackDirectoryInput.value?.click());
+    if (!selection) return;
+    files.value = selection.files;
+    paths.value = selection.paths;
+    datasetDirectory.value = true;
+    message.value = selection.files.length ? '' : '所选目录中没有文件';
+  } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
 async function create(): Promise<void> {
   if (!files.value.length || busy.value) return;
   busy.value = true; message.value = ''; phase.value = '上传中'; uploaded.value = 0; uploadTotal.value = 0;
   try {
     const created = await createEditorTask({ kind: kind.value, workspaceId: workspace.workspaceId,
-      file: kind.value === 'lod_group' || kind.value === 'dataset' && files.value.length > 1 ? undefined : files.value[0],
-      files: kind.value === 'lod_group' || kind.value === 'dataset' && files.value.length > 1 ? files.value : undefined,
+      file: kind.value === 'lod_group' || datasetDirectory.value ? undefined : files.value[0],
+      files: kind.value === 'lod_group' || datasetDirectory.value ? files.value : undefined,
       paths: paths.value,
       onProgress: (loaded, total) => { uploaded.value = loaded; uploadTotal.value = total; },
     });
@@ -373,10 +387,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <div class="module-entry-intro"><h1>创建高斯编辑任务</h1><p>导入单个高斯模型或同一模型的 LOD 文件组；大层级可先抽稀后编辑。</p></div>
         <section class="module-entry-card"><h2>新建任务</h2>
           <div class="module-entry-tile editor-upload">
-            <label>输入方式<select v-model="kind"><option value="single">单个高斯文件</option><option value="lod_group">有序 LOD 文件组</option><option value="dataset">完整数据集 ZIP／目录</option></select></label>
+            <label>输入方式<select v-model="kind" @change="files = []; paths = []; datasetDirectory = false"><option value="single">单个高斯文件</option><option value="lod_group">有序 LOD 文件组</option><option value="dataset">完整数据集 ZIP／目录</option></select></label>
             <input v-if="kind === 'single'" type="file" accept=".ply,.sog,.spz" @change="selectFiles">
             <input v-else-if="kind === 'lod_group'" type="file" accept=".ply" multiple @change="selectFiles">
-            <input v-else type="file" accept=".zip" @change="selectFiles">
+            <template v-else><label>ZIP 文件<input type="file" accept=".zip" @change="selectFiles"></label><button type="button" @click="selectDirectory">选择数据集目录</button><input ref="fallbackDirectoryInput" hidden type="file" webkitdirectory multiple @change="selectFiles"></template>
             <p v-if="kind === 'lod_group'">按精细到粗略顺序选择 LOD；输入文件须属于同一模型。</p>
             <p v-if="files.length">已选择 {{ files.length }} 个文件</p>
           </div>
