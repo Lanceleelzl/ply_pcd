@@ -9,7 +9,8 @@ import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   origin: XYZ; pointCount?: number; lodLabel: string; transform: EditorTransform; largeOriginalBytes?: number;
   largeOriginalCount?: number;
-  rules: EditorRule[]; polygonDraft: [number, number][]; editingVolumeIndex?: number | null;
+  rules: EditorRule[]; polygonDraft: [number, number][]; editingPolygonIndex?: number | null;
+  snappingPolygon?: boolean; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; notify: [message: string]; moveVertex: [index: number, point: [number, number]];
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
@@ -24,6 +25,7 @@ const query = ref(false);
 const fps = ref(0);
 const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean; volume: boolean }>>([]);
 const vertexHandles = ref<Array<{ index: number; x: number; y: number }>>([]);
+const snapHint = ref<{ x: number; y: number; kind: 'vertex' | 'midpoint' | 'edge' } | null>(null);
 const volumeCenterHandle = ref<{ x: number; y: number } | null>(null);
 const volumeHeightHandle = ref<{ x: number; y: number } | null>(null);
 const volumeRadiusHandle = ref<{ x: number; y: number } | null>(null);
@@ -40,6 +42,53 @@ let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
+let lastPointer: [number, number] | null = null;
+
+function snapPolygon(screenPoint: [number, number]): { point: [number, number]; x: number; y: number;
+  kind: 'vertex' | 'midpoint' | 'edge' } | null {
+  if (!props.snappingPolygon || !engine || !canvas.value) return null;
+  const camera = engine.application.camera.camera;
+  if (!camera) return null;
+  const bounds = engine.scene.bounds(), origin = engine.scene.displayOrigin;
+  const z = (bounds.min.z + bounds.max.z) / 2;
+  const project = (point: [number, number]) => {
+    const screen = camera.worldToScreen(new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z));
+    return [screen.x, screen.y] as [number, number];
+  };
+  const polygons = props.rules.flatMap((rule, index) => rule.type === 'polygon' && index !== props.editingPolygonIndex
+    ? [rule.points] : []);
+  let best = 12;
+  let result: ReturnType<typeof snapPolygon> = null;
+  for (const kind of ['vertex', 'midpoint', 'edge'] as const) {
+    for (const polygon of polygons) for (let index = 0; index < polygon.length; index++) {
+      const a = polygon[index], b = polygon[(index + 1) % polygon.length];
+      const sa = project(a), sb = project(b);
+      let point: [number, number], screen: [number, number];
+      if (kind === 'vertex') { point = a; screen = sa; }
+      else if (kind === 'midpoint') {
+        point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        screen = [(sa[0] + sb[0]) / 2, (sa[1] + sb[1]) / 2];
+      } else {
+        const dx = sb[0] - sa[0], dy = sb[1] - sa[1], length = dx * dx + dy * dy;
+        if (!length) continue;
+        const t = Math.max(0, Math.min(1, ((screenPoint[0] - sa[0]) * dx + (screenPoint[1] - sa[1]) * dy) / length));
+        point = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+        screen = [sa[0] + t * dx, sa[1] + t * dy];
+      }
+      const distance = Math.hypot(screenPoint[0] - screen[0], screenPoint[1] - screen[1]);
+      if (distance < best) { best = distance; result = { point: [...point], x: screen[0], y: screen[1], kind }; }
+    }
+    if (result) break;
+  }
+  return result;
+}
+function updateSnapHint(event: PointerEvent): void {
+  if (!canvas.value || !props.snappingPolygon) { snapHint.value = null; return; }
+  const rect = canvas.value.getBoundingClientRect();
+  lastPointer = [event.clientX - rect.left, event.clientY - rect.top];
+  const candidate = snapPolygon(lastPointer);
+  snapHint.value = candidate ? { x: candidate.x, y: candidate.y, kind: candidate.kind } : null;
+}
 
 function rotateBoxVector(local: XYZ, [w, qx, qy, qz]: [number, number, number, number]): XYZ {
   const cross: XYZ = [qy * local[2] - qz * local[1], qz * local[0] - qx * local[2], qx * local[1] - qy * local[0]];
@@ -150,6 +199,9 @@ function moveVertex(event: PointerEvent): void {
   const z = (bounds.min.z + bounds.max.z) / 2;
   const canvasBounds = canvas.value.getBoundingClientRect();
   const x = event.clientX - canvasBounds.left, y = event.clientY - canvasBounds.top;
+  const snapped = snapPolygon([x, y]);
+  snapHint.value = snapped ? { x: snapped.x, y: snapped.y, kind: snapped.kind } : null;
+  if (snapped) { emit('moveVertex', draggingVertex, snapped.point); return; }
   const near = camera.screenToWorld(x, y, camera.nearClip);
   const far = camera.screenToWorld(x, y, camera.farClip);
   const delta = far.z - near.z;
@@ -167,6 +219,7 @@ function startVertexDrag(index: number, event: PointerEvent): void {
 }
 function endVertexDrag(event: PointerEvent): void {
   draggingVertex = null;
+  snapHint.value = null;
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
 function pointOnVolumePlane(event: PointerEvent): [number, number] | null {
@@ -351,6 +404,7 @@ function applyClip(): void {
   }
 }
 watch(() => props.clip, applyClip, { deep: true });
+watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; lastPointer = null; } });
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false;
@@ -363,7 +417,17 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     if (request.signal.aborted || canvas.value !== element) return;
     engine = new SingleModelEngine(element, cloud, props.origin,
       props.transform,
-      point => { emit('pick', point); if (query.value) queueMicrotask(() => engine?.setQueryPicking(true)); },
+      point => {
+        if (props.snappingPolygon && engine) {
+          const bounds = engine.scene.bounds(), origin = engine.scene.displayOrigin;
+          const screen = engine.application.camera.camera?.worldToScreen(new pc.Vec3(
+            point[0] - origin[0], point[1] - origin[1], (bounds.min.z + bounds.max.z) / 2));
+          const snapped = snapPolygon(lastPointer ?? (screen ? [screen.x, screen.y] : [Infinity, Infinity]));
+          if (snapped) point = [snapped.point[0], snapped.point[1], point[2]];
+        }
+        emit('pick', point);
+        if (query.value) queueMicrotask(() => engine?.setQueryPicking(true));
+      },
       undefined, undefined, undefined, undefined, undefined, 'fly');
     applyClip();
     statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
@@ -380,10 +444,17 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 
 <template>
   <div class="editor-scene">
-    <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景"></canvas>
+    <canvas ref="canvas" tabindex="0" aria-label="高斯编辑三维场景" @pointerdown="updateSnapHint"
+      @pointermove="updateSnapHint" @pointerleave="snapHint = null; lastPointer = null"></canvas>
     <svg class="editor-boundary-overlay" :viewBox="`0 0 ${sceneSize.width} ${sceneSize.height}`" aria-hidden="true">
       <polyline v-for="line in boundaryLines" :key="line.key" :points="line.points"
         :class="[line.action, { draft: line.draft, volume: line.volume }]" />
+      <g v-if="snapHint" class="editor-snap-hint">
+        <rect v-if="snapHint.kind === 'vertex'" :x="snapHint.x - 6" :y="snapHint.y - 6" width="12" height="12" />
+        <path v-else-if="snapHint.kind === 'midpoint'" :d="`M ${snapHint.x} ${snapHint.y - 7} L ${snapHint.x - 7} ${snapHint.y + 5} L ${snapHint.x + 7} ${snapHint.y + 5} Z`" />
+        <circle v-else :cx="snapHint.x" :cy="snapHint.y" r="6" />
+        <text :x="snapHint.x + 11" :y="snapHint.y - 9">{{ { vertex: '端点', midpoint: '中点', edge: '边线' }[snapHint.kind] }}</text>
+      </g>
       <circle v-for="handle in vertexHandles" :key="handle.index" :cx="handle.x" :cy="handle.y" r="6"
         @pointerdown="startVertexDrag(handle.index, $event)" @pointermove="moveVertex" @pointerup="endVertexDrag"
         @pointercancel="endVertexDrag" />
@@ -436,6 +507,8 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
 .editor-boundary-overlay polyline.remove { fill: #ff826a18; stroke: #ff826a; }
 .editor-boundary-overlay polyline.draft { fill: none; stroke-dasharray: 6 4; }
 .editor-boundary-overlay polyline.volume { fill: none; stroke-width: 1.5; }
+.editor-boundary-overlay .editor-snap-hint :is(rect, path, circle) { fill: none; stroke: #f6d265; stroke-width: 2; pointer-events: none; }
+.editor-boundary-overlay .editor-snap-hint text { fill: #f6d265; font-size: 13px; paint-order: stroke; stroke: #07121e; stroke-width: 3px; }
 .editor-boundary-overlay circle { fill: #f6d265; stroke: #193a39; stroke-width: 2; pointer-events: all; cursor: move; }
 .editor-boundary-overlay circle.volume-center { fill: #8fe3ff; stroke: #104a64; stroke-width: 3; }
 .editor-boundary-overlay circle.volume-height { fill: #cb93ff; stroke: #422361; stroke-width: 3; }
