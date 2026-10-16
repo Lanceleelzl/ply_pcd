@@ -22,6 +22,8 @@ const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, num
   rotateBox: [rotation: [number, number, number, number]] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
+const loadingStage = ref('');
+const loadingSeconds = ref(0);
 const loaded = ref(false);
 const topView = ref(false);
 const query = ref(false);
@@ -464,9 +466,12 @@ function endBoxRotation(event: PointerEvent): void {
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value || props.largeOriginalBytes || props.largeOriginalCount) return;
   loading.value = true;
-  try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod); loaded.value = true; }
+  loadingSeconds.value = 0;
+  const started = Date.now();
+  const elapsedTimer = setInterval(() => { loadingSeconds.value = Math.floor((Date.now() - started) / 1000); }, 1000);
+  try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => { loadingStage.value = stage; }); loaded.value = true; }
   catch (error) { emit('notify', error instanceof Error ? error.message : String(error)); }
-  finally { loading.value = false; }
+  finally { clearInterval(elapsedTimer); loading.value = false; loadingStage.value = ''; }
 }
 function displayPoints(): void { engine?.showPoints(); loaded.value = false; }
 function fit(): void { engine?.fit(); }
@@ -588,6 +593,10 @@ onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearIn
     <button class="editor-view-handle" type="button" title="俯视／三维视角" @click="toggleTop">
       <span>↑ Z</span><strong>{{ topView ? '2D' : '3D' }}</strong>
     </button>
+    <div v-if="loading" class="editor-loading" role="status" aria-live="polite">
+      <span class="editor-loading-spinner" aria-hidden="true" />
+      <span>加载高斯：{{ loadingStage || '准备中' }} · 已用 {{ loadingSeconds }} 秒</span>
+    </div>
     <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '层级高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
@@ -626,6 +635,9 @@ button.active { border-color: #78d6b8; color: #78d6b8; }
 button:disabled { opacity: .55; cursor: default; }
 .editor-view-handle { position: absolute; z-index: 4; top: 12px; right: 12px; display: grid; place-items: center; width: 66px; height: 66px; border-radius: 50%; }
 .editor-view-handle span { font-size: 16px; }.editor-view-handle strong { font-size: 12px; }
+.editor-loading { position: absolute; z-index: 4; top: 76px; left: 12px; display: flex; align-items: center; gap: 9px; padding: 8px 11px; border: 1px solid #56dd9a; border-radius: 6px; background: #0b1929ee; color: #d7fff0; font-size: 12px; pointer-events: none; }
+.editor-loading-spinner { width: 13px; height: 13px; border: 2px solid #56dd9a66; border-top-color: #56dd9a; border-radius: 50%; animation: editor-spin .8s linear infinite; }
+@keyframes editor-spin { to { transform: rotate(360deg); } }
 .editor-scene-hint, .editor-scene-stats { position: absolute; z-index: 3; bottom: 12px; padding: 8px 11px; border: 1px solid #385574; border-radius: 6px; background: #0b1929e8; color: #c5d8e8; font-size: 12px; }
 .editor-scene-hint { left: 12px; }.editor-scene-stats { right: 12px; }
 @media (max-width: 700px) { .editor-scene-hint { bottom: 50px; right: 12px; }.editor-scene-stats { left: 12px; right: auto; } }

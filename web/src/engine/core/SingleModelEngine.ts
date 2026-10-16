@@ -253,8 +253,8 @@ export class SingleModelEngine {
     else { this.queryGizmo.detach(); this.queryHovered = false; this.queryDragging = false; }
     this.queryAttached = show;
   }
-  async showGaussian(url: string, filename: string, lodIndex?: number): Promise<void> {
-    await this.gaussian.show(url, filename, lodIndex); this.refreshClip();
+  async showGaussian(url: string, filename: string, lodIndex?: number, onStage?: (stage: string) => void): Promise<void> {
+    await this.gaussian.show(url, filename, lodIndex, onStage); this.refreshClip();
   }
   showPoints(): void { this.gaussian.showPoints(); }
   setAxisClip(enabled: boolean, min: XYZ, max: XYZ): void {

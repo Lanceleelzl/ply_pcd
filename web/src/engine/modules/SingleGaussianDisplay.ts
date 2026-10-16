@@ -21,7 +21,7 @@ export class SingleGaussianDisplay {
     private readonly origin: XYZ, private readonly pointsVisible: (visible: boolean) => void,
     private readonly clipMode: 'standard' | 'merge' | 'editor' = 'standard') {}
 
-  async show(url: string, filename: string, lodIndex?: number): Promise<void> {
+  async show(url: string, filename: string, lodIndex?: number, onStage?: (stage: string) => void): Promise<void> {
     if (this.destroyed) return;
     const generation = ++this.generation;
     this.release();
@@ -29,6 +29,7 @@ export class SingleGaussianDisplay {
     let direct: Awaited<ReturnType<typeof import('./direct-lcc-loader').loadDirectGaussian>> | null = null;
     let asset: pc.Asset;
     try {
+      onStage?.('读取并解析模型');
       direct = /\.(?:spz|lcc2?)$/i.test(filename) || filename === 'lod-meta.json' && !editorStream
         ? await import('./direct-lcc-loader').then(module => module.loadDirectGaussian(this.app, url, filename, lodIndex))
         : null;
@@ -50,6 +51,7 @@ export class SingleGaussianDisplay {
         });
       }
       if (generation !== this.generation) { asset.unload(); return; }
+      onStage?.('创建渲染对象');
       const entity = new pc.Entity('Single model Gaussian');
       this.entity = entity;
       entity.addComponent('gsplat', { asset });
