@@ -12,7 +12,8 @@ export interface EditorTransform { translation: XYZ; rotation_degrees: XYZ; scal
 export interface EditorDisplayClip { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
   planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }
 export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null;
-  transform?: EditorTransform; display_clip?: EditorDisplayClip | null }
+  transform?: EditorTransform; display_clip?: EditorDisplayClip | null;
+  decimation?: { version: string; level: number; target_count: number } | null }
 export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string; count?: number }
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number;
   coordinate_mode?: 'source' | 'embedded' | 'manifest' }
@@ -23,7 +24,8 @@ export interface EditorTask {
   metadata?: { source_point_count: number; preview_point_count: number; origin: XYZ; bounds: { min: XYZ; max: XYZ } };
   coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string; axes?: [number, number, number] };
   preview_url?: string | null; gaussian_url?: string | null; gaussian_filename?: string;
-  lods: EditorLod[]; derived_lods: Array<{ version: string; count: number; source_level: number; gaussian_url: string }>;
+  lods: EditorLod[]; derived_lods: Array<{ version: string; count: number; source_level: number;
+    target_count: number; gaussian_url: string }>;
   available_levels: number[];
   level_counts?: number[];
   history: Array<{ label: string; state: EditorState; at: number }>;

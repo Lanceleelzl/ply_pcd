@@ -60,7 +60,6 @@ function copyClip(value: EditorDisplayClip): EditorDisplayClip {
 }
 const clipThickness = ref(1);
 const workLevel = ref(0);
-const selectedDerivedVersion = ref<string | null>(null);
 const lastPoint = ref<XYZ | null>(null);
 const polygonDraft = ref<[number, number][]>([]);
 const drawingPolygon = ref(false);
@@ -93,8 +92,14 @@ const currentTransform = computed(() => currentState.value.transform ?? identity
 const previewLevel = computed(() => task.value?.input_kind === 'single' ? 0 : task.value?.available_levels.at(-1) ?? 0);
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const selectedDerived = computed(() => task.value?.derived_lods.find(item => item.source_level === workLevel.value
-  && item.version === selectedDerivedVersion.value));
+  && item.version === currentState.value.decimation?.version));
 const useDerived = computed(() => !!selectedDerived.value);
+watch([() => task.value?.task_id, () => currentState.value.decimation?.version], () => {
+  const selection = currentState.value.decimation;
+  targetCount.value = selection?.target_count ?? 100_000;
+  if (task.value) workLevel.value = selection?.level ?? (task.value.input_kind === 'dataset'
+    ? task.value.available_levels.at(-1) ?? 0 : task.value.available_levels[0] ?? 0);
+}, { immediate: true });
 const currentUrl = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.gaussian_url : selectedLod.value?.gaussian_url ??
   (task.value?.format === 'lcc' || task.value?.format === 'lcc2' || task.value?.format === 'streamed_sog'
     || workLevel.value === 0 ? task.value?.gaussian_url : undefined));
@@ -121,7 +126,6 @@ async function refresh(): Promise<void> {
       if (geographyTaskId !== id) {
         geographyTaskId = id;
         workLevel.value = loaded.input_kind === 'dataset' ? loaded.available_levels.at(-1) ?? 0 : loaded.available_levels[0] ?? 0;
-        selectedDerivedVersion.value = null;
         editingVolume.value = null;
         volumeDraft.value = null;
         geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography
@@ -355,8 +359,17 @@ async function run(): Promise<void> {
 }
 async function decimate(): Promise<void> {
   if (!task.value) return;
+  if (!Number.isSafeInteger(targetCount.value) || targetCount.value <= 0) {
+    message.value = '请输入有效的抽稀目标高斯数'; return;
+  }
   try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, targetCount.value); panel.value = 'lod'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+}
+async function selectDerived(item: EditorTask['derived_lods'][number] | null): Promise<void> {
+  if (!task.value) return;
+  await saveEdit(item ? '选择抽稀工作层' : '使用原始工作层', { ...currentState.value,
+    decimation: item ? { version: item.version, level: item.source_level,
+      target_count: item.target_count } : null });
 }
 async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
   if (!task.value) return;
@@ -453,7 +466,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
       <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
-          <label>工作 LOD<select v-model.number="workLevel" @change="selectedDerivedVersion = null"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
+          <label>工作 LOD<select v-model.number="workLevel"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>点云预览来自 LOD {{ previewLevel }}；显示高斯时加载选定工作层，其他目标层在执行时由服务端处理。</p>
           <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
@@ -461,9 +474,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>
           <p v-for="item in task.derived_lods" :key="item.version">派生自 LOD {{ item.source_level }}：{{ item.count.toLocaleString() }} 高斯
-            <button v-if="item.source_level === workLevel" type="button" :disabled="selectedDerivedVersion === item.version"
-              @click="selectedDerivedVersion = item.version">{{ selectedDerivedVersion === item.version ? '当前工作层' : '用作工作层' }}</button></p>
-          <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。</p>
+            <button v-if="item.source_level === workLevel" type="button" :disabled="selectedDerived?.version === item.version"
+              @click="selectDerived(item)">{{ selectedDerived?.version === item.version ? '当前工作层' : '用作工作层' }}</button></p>
+          <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
+            <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
           <button type="button" :disabled="!currentState.selected_lods.length || task.process_status === 'running' || task.process_status === 'queued'" @click="run">处理选中层级</button>
         </template>

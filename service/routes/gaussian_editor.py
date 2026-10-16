@@ -52,12 +52,19 @@ class DisplayClip(BaseModel):
     planes: dict[Literal["xoy", "xoz", "yoz"], ClipPlane]
 
 
+class DecimationSelection(BaseModel):
+    version: str
+    level: int = Field(ge=0)
+    target_count: int = Field(gt=0)
+
+
 class EditState(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     selected_lods: list[int] = Field(default_factory=list)
     geography: dict[str, Any] | None = None
     transform: TransformParameters = Field(default_factory=TransformParameters)
     display_clip: DisplayClip | None = None
+    decimation: DecimationSelection | None = None
 
 
 class EditChange(BaseModel):
@@ -568,10 +575,18 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         except (ValueError, KeyError, TypeError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         directory, status = tasks.read(task_id)
-        if status.get("process_status") in {"queued", "running"}:
+        if status.get("process_status") in {"queued", "running"} or task_id in tasks.running:
             raise HTTPException(status_code=409, detail="Processing uses the current rule version")
         if any(level not in tasks.levels(status, directory) for level in change.state.selected_lods):
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
+        selection = change.state.decimation
+        if selection is not None:
+            versions = {(item["version"], item["source_level"], item["target_count"])
+                        for item in status.get("derived_lods", [])}
+            pending = (status.get("decimate_version"), status.get("decimate_level"),
+                       status.get("decimate_target_count"))
+            if (selection.version, selection.level, selection.target_count) not in versions | {pending}:
+                raise HTTPException(status_code=422, detail="Selected decimation version does not exist")
         cursor = status["history_cursor"]
         history = status["history"][:cursor + 1]
         history.append({"label": change.label, "state": change.state.model_dump(), "at": time.time()})
@@ -582,7 +597,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
     @router.post("/{task_id}/history/{index}")
     def jump_history(task_id: str, index: int):
         directory, status = tasks.read(task_id)
-        if status.get("process_status") in {"queued", "running"}:
+        if status.get("process_status") in {"queued", "running"} or task_id in tasks.running:
             raise HTTPException(status_code=409, detail="Processing uses the current rule version")
         if index < 0 or index >= len(status["history"]):
             raise HTTPException(status_code=422, detail="History step does not exist")
@@ -624,8 +639,17 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         if request.level not in tasks.levels(status, directory):
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
         version = str(uuid.uuid4())
+        cursor = status["history_cursor"]
+        state = {**status["history"][cursor]["state"],
+                 "decimation": {"version": version, "level": request.level,
+                                "target_count": request.target_count}}
+        history = status["history"][:cursor + 1]
+        history.append({"label": f"提交抽稀 LOD {request.level} 至 {request.target_count:,} 高斯",
+                        "state": state, "at": time.time()})
+        status.update(history=history, history_cursor=len(history) - 1)
         status.update(decimate_status="queued", decimate_phase="等待抽稀", decimate_progress=None,
-                      decimate_version=version, decimate_error=None)
+                      decimate_version=version, decimate_level=request.level,
+                      decimate_target_count=request.target_count, decimate_error=None)
         write_status(directory, status)
         tasks.start_decimate(task_id, request.level, request.target_count, version)
         return tasks.present(status)
