@@ -318,6 +318,7 @@ async function jump(index: number): Promise<void> {
   if (!task.value || jumpingHistory || index < 0 || index >= task.value.history.length) return;
   jumpingHistory = true;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
+    polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
     editingVolume.value = null; volumeDraft.value = null;
     if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
     const selectedTransform = task.value.history[index]?.state.transform ?? identityTransform();
