@@ -42,6 +42,12 @@ let geographyTaskId = '';
 function copyGeography(frame: EditorGeography): EditorGeography {
   return { ...frame, reference: [...frame.reference], projected_origin: [...frame.projected_origin], axes: [...frame.axes] };
 }
+function initialGeography(source: EditorTask): EditorGeography {
+  return { reference: [0, 0, 0],
+    projected_origin: source.coordinate_metadata?.offset.map(value => Number(value ?? 0)) as XYZ ?? [0, 0, 0],
+    axes: source.coordinate_metadata?.axes ?? [1, 2, 3], metres_per_unit: 1,
+    source_epsg: Number(source.coordinate_metadata?.epsg ?? 0) };
+}
 const defaultClip = (): EditorDisplayClip => ({
     mode: 'off', min: [-1e30, -1e30, -1e30], max: [1e30, 1e30, 1e30],
     center: [0, 0, 0], size: [1, 1, 1],
@@ -116,12 +122,8 @@ async function refresh(): Promise<void> {
         useDerived.value = false;
         editingVolume.value = null;
         volumeDraft.value = null;
-        geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography ?? {
-          reference: [0, 0, 0],
-          projected_origin: loaded.coordinate_metadata?.offset.map(value => Number(value ?? 0)) ?? [0, 0, 0],
-          axes: loaded.coordinate_metadata?.axes ?? [1, 2, 3], metres_per_unit: 1,
-          source_epsg: Number(loaded.coordinate_metadata?.epsg ?? 0),
-        } as EditorGeography);
+        geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography
+          ?? initialGeography(loaded));
         coordinateResult.value = null;
         transformDraft.value = structuredClone(loaded.history[loaded.history_cursor]?.state.transform ?? identityTransform());
       }
@@ -320,7 +322,7 @@ async function jump(index: number): Promise<void> {
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
     polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
     editingVolume.value = null; volumeDraft.value = null;
-    if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
+    geographyDraft.value = copyGeography(task.value.history[index].state.geography ?? initialGeography(task.value));
     const selectedTransform = task.value.history[index]?.state.transform ?? identityTransform();
     transformDraft.value = { translation: [...selectedTransform.translation],
       rotation_degrees: [...selectedTransform.rotation_degrees], scale: [...selectedTransform.scale] };
