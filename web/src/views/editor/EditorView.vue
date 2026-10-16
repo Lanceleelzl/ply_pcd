@@ -75,6 +75,8 @@ const sphereRadius = ref(1);
 const boxSize = ref<XYZ>([1, 1, 1]);
 const boxRotation = ref<XYZ>([0, 0, 0]);
 const targetCount = ref(100_000);
+const decimationMode = ref<'count' | 'ratio'>('count');
+const retainPercent = ref(10);
 let timer: ReturnType<typeof setInterval> | null = null;
 let jumpingHistory = false;
 
@@ -91,12 +93,18 @@ watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.displa
 const currentTransform = computed(() => currentState.value.transform ?? identityTransform());
 const previewLevel = computed(() => task.value?.input_kind === 'single' ? 0 : task.value?.available_levels.at(-1) ?? 0);
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
+const sourceLevelCount = computed(() => selectedLod.value?.count ?? task.value?.level_counts?.[workLevel.value]
+  ?? (task.value?.input_kind === 'single' ? task.value.metadata?.source_point_count : undefined));
+const ratioTargetCount = computed(() => sourceLevelCount.value && Number.isFinite(retainPercent.value)
+  ? Math.round(sourceLevelCount.value * retainPercent.value / 100) : 0);
 const selectedDerived = computed(() => task.value?.derived_lods.find(item => item.source_level === workLevel.value
   && item.version === currentState.value.decimation?.version));
 const useDerived = computed(() => !!selectedDerived.value);
 watch([() => task.value?.task_id, () => currentState.value.decimation?.version], () => {
   const selection = currentState.value.decimation;
   targetCount.value = selection?.target_count ?? 100_000;
+  decimationMode.value = selection?.retain_percent != null ? 'ratio' : 'count';
+  retainPercent.value = selection?.retain_percent ?? 10;
   if (task.value) workLevel.value = selection?.level ?? (task.value.input_kind === 'dataset'
     ? task.value.available_levels.at(-1) ?? 0 : task.value.available_levels[0] ?? 0);
 }, { immediate: true });
@@ -359,17 +367,22 @@ async function run(): Promise<void> {
 }
 async function decimate(): Promise<void> {
   if (!task.value) return;
-  if (!Number.isSafeInteger(targetCount.value) || targetCount.value <= 0) {
+  const ratio = decimationMode.value === 'ratio' ? retainPercent.value : undefined;
+  const count = ratio === undefined ? targetCount.value : ratioTargetCount.value;
+  if (ratio !== undefined && (!sourceLevelCount.value || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 100)) {
+    message.value = '当前层级点数未知或保留比例无效'; return;
+  }
+  if (!Number.isSafeInteger(count) || count <= 0 || sourceLevelCount.value && count >= sourceLevelCount.value) {
     message.value = '请输入有效的抽稀目标高斯数'; return;
   }
-  try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, targetCount.value); panel.value = 'lod'; }
+  try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, count, ratio); panel.value = 'lod'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
 async function selectDerived(item: EditorTask['derived_lods'][number] | null): Promise<void> {
   if (!task.value) return;
   await saveEdit(item ? '选择抽稀工作层' : '使用原始工作层', { ...currentState.value,
     decimation: item ? { version: item.version, level: item.source_level,
-      target_count: item.target_count } : null });
+      target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
 async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
   if (!task.value) return;
@@ -470,7 +483,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p>点云预览来自 LOD {{ previewLevel }}；显示高斯时加载选定工作层，其他目标层在执行时由服务端处理。</p>
           <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
-          <label>抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
+          <label>抽稀方式<select v-model="decimationMode"><option value="count">目标高斯数</option><option value="ratio" :disabled="!sourceLevelCount">保留比例</option></select></label>
+          <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
+          <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>
+            <p>原始层 {{ sourceLevelCount?.toLocaleString() ?? '数量未知' }} 高斯，预计保留 {{ ratioTargetCount.toLocaleString() }} 高斯。</p></template>
           <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>
           <p v-for="item in task.derived_lods" :key="item.version">派生自 LOD {{ item.source_level }}：{{ item.count.toLocaleString() }} 高斯

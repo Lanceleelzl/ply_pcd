@@ -13,7 +13,7 @@ export interface EditorDisplayClip { mode: 'off' | 'axis' | 'box'; min: XYZ; max
   planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }
 export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null;
   transform?: EditorTransform; display_clip?: EditorDisplayClip | null;
-  decimation?: { version: string; level: number; target_count: number } | null }
+  decimation?: { version: string; level: number; target_count: number; retain_percent?: number | null } | null }
 export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string; count?: number }
 export interface EditorResult { level: number; count: number; source_count: number; path: string; bytes: number;
   coordinate_mode?: 'source' | 'embedded' | 'manifest' }
@@ -25,7 +25,7 @@ export interface EditorTask {
   coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string; axes?: [number, number, number] };
   preview_url?: string | null; gaussian_url?: string | null; gaussian_filename?: string;
   lods: EditorLod[]; derived_lods: Array<{ version: string; count: number; source_level: number;
-    target_count: number; gaussian_url: string }>;
+    target_count: number; retain_percent?: number | null; gaussian_url: string }>;
   available_levels: number[];
   level_counts?: number[];
   history: Array<{ label: string; state: EditorState; at: number }>;
@@ -93,9 +93,11 @@ export async function processEditorTask(taskId: string, levels: number[]): Promi
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ levels }),
   }));
 }
-export async function decimateEditorTask(taskId: string, level: number, targetCount: number): Promise<EditorTask> {
+export async function decimateEditorTask(taskId: string, level: number, targetCount: number,
+  retainPercent?: number): Promise<EditorTask> {
   return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/decimate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level, target_count: targetCount }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ level, target_count: targetCount, retain_percent: retainPercent ?? null }),
   }));
 }
 export function editorDownloadUrl(taskId: string, version: string, level: number): string {

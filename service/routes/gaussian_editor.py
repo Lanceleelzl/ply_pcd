@@ -56,6 +56,7 @@ class DecimationSelection(BaseModel):
     version: str
     level: int = Field(ge=0)
     target_count: int = Field(gt=0)
+    retain_percent: float | None = Field(default=None, gt=0, lt=100, allow_inf_nan=False)
 
 
 class EditState(BaseModel):
@@ -79,6 +80,7 @@ class ProcessRequest(BaseModel):
 class DecimateRequest(BaseModel):
     level: int = Field(ge=0)
     target_count: int = Field(gt=0)
+    retain_percent: float | None = Field(default=None, gt=0, lt=100, allow_inf_nan=False)
 
 
 class ExportRequest(BaseModel):
@@ -374,6 +376,9 @@ class EditorTasks(StreamingTasks):
                 source_count = read_layout(source).count
                 if target_count >= source_count:
                     raise ValueError("抽稀目标数量必须小于原层级")
+                retain_percent = status.get("decimate_retain_percent")
+                if retain_percent is not None and target_count != math.floor(source_count * retain_percent / 100 + 0.5):
+                    raise ValueError("抽稀比例与目标高斯数不一致")
                 destination = workspace / "work-lod.ply"
                 hints = read_ply_coordinates(source)
                 comments = ({"source": hints["source"]} if hints["source"] else {})
@@ -403,6 +408,7 @@ class EditorTasks(StreamingTasks):
                 derived = status.get("derived_lods", [])
                 derived.append({"version": version, "source_level": level, "source_count": source_count,
                                 "target_count": target_count, "count": count,
+                                "retain_percent": retain_percent,
                                 "path": destination.relative_to(directory).as_posix()})
                 status.update(derived_lods=derived, decimate_status="ready", decimate_phase="完成",
                               decimate_progress=100)
@@ -581,11 +587,13 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
         selection = change.state.decimation
         if selection is not None:
-            versions = {(item["version"], item["source_level"], item["target_count"])
+            versions = {(item["version"], item["source_level"], item["target_count"],
+                         item.get("retain_percent"))
                         for item in status.get("derived_lods", [])}
             pending = (status.get("decimate_version"), status.get("decimate_level"),
-                       status.get("decimate_target_count"))
-            if (selection.version, selection.level, selection.target_count) not in versions | {pending}:
+                       status.get("decimate_target_count"), status.get("decimate_retain_percent"))
+            if (selection.version, selection.level, selection.target_count,
+                    selection.retain_percent) not in versions | {pending}:
                 raise HTTPException(status_code=422, detail="Selected decimation version does not exist")
         cursor = status["history_cursor"]
         history = status["history"][:cursor + 1]
@@ -642,14 +650,18 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         cursor = status["history_cursor"]
         state = {**status["history"][cursor]["state"],
                  "decimation": {"version": version, "level": request.level,
-                                "target_count": request.target_count}}
+                                "target_count": request.target_count,
+                                "retain_percent": request.retain_percent}}
         history = status["history"][:cursor + 1]
-        history.append({"label": f"提交抽稀 LOD {request.level} 至 {request.target_count:,} 高斯",
+        detail = (f"保留 {request.retain_percent:g}%（{request.target_count:,} 高斯）"
+                  if request.retain_percent is not None else f"至 {request.target_count:,} 高斯")
+        history.append({"label": f"提交抽稀 LOD {request.level} {detail}",
                         "state": state, "at": time.time()})
         status.update(history=history, history_cursor=len(history) - 1)
         status.update(decimate_status="queued", decimate_phase="等待抽稀", decimate_progress=None,
                       decimate_version=version, decimate_level=request.level,
-                      decimate_target_count=request.target_count, decimate_error=None)
+                      decimate_target_count=request.target_count,
+                      decimate_retain_percent=request.retain_percent, decimate_error=None)
         write_status(directory, status)
         tasks.start_decimate(task_id, request.level, request.target_count, version)
         return tasks.present(status)
