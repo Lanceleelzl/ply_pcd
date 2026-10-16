@@ -391,9 +391,12 @@ async function convertExport(version: string, level: number, format: 'compressed
 }
 async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' = 'ply'): Promise<void> {
   if (!task.value) return;
+  type WritableResult = { write(value: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
-    Promise<{ createWritable(): Promise<{ write(value: Uint8Array): Promise<void>; close(): Promise<void> }> }> }).showSaveFilePicker;
+    Promise<{ createWritable(): Promise<WritableResult> }> }).showSaveFilePicker;
   if (!picker) { message.value = '当前浏览器不支持大文件流式保存，请使用 Chrome 或 Edge'; return; }
+  let writable: WritableResult | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
     const handle = await picker({ suggestedName: `lod-${level}-edited.${suffix}` });
@@ -402,12 +405,15 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('Content-Length'));
     downloadProgress.value = { loaded: 0, total: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null };
-    const writable = await handle.createWritable();
-    const reader = response.body.getReader();
+    writable = await handle.createWritable();
+    reader = response.body.getReader();
     while (true) { const { value, done } = await reader.read(); if (done) break; await writable.write(value);
       downloadProgress.value.loaded += value.byteLength; }
-    await writable.close(); message.value = '成果下载完成';
-  } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+    await writable.close(); writable = null; message.value = '成果下载完成';
+  } catch (error) {
+    await Promise.allSettled([reader?.cancel(), writable?.abort()]);
+    message.value = error instanceof Error ? error.message : String(error);
+  }
   finally { downloadProgress.value = null; }
 }
 async function downloadManifest(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog'): Promise<void> {
