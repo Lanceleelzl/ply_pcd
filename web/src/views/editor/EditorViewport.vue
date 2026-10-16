@@ -50,6 +50,8 @@ let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
+let loadingTimer: ReturnType<typeof setInterval> | null = null;
+let displayGeneration = 0;
 let lastPointer: [number, number] | null = null;
 let polygonPointerDown: [number, number] | null = null;
 
@@ -465,15 +467,32 @@ function endBoxRotation(event: PointerEvent): void {
 
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value || props.largeOriginalBytes || props.largeOriginalCount) return;
+  const generation = ++displayGeneration;
+  const currentEngine = engine;
   loading.value = true;
   loadingSeconds.value = 0;
   const started = Date.now();
-  const elapsedTimer = setInterval(() => { loadingSeconds.value = Math.floor((Date.now() - started) / 1000); }, 1000);
-  try { await engine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => { loadingStage.value = stage; }); loaded.value = true; }
-  catch (error) { emit('notify', error instanceof Error ? error.message : String(error)); }
-  finally { clearInterval(elapsedTimer); loading.value = false; loadingStage.value = ''; }
+  loadingTimer = setInterval(() => {
+    if (generation === displayGeneration) loadingSeconds.value = Math.floor((Date.now() - started) / 1000);
+  }, 1000);
+  try {
+    await currentEngine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => {
+      if (generation === displayGeneration) loadingStage.value = stage;
+    });
+    if (generation === displayGeneration) loaded.value = true;
+  } catch (error) {
+    if (generation === displayGeneration) emit('notify', error instanceof Error ? error.message : String(error));
+  } finally {
+    if (generation === displayGeneration) invalidateGaussianLoad();
+  }
 }
-function displayPoints(): void { engine?.showPoints(); loaded.value = false; }
+function invalidateGaussianLoad(): void {
+  displayGeneration++;
+  if (loadingTimer) { clearInterval(loadingTimer); loadingTimer = null; }
+  loading.value = false;
+  loadingStage.value = '';
+}
+function displayPoints(): void { invalidateGaussianLoad(); engine?.showPoints(); loaded.value = false; }
 function fit(): void { engine?.fit(); }
 function toggleTop(): void {
   topView.value = !topView.value;
@@ -511,6 +530,7 @@ watch(() => props.drawingPolygon, value => {
 });
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
+  invalidateGaussianLoad();
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false; previewCount.value = null; sampleCount.value = 0;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
   if (boundaryTimer) { clearInterval(boundaryTimer); boundaryTimer = null; }
@@ -539,7 +559,7 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
 }, { immediate: true, flush: 'post' });
 watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
 watch(() => JSON.stringify(props.transform), () => { engine?.applyTransform(props.transform); applyRules(); });
-onUnmounted(() => { aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer);
+onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer);
   if (boundaryTimer) clearInterval(boundaryTimer); });
 </script>
 
