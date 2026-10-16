@@ -59,7 +59,8 @@ export class SceneNavigationController {
       if (event.button === 1) event.preventDefault();
     }, { signal });
     if (!options.keyboardOnly) window.addEventListener('pointermove', event => {
-      if (!this.dragging || this.blocked()) return;
+      if (!this.dragging) return;
+      if (this.blocked()) { this.clear(); return; }
       const dx = event.clientX - this.pointer.x;
       const dy = event.clientY - this.pointer.y;
       this.pointer = { x: event.clientX, y: event.clientY };
@@ -91,7 +92,7 @@ export class SceneNavigationController {
   private readonly tick = (time: number): void => {
     const elapsed = this.lastFrame ? (time - this.lastFrame) / 1000 : 0;
     this.lastFrame = time;
-    if (this.blocked()) this.keys.clear();
+    if (this.blocked()) this.clear();
     else if (this.options.canvas === document.activeElement) {
       const multiplier = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 5 : 1;
       const [forward, right, up] = navigationVector(this.keys, this.options.speed() * multiplier, elapsed);
