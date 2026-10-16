@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
 import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl,
@@ -71,6 +71,7 @@ const boxSize = ref<XYZ>([1, 1, 1]);
 const boxRotation = ref<XYZ>([0, 0, 0]);
 const targetCount = ref(100_000);
 let timer: ReturnType<typeof setInterval> | null = null;
+let jumpingHistory = false;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
@@ -135,7 +136,8 @@ async function refresh(): Promise<void> {
 }
 watch(() => route.params.taskId, () => { void refresh(); }, { immediate: true });
 timer = setInterval(() => { if (route.params.taskId) void refresh(); }, 1500);
-onUnmounted(() => { if (timer) clearInterval(timer); });
+onMounted(() => window.addEventListener('keydown', historyShortcut));
+onUnmounted(() => { if (timer) clearInterval(timer); window.removeEventListener('keydown', historyShortcut); });
 
 function selectFiles(event: Event): void {
   const input = event.target as HTMLInputElement;
@@ -313,7 +315,8 @@ async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
   await saveEdit(label, { ...currentState.value, display_clip: value });
 }
 async function jump(index: number): Promise<void> {
-  if (!task.value) return;
+  if (!task.value || jumpingHistory || index < 0 || index >= task.value.history.length) return;
+  jumpingHistory = true;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
     editingVolume.value = null; volumeDraft.value = null;
     if (task.value.history[index]?.state.geography) geographyDraft.value = copyGeography(task.value.history[index].state.geography);
@@ -323,6 +326,18 @@ async function jump(index: number): Promise<void> {
     coordinateResult.value = null;
   }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { jumpingHistory = false; }
+}
+function historyShortcut(event: KeyboardEvent): void {
+  if (!task.value || !(event.ctrlKey || event.metaKey) || event.altKey || event.repeat) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]')) return;
+  const key = event.key.toLowerCase();
+  const redo = key === 'y' || (key === 'z' && event.shiftKey);
+  if (key !== 'z' && key !== 'y' || key === 'y' && event.shiftKey) return;
+  event.preventDefault();
+  const next = task.value.history_cursor + (redo ? 1 : -1);
+  if (next >= 0 && next < task.value.history.length) void jump(next);
 }
 function toggleLevel(level: number, checked: boolean): void {
   const levels = checked ? [...currentState.value.selected_lods, level] : currentState.value.selected_lods.filter(item => item !== level);
