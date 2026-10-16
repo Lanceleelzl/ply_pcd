@@ -244,6 +244,11 @@ class EditorTasks(StreamingTasks):
             destination = workspace / f"source-lod-{level}.ply"
             convert_ascii_gaussian_ply(source, destination)
             return destination
+        if level == max(self.levels(status, directory)):
+            preview_source = directory / "computed" / "preview-model.ply"
+            if preview_source.is_file():
+                read_layout(preview_source)
+                return preview_source
         destination = workspace / f"source-lod-{level}.ply"
         options = ["--select-lod", str(level)] if format_name in {"lcc", "lcc2", "streamed_sog"} else []
         _convert_to_ply(source, destination, self.converter, subprocess.run, options)
