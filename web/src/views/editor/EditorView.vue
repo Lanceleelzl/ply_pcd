@@ -366,6 +366,10 @@ function toggleLevel(level: number, checked: boolean): void {
   const levels = checked ? [...currentState.value.selected_lods, level] : currentState.value.selected_lods.filter(item => item !== level);
   void saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
 }
+function confirmLocalFrame(checked: boolean): void {
+  void saveEdit(checked ? '确认同一局部坐标框架' : '撤销局部坐标框架确认',
+    { ...currentState.value, same_local_frame_confirmed: checked });
+}
 async function run(): Promise<void> {
   if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
   submittingTask.value = 'process';
@@ -514,6 +518,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
+          <label v-if="task.input_kind === 'lod_group'"><input type="checkbox" :checked="currentState.same_local_frame_confirmed ?? false" @change="confirmLocalFrame(($event.target as HTMLInputElement).checked)">确认各层属于同一模型，并使用相同的局部坐标框架</label>
+          <p v-if="task.input_kind === 'lod_group'">坐标头完整且一致时自动核验；缺少 EPSG、offset、shift 或 scale 时，跨层处理需要上述确认。已知字段冲突仍会拒绝处理。</p>
           <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">

@@ -62,6 +62,7 @@ class DecimationSelection(BaseModel):
 class EditState(BaseModel):
     rules: list[dict[str, Any]] = Field(default_factory=list)
     selected_lods: list[int] = Field(default_factory=list)
+    same_local_frame_confirmed: bool = False
     geography: dict[str, Any] | None = None
     transform: TransformParameters = Field(default_factory=TransformParameters)
     display_clip: DisplayClip | None = None
@@ -92,6 +93,18 @@ class ExportRequest(BaseModel):
 def lod_coordinate_frame(hints: dict[str, Any]) -> tuple:
     return (hints["epsg"], *(tuple(float(value) if value is not None else None for value in hints[key])
                              for key in ("offset", "shift", "scale")))
+
+
+def lod_frames_conflict(first: tuple, second: tuple) -> bool:
+    for left, right in zip((first[0], *first[1], *first[2], *first[3]),
+                           (second[0], *second[1], *second[2], *second[3])):
+        if left not in (None, "") and right not in (None, "") and left != right:
+            return True
+    return False
+
+
+def lod_frame_complete(frame: tuple) -> bool:
+    return bool(frame[0]) and all(value is not None for values in frame[1:] for value in values)
 
 
 def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
@@ -298,7 +311,8 @@ class EditorTasks(StreamingTasks):
                     source = await asyncio.to_thread(self.source_for_level, directory, status, level, workspace)
                     layout = read_layout(source)
                     frame = lod_coordinate_frame(read_ply_coordinates(source))
-                    if reference is not None and frame != reference:
+                    if reference is not None and (lod_frames_conflict(frame, reference)
+                                                  if status["input_kind"] == "lod_group" else frame != reference):
                         raise ValueError(f"LOD {level} 的 EPSG、投影原点、shift 或 scale 与其他层级不一致")
                     reference = frame
                     destination = workspace / f"lod-{level}.ply"
@@ -634,12 +648,15 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         levels = sorted(set(request.levels))
         if any(level not in tasks.levels(status, directory) for level in levels):
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
+        state = status["history"][status["history_cursor"]]["state"]
         if status["input_kind"] == "lod_group" and len(levels) > 1:
             sources = {item["level"]: directory / item["path"] for item in status["lods"]}
             frames = [lod_coordinate_frame(read_ply_coordinates(sources[level])) for level in levels]
-            if any(frame != frames[0] for frame in frames[1:]):
+            if any(lod_frames_conflict(frame, other) for index, frame in enumerate(frames)
+                   for other in frames[index + 1:]):
                 raise HTTPException(status_code=422, detail="所选 LOD 的 EPSG、投影原点、shift 或 scale 不一致，不能批量应用规则")
-        state = status["history"][status["history_cursor"]]["state"]
+            if not all(lod_frame_complete(frame) for frame in frames) and not state.get("same_local_frame_confirmed", False):
+                raise HTTPException(status_code=422, detail="所选 LOD 坐标头不完整，请先确认各层使用同一局部坐标框架")
         validate_rules(state["rules"])
         version = str(uuid.uuid4())
         status.update(process_status="queued", process_phase="等待处理", process_progress=None, process_level=None,

@@ -12,6 +12,7 @@ export interface EditorTransform { translation: XYZ; rotation_degrees: XYZ; scal
 export interface EditorDisplayClip { mode: 'off' | 'axis' | 'box'; min: XYZ; max: XYZ; center: XYZ; size: XYZ;
   planes: Record<'xoy' | 'xoz' | 'yoz', { visible: boolean; side: number }> }
 export interface EditorState { rules: EditorRule[]; selected_lods: number[]; geography?: EditorGeography | null;
+  same_local_frame_confirmed?: boolean;
   transform?: EditorTransform; display_clip?: EditorDisplayClip | null;
   decimation?: { version: string; level: number; target_count: number; retain_percent?: number | null } | null }
 export interface EditorLod { level: number; name: string; bytes: number; format: string; gaussian_url: string; count?: number }

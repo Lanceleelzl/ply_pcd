@@ -58,21 +58,28 @@ class PlyCoordinateTests(unittest.TestCase):
             self.assertEqual(output_coordinate_comments(source, None, True, "lcc2"), ("manifest", None))
 
     def test_editor_lod_frame_compares_all_header_coordinate_fields(self):
-        from service.routes.gaussian_editor import lod_coordinate_frame
+        from service.routes.gaussian_editor import lod_coordinate_frame, lod_frame_complete, lod_frames_conflict
         original = {"epsg": "32651", "offset": ["264782.73", "3393689.11", "13.98"],
                     "shift": ["0", "0", "0"], "scale": ["1", "1", "1"]}
         equivalent = {**original, "offset": ["264782.7300", "3393689.110", "13.980"],
                       "shift": ["0.0", "0", "0"], "scale": ["1.000", "1", "1"]}
         self.assertEqual(lod_coordinate_frame(original), lod_coordinate_frame(equivalent))
+        self.assertTrue(lod_frame_complete(lod_coordinate_frame(original)))
         for key, value in (("epsg", "32650"), ("offset", [None, *original["offset"][1:]]),
                            ("shift", ["1", "0", "0"]), ("scale", ["2", "1", "1"])):
             changed = {**original, key: value}
             self.assertNotEqual(lod_coordinate_frame(original), lod_coordinate_frame(changed))
+        unknown = {"epsg": "", "offset": [None, None, None], "shift": [None, None, None],
+                   "scale": [None, None, None]}
+        self.assertFalse(lod_frame_complete(lod_coordinate_frame(unknown)))
+        self.assertFalse(lod_frames_conflict(lod_coordinate_frame(original), lod_coordinate_frame(unknown)))
 
     def test_editor_rejects_mismatched_lod_frames_before_processing(self):
         from service.routes.gaussian_editor import ProcessRequest, create_editor_router
         status = {"status": "ready", "input_kind": "lod_group", "lods": [
-            {"level": 0, "path": "input/lod-0.ply"}, {"level": 1, "path": "input/lod-1.ply"}]}
+            {"level": 0, "path": "input/lod-0.ply"}, {"level": 1, "path": "input/lod-1.ply"}],
+            "history": [{"state": {"rules": [], "selected_lods": [0, 1],
+                                   "same_local_frame_confirmed": True}}], "history_cursor": 0}
         tasks = SimpleNamespace(read=lambda _task_id: (Path("unused"), status), running={},
                                 levels=lambda _status, _directory: [0, 1])
         process = next(route.endpoint for route in create_editor_router(tasks).routes
@@ -85,3 +92,30 @@ class PlyCoordinateTests(unittest.TestCase):
                 asyncio.run(process("task", ProcessRequest(levels=[0, 1])))
         self.assertEqual(caught.exception.status_code, 422)
         self.assertNotIn("process_status", status)
+
+    def test_editor_unknown_lod_frames_need_explicit_confirmation(self):
+        from service.routes.gaussian_editor import ProcessRequest, create_editor_router
+
+        status = {"status": "ready", "input_kind": "lod_group", "lods": [
+            {"level": 0, "path": "input/lod-0.ply"}, {"level": 1, "path": "input/lod-1.ply"}],
+            "history": [{"state": {"rules": [], "selected_lods": [0, 1]}}], "history_cursor": 0}
+        tasks = SimpleNamespace(read=lambda _task_id: (Path("unused"), status), running={},
+                                levels=lambda _status, _directory: [0, 1])
+        process = next(route.endpoint for route in create_editor_router(tasks).routes
+                       if route.path.endswith("/{task_id}/process"))
+        unknown = {"epsg": "", "offset": [None, None, None], "shift": [None, None, None],
+                   "scale": [None, None, None]}
+        with patch("service.routes.gaussian_editor.read_ply_coordinates", return_value=unknown):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(process("task", ProcessRequest(levels=[0, 1])))
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertIn("确认", caught.exception.detail)
+        self.assertNotIn("process_status", status)
+
+        status["history"][0]["state"]["same_local_frame_confirmed"] = True
+        tasks.start_process = lambda *_args: None
+        tasks.present = lambda value: value
+        with patch("service.routes.gaussian_editor.read_ply_coordinates", return_value=unknown), \
+             patch("service.routes.gaussian_editor.write_status"):
+            result = asyncio.run(process("task", ProcessRequest(levels=[0, 1])))
+        self.assertEqual(result["process_status"], "queued")
