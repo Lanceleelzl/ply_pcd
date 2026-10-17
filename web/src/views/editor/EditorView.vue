@@ -30,7 +30,8 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
-const submittingTask = ref<'process' | 'decimate' | null>(null);
+const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
+const submittingExport = ref<string | null>(null);
 const message = ref('');
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
@@ -390,9 +391,12 @@ async function selectDerived(item: EditorTask['derived_lods'][number] | null): P
       target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
 async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
-  if (!task.value) return;
+  if (!task.value || submittingTask.value) return;
+  submittingTask.value = 'export';
+  submittingExport.value = `${version}:${level}:${format}`;
   try { task.value = await exportEditorResult(task.value.task_id, version, level, format); panel.value = 'results'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { submittingTask.value = null; submittingExport.value = null; }
 }
 async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' = 'ply'): Promise<void> {
   if (!task.value) return;
@@ -572,7 +576,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-else>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template> {{ task.export_error }}</p>
-          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">生成 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button></template></p></section>
+          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="!!submittingTask || task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
