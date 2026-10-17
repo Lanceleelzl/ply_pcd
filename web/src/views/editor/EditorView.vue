@@ -32,6 +32,8 @@ const uploadTotal = ref(0);
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const submittingExport = ref<string | null>(null);
+const taskOperationBusy = computed(() => !!submittingTask.value || [task.value?.process_status,
+  task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
 const message = ref('');
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
@@ -363,14 +365,14 @@ function toggleLevel(level: number, checked: boolean): void {
   void saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
 }
 async function run(): Promise<void> {
-  if (!task.value || !currentState.value.selected_lods.length || submittingTask.value) return;
+  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
   submittingTask.value = 'process';
   try { task.value = await processEditorTask(task.value.task_id, currentState.value.selected_lods); panel.value = 'results'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; }
 }
 async function decimate(): Promise<void> {
-  if (!task.value || submittingTask.value) return;
+  if (!task.value || taskOperationBusy.value) return;
   const ratio = decimationMode.value === 'ratio' ? retainPercent.value : undefined;
   const count = ratio === undefined ? targetCount.value : ratioTargetCount.value;
   if (ratio !== undefined && (!sourceLevelCount.value || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 100)) {
@@ -391,7 +393,7 @@ async function selectDerived(item: EditorTask['derived_lods'][number] | null): P
       target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
 async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
-  if (!task.value || submittingTask.value) return;
+  if (!task.value || taskOperationBusy.value) return;
   submittingTask.value = 'export';
   submittingExport.value = `${version}:${level}:${format}`;
   try { task.value = await exportEditorResult(task.value.task_id, version, level, format); panel.value = 'results'; }
@@ -502,7 +504,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>
             <p>原始层 {{ sourceLevelCount?.toLocaleString() ?? '数量未知' }} 高斯，预计保留 {{ ratioTargetCount.toLocaleString() }} 高斯。</p></template>
-          <button type="button" :disabled="!!submittingTask || task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">{{ submittingTask === 'decimate' ? '正在提交抽稀…' : '生成轻量工作层' }}</button>
+          <button type="button" :disabled="taskOperationBusy || task.status !== 'ready'" @click="decimate">{{ submittingTask === 'decimate' ? '正在提交抽稀…' : '生成轻量工作层' }}</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>
           <p v-for="item in task.derived_lods" :key="item.version">派生自 LOD {{ item.source_level }}：{{ item.count.toLocaleString() }} 高斯
             <button v-if="item.source_level === workLevel" type="button" :disabled="selectedDerived?.version === item.version"
@@ -510,7 +512,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
-          <button type="button" :disabled="!!submittingTask || !currentState.selected_lods.length || task.process_status === 'running' || task.process_status === 'queued'" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : '处理选中层级' }}</button>
+          <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
@@ -576,7 +578,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-else>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template> {{ task.export_error }}</p>
-          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="!!submittingTask || task.export_status === 'queued' || task.export_status === 'running'" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
+          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
