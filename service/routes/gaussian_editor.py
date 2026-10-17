@@ -89,6 +89,11 @@ class ExportRequest(BaseModel):
     format: Literal["compressed_ply", "sog"]
 
 
+def lod_coordinate_frame(hints: dict[str, Any]) -> tuple:
+    return (hints["epsg"], *(tuple(float(value) if value is not None else None for value in hints[key])
+                             for key in ("offset", "shift", "scale")))
+
+
 def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
                                identity_transform: bool, source_format: str = "gaussian_ply"
                                ) -> tuple[str, dict[str, str] | None]:
@@ -292,9 +297,9 @@ class EditorTasks(StreamingTasks):
                     write_status(directory, status)
                     source = await asyncio.to_thread(self.source_for_level, directory, status, level, workspace)
                     layout = read_layout(source)
-                    frame = (layout.epsg, layout.offset)
+                    frame = lod_coordinate_frame(read_ply_coordinates(source))
                     if reference is not None and frame != reference:
-                        raise ValueError(f"LOD {level} 的 EPSG 或投影原点与其他层级不一致")
+                        raise ValueError(f"LOD {level} 的 EPSG、投影原点、shift 或 scale 与其他层级不一致")
                     reference = frame
                     destination = workspace / f"lod-{level}.ply"
                     clipped = workspace / f"clipped-lod-{level}.ply" if not identity else destination
@@ -629,6 +634,11 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         levels = sorted(set(request.levels))
         if any(level not in tasks.levels(status, directory) for level in levels):
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
+        if status["input_kind"] == "lod_group" and len(levels) > 1:
+            sources = {item["level"]: directory / item["path"] for item in status["lods"]}
+            frames = [lod_coordinate_frame(read_ply_coordinates(sources[level])) for level in levels]
+            if any(frame != frames[0] for frame in frames[1:]):
+                raise HTTPException(status_code=422, detail="所选 LOD 的 EPSG、投影原点、shift 或 scale 不一致，不能批量应用规则")
         state = status["history"][status["history_cursor"]]["state"]
         validate_rules(state["rules"])
         version = str(uuid.uuid4())
