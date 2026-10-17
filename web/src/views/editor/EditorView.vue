@@ -112,8 +112,7 @@ watch([() => task.value?.task_id, () => currentState.value.decimation?.version],
   targetCount.value = selection?.target_count ?? 100_000;
   decimationMode.value = selection?.retain_percent != null ? 'ratio' : 'count';
   retainPercent.value = selection?.retain_percent ?? 10;
-  if (task.value) workLevel.value = selection?.level ?? (task.value.input_kind === 'dataset'
-    ? task.value.available_levels.at(-1) ?? 0 : task.value.available_levels[0] ?? 0);
+  if (task.value) workLevel.value = selection?.level ?? task.value.available_levels.at(-1) ?? 0;
 }, { immediate: true });
 const currentUrl = computed(() => useDerived.value && selectedDerived.value ? selectedDerived.value.gaussian_url : selectedLod.value?.gaussian_url ??
   (task.value?.format === 'lcc' || task.value?.format === 'lcc2' || task.value?.format === 'streamed_sog'
@@ -140,7 +139,7 @@ async function refresh(): Promise<void> {
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
-        workLevel.value = loaded.input_kind === 'dataset' ? loaded.available_levels.at(-1) ?? 0 : loaded.available_levels[0] ?? 0;
+        workLevel.value = loaded.available_levels.at(-1) ?? 0;
         editingVolume.value = null;
         volumeDraft.value = null;
         geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography
