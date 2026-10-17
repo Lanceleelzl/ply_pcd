@@ -108,11 +108,18 @@ class StreamingTasks:
             try:
                 if operation == "prepare":
                     status["status"] = "preparing"
+                    status["prepare_started_at_unix"] = time.time()
+                    status["prepare_phase"] = "检查数据集"
                     write_status(directory, status)
-                    prepared = await asyncio.to_thread(prepare_streaming_task, directory, status, self.converter, self.worker)
+                    def report_stage(phase: str) -> None:
+                        status["prepare_phase"] = phase
+                        write_status(directory, status)
+                    prepared = await asyncio.to_thread(prepare_streaming_task, directory, status,
+                                                       self.converter, self.worker, report_stage)
                     current = read_status(directory)
                     current.update({key: prepared[key] for key in (
                         "metadata", "preview_url", "gaussian_path", "gaussian_filename", "status", "coordinate_metadata")})
+                    current["prepare_phase"] = "完成"
                     if prepared.get("dataset_entrypoint"):
                         current["dataset_entrypoint"] = prepared["dataset_entrypoint"]
                     write_status(directory, current)
@@ -128,7 +135,7 @@ class StreamingTasks:
             except Exception as error:
                 current = read_status(directory)
                 if operation == "prepare":
-                    current.update(status="failed", error=str(error))
+                    current.update(status="failed", prepare_phase="失败", error=str(error))
                 else:
                     current.update(cache_status="failed", cache_error=str(error), cache_progress=None)
                 write_status(directory, current)

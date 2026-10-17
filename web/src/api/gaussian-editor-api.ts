@@ -21,6 +21,7 @@ export interface EditorTask {
   task_id: string; filename: string; input_kind: EditorInputKind; format: string;
   source_bytes?: number;
   status: 'queued' | 'preparing' | 'ready' | 'failed'; error?: string;
+  prepare_phase?: string; prepare_started_at_unix?: number;
   metadata?: { source_point_count: number; preview_point_count: number; origin: XYZ; bounds: { min: XYZ; max: XYZ } };
   coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string; axes?: [number, number, number] };
   preview_url?: string | null; gaussian_url?: string | null; gaussian_filename?: string;

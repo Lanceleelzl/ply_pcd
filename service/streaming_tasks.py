@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 from service.dataset_preparation import _convert_to_ply, _convert_to_streamed_sog, _generate_streamed_sog, _safe_extract
@@ -26,8 +26,11 @@ def preserve_streaming_cache(directory: Path, entrypoint: Path) -> str:
     return destination.relative_to(directory).as_posix()
 
 
-def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: list[str], worker: str) -> dict[str, Any]:
+def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: list[str], worker: str,
+                           stage: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Prepare one model for preview without creating a registration session."""
+    if stage:
+        stage("检查数据集")
     if status["input_kind"] == "lod_group":
         entrypoint = directory / status["lods"][-1]["path"]
         format_name = status["lods"][-1]["format"]
@@ -38,6 +41,8 @@ def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: l
         if format_name not in GAUSSIAN_FORMATS:
             raise DatasetFormatError("Only supported Gaussian datasets can be streamed")
         if probe.container == "zip":
+            if stage:
+                stage("提取数据集")
             workspace = directory / "datasets" / "source"
             _safe_extract(source, workspace)
             entrypoint = workspace / probe.entrypoint
@@ -48,8 +53,12 @@ def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: l
         raise DatasetFormatError("Gaussian dataset entrypoint is missing")
 
     preview_input = entrypoint
+    if stage:
+        stage("读取坐标与层级")
     status["coordinate_metadata"] = read_model_coordinates(entrypoint)
     if format_name != "gaussian_ply":
+        if stage:
+            stage("转换预览层")
         preview_input = directory / "computed" / "preview-model.ply"
         options: list[str] = []
         if format_name in {"streamed_sog", "lcc", "lcc2"}:
@@ -61,6 +70,8 @@ def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: l
             options = ["--select-lod", str(levels - 1)]
         _convert_to_ply(entrypoint, preview_input, converter, subprocess.run, options)
 
+    if stage:
+        stage("生成点云预览")
     preview_directory = directory / "preview"
     result = subprocess.run(
         [worker, "prepare-single-model-preview", "--model", str(preview_input),

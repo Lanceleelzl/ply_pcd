@@ -29,11 +29,14 @@ const busy = ref(false);
 const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
+const clock = ref(Date.now());
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const submittingExport = ref<string | null>(null);
 const taskOperationBusy = computed(() => !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
+const prepareElapsed = computed(() => task.value?.prepare_started_at_unix
+  ? Math.max(0, Math.floor(clock.value / 1000 - task.value.prepare_started_at_unix)) : null);
 const message = ref('');
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
@@ -155,7 +158,7 @@ async function refresh(): Promise<void> {
   } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
 }
 watch(() => route.params.taskId, () => { void refresh(); }, { immediate: true });
-timer = setInterval(() => { if (route.params.taskId) void refresh(); }, 1500);
+timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId) void refresh(); }, 1500);
 onMounted(() => window.addEventListener('keydown', historyShortcut));
 onUnmounted(() => { if (timer) clearInterval(timer); window.removeEventListener('keydown', historyShortcut); });
 
@@ -492,7 +495,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" @click="panel = panel === 'results' ? null : 'results'">成果</button>
         </template>
       </EditorViewport>
-      <div v-else class="editor-wait" role="status">{{ task.status === 'failed' ? task.error : '正在预读模型并生成轻量场景预览…' }}</div>
+      <div v-else class="editor-wait" role="status"><span v-if="task.status !== 'failed'" class="editor-wait-spinner" aria-hidden="true"></span><span>{{ task.status === 'failed' ? task.error : task.status === 'queued' ? '等待预读任务开始' : task.prepare_phase ?? '预读模型中' }}</span><small v-if="task.status === 'preparing' && prepareElapsed !== null">已用 {{ prepareElapsed }} 秒</small></div>
       <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
@@ -600,7 +603,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .module-entry-card progress { display: block; width: 100%; margin-top: 8px; }
 .module-entry-history-list small { display: block; color: #adbed2; }
 .editor-workspace { display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
-.editor-stage { position: relative; flex: 1; min-height: 0; }.editor-wait { display: grid; place-items: center; height: 100%; }
+.editor-stage { position: relative; flex: 1; min-height: 0; }.editor-wait { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 100%; }.editor-wait small { color: #a8bbcc; }
+.editor-wait-spinner { width: 28px; height: 28px; border: 3px solid #34506b; border-top-color: #78d6b8; border-radius: 50%; animation: editor-wait-spin .8s linear infinite; }
+@keyframes editor-wait-spin { to { transform: rotate(360deg); } }
 .editor-panel { position: absolute; z-index: 5; top: 60px; bottom: 58px; left: 12px; box-sizing: border-box; width: min(360px, calc(100% - 24px)); overflow: auto; padding: 14px; border: 1px solid #42617d; border-radius: 9px; background: #102136f2; box-shadow: 0 12px 36px #0008; }
 .editor-panel-history, .editor-panel-results { right: 12px; left: auto; }
 .editor-panel header { display: flex; justify-content: space-between; align-items: center; }.editor-panel header h2 { margin: 0 0 12px; font-size: 18px; }
