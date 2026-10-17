@@ -30,6 +30,7 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
+const submittingTask = ref<'process' | 'decimate' | null>(null);
 const message = ref('');
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
@@ -361,12 +362,14 @@ function toggleLevel(level: number, checked: boolean): void {
   void saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
 }
 async function run(): Promise<void> {
-  if (!task.value || !currentState.value.selected_lods.length) return;
+  if (!task.value || !currentState.value.selected_lods.length || submittingTask.value) return;
+  submittingTask.value = 'process';
   try { task.value = await processEditorTask(task.value.task_id, currentState.value.selected_lods); panel.value = 'results'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { submittingTask.value = null; }
 }
 async function decimate(): Promise<void> {
-  if (!task.value) return;
+  if (!task.value || submittingTask.value) return;
   const ratio = decimationMode.value === 'ratio' ? retainPercent.value : undefined;
   const count = ratio === undefined ? targetCount.value : ratioTargetCount.value;
   if (ratio !== undefined && (!sourceLevelCount.value || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 100)) {
@@ -375,8 +378,10 @@ async function decimate(): Promise<void> {
   if (!Number.isSafeInteger(count) || count <= 0 || sourceLevelCount.value && count >= sourceLevelCount.value) {
     message.value = '请输入有效的抽稀目标高斯数'; return;
   }
+  submittingTask.value = 'decimate';
   try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, count, ratio); panel.value = 'lod'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  finally { submittingTask.value = null; }
 }
 async function selectDerived(item: EditorTask['derived_lods'][number] | null): Promise<void> {
   if (!task.value) return;
@@ -493,7 +498,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>
             <p>原始层 {{ sourceLevelCount?.toLocaleString() ?? '数量未知' }} 高斯，预计保留 {{ ratioTargetCount.toLocaleString() }} 高斯。</p></template>
-          <button type="button" :disabled="task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">生成轻量工作层</button>
+          <button type="button" :disabled="!!submittingTask || task.status !== 'ready' || task.decimate_status === 'running' || task.decimate_status === 'queued'" @click="decimate">{{ submittingTask === 'decimate' ? '正在提交抽稀…' : '生成轻量工作层' }}</button>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template> {{ task.decimate_error }}</p>
           <p v-for="item in task.derived_lods" :key="item.version">派生自 LOD {{ item.source_level }}：{{ item.count.toLocaleString() }} 高斯
             <button v-if="item.source_level === workLevel" type="button" :disabled="selectedDerived?.version === item.version"
@@ -501,7 +506,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
-          <button type="button" :disabled="!currentState.selected_lods.length || task.process_status === 'running' || task.process_status === 'queued'" @click="run">处理选中层级</button>
+          <button type="button" :disabled="!!submittingTask || !currentState.selected_lods.length || task.process_status === 'running' || task.process_status === 'queued'" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
