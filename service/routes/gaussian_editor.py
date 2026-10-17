@@ -743,8 +743,16 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         }[coordinate_mode]
         if format_name != "ply":
             coordinate_note += " 转换格式可能不保留坐标注释，请以本说明中的坐标框架为准。"
-        return JSONResponse({"task_id": task_id, "version": version, "source_name": status["filename"],
-                             "source_format": status["format"], "source_coordinate_hints": tasks.present(status).get("coordinate_metadata"),
+        source_lod = (next((item for item in status.get("lods", []) if item["level"] == level), None)
+                      if status["input_kind"] == "lod_group" else None)
+        if status["input_kind"] == "lod_group" and source_lod is None:
+            raise HTTPException(status_code=404, detail="Editor source LOD is unavailable")
+        source_name = source_lod["name"] if source_lod else status["filename"]
+        source_format = source_lod["format"] if source_lod else status["format"]
+        source_hints = (read_model_coordinates(directory / source_lod["path"]) if source_lod
+                        else tasks.present(status).get("coordinate_metadata"))
+        return JSONResponse({"task_id": task_id, "version": version, "source_name": source_name,
+                             "source_format": source_format, "source_coordinate_hints": source_hints,
                              "level": level, "source_gaussians": result["source_count"],
                              "result_gaussians": result["count"], "result_format": format_name,
                              "edit_state": snapshot, "coordinate_mode": coordinate_mode,
