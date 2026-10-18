@@ -31,6 +31,9 @@ const query = ref(false);
 const fps = ref(0);
 const submittedSplats = ref(0);
 const allocatedVramMiB = ref(0);
+const adaptiveBudgetMillions = ref(24);
+let gaussianShownAt = 0;
+let slowFpsSamples = 0;
 const previewCount = ref<number | null>(null);
 const sampleCount = ref(0);
 const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean; volume: boolean }>>([]);
@@ -470,6 +473,9 @@ function endBoxRotation(event: PointerEvent): void {
 
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value || props.largeOriginalBytes || props.largeOriginalCount) return;
+  adaptiveBudgetMillions.value = 24;
+  slowFpsSamples = 0;
+  gaussianShownAt = 0;
   const generation = ++displayGeneration;
   const currentEngine = engine;
   loading.value = true;
@@ -482,7 +488,7 @@ async function displayGaussian(): Promise<void> {
     await currentEngine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => {
       if (generation === displayGeneration) loadingStage.value = stage;
     }, props.adaptiveLodPreview);
-    if (generation === displayGeneration) loaded.value = true;
+    if (generation === displayGeneration) { loaded.value = true; gaussianShownAt = Date.now(); }
   } catch (error) {
     if (generation === displayGeneration) emit('notify', error instanceof Error ? error.message : String(error));
   } finally {
@@ -495,7 +501,10 @@ function invalidateGaussianLoad(): void {
   loading.value = false;
   loadingStage.value = '';
 }
-function displayPoints(): void { invalidateGaussianLoad(); engine?.showPoints(); loaded.value = false; }
+function displayPoints(): void {
+  invalidateGaussianLoad(); engine?.showPoints(); loaded.value = false;
+  adaptiveBudgetMillions.value = 24; slowFpsSamples = 0; gaussianShownAt = 0;
+}
 function fit(): void { engine?.fit(); }
 function toggleTop(): void {
   topView.value = !topView.value;
@@ -560,6 +569,16 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
       submittedSplats.value = stats?.frame.gsplats ?? 0;
       const vram = stats?.vram;
       allocatedVramMiB.value = vram ? Math.round((vram.tex + vram.vb + vram.ib + vram.ub + vram.sb) / 1048576) : 0;
+      if (loaded.value && props.adaptiveLodPreview && document.visibilityState === 'visible'
+          && gaussianShownAt && Date.now() - gaussianShownAt >= 8000
+          && adaptiveBudgetMillions.value > 8 && fps.value > 0 && fps.value < 25) {
+        if (++slowFpsSamples >= 8) {
+          const next = adaptiveBudgetMillions.value === 24 ? 16 : adaptiveBudgetMillions.value === 16 ? 12 : 8;
+          if (engine) engine.application.app.scene.gsplat.splatBudget = next * 1_000_000;
+          adaptiveBudgetMillions.value = next;
+          gaussianShownAt = Date.now(); slowFpsSamples = 0;
+        }
+      } else slowFpsSamples = 0;
     }, 500);
     boundaryTimer = setInterval(updateBoundaryLines, 50);
   } catch (error) {
@@ -627,7 +646,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       <span>加载高斯：{{ loadingStage || '准备中' }} · 已用 {{ loadingSeconds }} 秒</span>
     </div>
     <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
-    <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '源层总高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="loaded"> · 本帧绘制 {{ submittedSplats.toLocaleString() }} · 显存估算 {{ allocatedVramMiB }} MiB</template><template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
+    <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '源层总高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="loaded"> · 本帧绘制 {{ submittedSplats.toLocaleString() }} · 显存估算 {{ allocatedVramMiB }} MiB<template v-if="adaptiveLodPreview"> · 预览预算 {{ adaptiveBudgetMillions }}M<template v-if="adaptiveBudgetMillions < 24">（低帧率已降低）</template></template></template><template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>
 
