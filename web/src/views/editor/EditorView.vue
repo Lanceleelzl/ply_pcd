@@ -128,8 +128,11 @@ const levelCount = computed(() => useDerived.value && selectedDerived.value ? se
   selectedLod.value?.count ?? task.value?.level_counts?.[workLevel.value] ?? (selectedLod.value?.level === (task.value?.lods.length ?? 0) - 1
   || (task.value?.available_levels.length === 1 && workLevel.value === 0)
   ? task.value?.metadata?.source_point_count : undefined));
+const adaptiveStreamPreview = computed(() => !useDerived.value && task.value?.format === 'streamed_sog'
+  && (levelCount.value ?? 0) > 20_000_000 && task.value.available_levels.length > 1
+  && (task.value.level_counts?.at(-1) ?? Infinity) <= 5_000_000);
 const largeOriginalCount = computed(() => !useDerived.value && task.value?.input_kind === 'dataset'
-  && (levelCount.value ?? 0) > 20_000_000 ? levelCount.value : 0);
+  && !adaptiveStreamPreview.value && (levelCount.value ?? 0) > 20_000_000 ? levelCount.value : 0);
 
 async function refresh(): Promise<void> {
   const id = route.params.taskId;
@@ -482,6 +485,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && drawingPolygon"
         :editing-volume-index="editingVolume" @pick-polygon="polygonDraft.push($event)"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
+        :adaptive-lod-preview="adaptiveStreamPreview"
         @move-vertex="movePolygonVertex" @insert-vertex="insertPolygonVertex"
         @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
@@ -506,6 +510,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p>点云预览来自 LOD {{ previewLevel }}；显示高斯时加载选定工作层，其他目标层在执行时由服务端处理。</p>
           <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
           <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
+          <p v-if="adaptiveStreamPreview">当前工作层约 {{ levelCount?.toLocaleString() }} 个高斯。流式预览按视野和预算显示，远处或预算不足区域会使用较粗层；正式处理仍读取所选原始层。</p>
           <label>抽稀方式<select v-model="decimationMode"><option value="count">目标高斯数</option><option value="ratio" :disabled="!sourceLevelCount">保留比例</option></select></label>
           <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
           <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>

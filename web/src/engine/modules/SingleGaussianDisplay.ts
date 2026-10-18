@@ -21,7 +21,8 @@ export class SingleGaussianDisplay {
     private readonly origin: XYZ, private readonly pointsVisible: (visible: boolean) => void,
     private readonly clipMode: 'standard' | 'merge' | 'editor' = 'standard') {}
 
-  async show(url: string, filename: string, lodIndex?: number, onStage?: (stage: string) => void): Promise<void> {
+  async show(url: string, filename: string, lodIndex?: number, onStage?: (stage: string) => void,
+    adaptiveLod = false): Promise<void> {
     if (this.destroyed) return;
     const generation = ++this.generation;
     this.release();
@@ -41,7 +42,7 @@ export class SingleGaussianDisplay {
       }
       this.asset = asset;
       if (editorStream)
-        this.app.scene.gsplat.splatBudget = 5_000_000;
+        this.app.scene.gsplat.splatBudget = adaptiveLod ? 24_000_000 : 5_000_000;
       if (!direct) {
         this.app.assets.add(asset);
         await new Promise<void>((resolve, reject) => {
@@ -57,7 +58,8 @@ export class SingleGaussianDisplay {
       entity.addComponent('gsplat', { asset });
       if (editorStream && lodIndex !== undefined) {
         entity.gsplat!.lodRangeMin = lodIndex;
-        entity.gsplat!.lodRangeMax = lodIndex;
+        const lodLevels = (asset.resource as { octree?: { lodLevels: number } }).octree?.lodLevels;
+        entity.gsplat!.lodRangeMax = adaptiveLod && lodLevels ? lodLevels - 1 : lodIndex;
       }
       entity.setLocalPosition((direct?.transform.translation.x ?? 0) - this.origin[0],
         (direct?.transform.translation.y ?? 0) - this.origin[1],

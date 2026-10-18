@@ -8,6 +8,7 @@ import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 import { keepsEditorPoint } from './editor-rule-preview';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
+  adaptiveLodPreview?: boolean;
   origin: XYZ; pointCount?: number; lodLabel: string; previewLodLabel: string; previewPointCount?: number;
   transform: EditorTransform; largeOriginalBytes?: number;
   largeOriginalCount?: number;
@@ -28,6 +29,8 @@ const loaded = ref(false);
 const topView = ref(false);
 const query = ref(false);
 const fps = ref(0);
+const submittedSplats = ref(0);
+const allocatedVramMiB = ref(0);
 const previewCount = ref<number | null>(null);
 const sampleCount = ref(0);
 const boundaryLines = ref<Array<{ key: string; points: string; action: 'keep' | 'remove'; draft: boolean; volume: boolean }>>([]);
@@ -478,7 +481,7 @@ async function displayGaussian(): Promise<void> {
   try {
     await currentEngine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => {
       if (generation === displayGeneration) loadingStage.value = stage;
-    });
+    }, props.adaptiveLodPreview);
     if (generation === displayGeneration) loaded.value = true;
   } catch (error) {
     if (generation === displayGeneration) emit('notify', error instanceof Error ? error.message : String(error));
@@ -551,7 +554,13 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
     engine.setQueryPicking(query.value && !props.drawingPolygon);
     applyClip();
     applyRules();
-    statsTimer = setInterval(() => { fps.value = Math.round(engine?.application.app.stats.frame.fps ?? 0); }, 500);
+    statsTimer = setInterval(() => {
+      const stats = engine?.application.app.stats;
+      fps.value = Math.round(stats?.frame.fps ?? 0);
+      submittedSplats.value = stats?.frame.gsplats ?? 0;
+      const vram = stats?.vram;
+      allocatedVramMiB.value = vram ? Math.round((vram.tex + vram.vb + vram.ib + vram.ub + vram.sb) / 1048576) : 0;
+    }, 500);
     boundaryTimer = setInterval(updateBoundaryLines, 50);
   } catch (error) {
     if (!request.signal.aborted) emit('notify', error instanceof Error ? error.message : String(error));
@@ -618,7 +627,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       <span>加载高斯：{{ loadingStage || '准备中' }} · 已用 {{ loadingSeconds }} 秒</span>
     </div>
     <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
-    <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '层级高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
+    <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '源层总高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="loaded"> · 本帧绘制 {{ submittedSplats.toLocaleString() }} · 显存估算 {{ allocatedVramMiB }} MiB</template><template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>
 
