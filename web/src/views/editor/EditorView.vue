@@ -34,6 +34,7 @@ const clock = ref(Date.now());
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const historyBusy = ref(false);
+const historyRecoveryKey = ref(0);
 const submittingExport = ref<string | null>(null);
 const taskOperationBusy = computed(() => historyBusy.value || !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
@@ -146,7 +147,8 @@ async function refresh(): Promise<void> {
   try {
     if (typeof id === 'string') {
       const loaded = await loadEditorTask(id);
-      if (route.params.taskId !== id || revision !== editRevision || historyBusy.value) return;
+      if (route.params.taskId !== id || (task.value?.task_id === id
+        && (revision !== editRevision || historyBusy.value))) return;
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
@@ -165,7 +167,9 @@ async function refresh(): Promise<void> {
       task.value = null;
       history.value = await listEditorTasks(workspace.workspaceId);
     }
-  } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  } catch (error) {
+    if (route.params.taskId === id) message.value = error instanceof Error ? error.message : String(error);
+  }
 }
 watch(() => route.params.taskId, () => { void refresh(); }, { immediate: true });
 timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId) void refresh(); }, 1500);
@@ -210,14 +214,25 @@ async function saveEdit(label: string, state: EditorState): Promise<boolean> {
   const taskId = task.value.task_id;
   historyBusy.value = true;
   editRevision++;
+  let failed = false;
   try {
     const updated = await recordEditorEdit(taskId, label, state);
     if (task.value?.task_id === taskId) task.value = updated;
-    message.value = '';
+    if (route.params.taskId === taskId) message.value = '';
     return true;
   }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); return false; }
-  finally { editRevision++; historyBusy.value = false; }
+  catch (error) {
+    failed = true;
+    if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
+    return false;
+  }
+  finally {
+    editRevision++; historyBusy.value = false;
+    if (failed && route.params.taskId === taskId) {
+      historyRecoveryKey.value++;
+      void refresh();
+    }
+  }
 }
 function addRule(rule: EditorRule, label: string): void {
   void saveEdit(label, { ...currentState.value, rules: [...currentState.value.rules, rule] });
@@ -360,9 +375,13 @@ async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
 }
 async function jump(index: number): Promise<void> {
   if (!task.value || historyBusy.value || index < 0 || index >= task.value.history.length) return;
+  const taskId = task.value.task_id;
   historyBusy.value = true;
   editRevision++;
-  try { task.value = await jumpEditorHistory(task.value.task_id, index);
+  try {
+    const updated = await jumpEditorHistory(taskId, index);
+    if (route.params.taskId !== taskId || task.value?.task_id !== taskId) return;
+    task.value = updated;
     polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
     editingVolume.value = null; volumeDraft.value = null;
     geographyDraft.value = copyGeography(task.value.history[index].state.geography ?? initialGeography(task.value));
@@ -371,7 +390,9 @@ async function jump(index: number): Promise<void> {
       rotation_degrees: [...selectedTransform.rotation_degrees], scale: [...selectedTransform.scale] };
     coordinateResult.value = null;
   }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  catch (error) {
+    if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
+  }
   finally { editRevision++; historyBusy.value = false; }
 }
 function historyShortcut(event: KeyboardEvent): void {
@@ -524,7 +545,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </template>
       </EditorViewport>
       <div v-else class="editor-wait" role="status"><span v-if="task.status !== 'failed'" class="editor-wait-spinner" aria-hidden="true"></span><span>{{ task.status === 'failed' ? task.error : task.status === 'queued' ? '等待预读任务开始' : task.prepare_phase ?? '预读模型中' }}</span><small v-if="task.status === 'preparing' && prepareElapsed !== null">已用 {{ prepareElapsed }} 秒</small></div>
-      <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`" :inert="historyBusy" :aria-busy="historyBusy">
+      <aside v-if="panel" :key="historyRecoveryKey" class="editor-panel" :class="`editor-panel-${panel}`" :inert="historyBusy" :aria-busy="historyBusy">
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
