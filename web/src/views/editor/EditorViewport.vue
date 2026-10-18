@@ -474,6 +474,8 @@ function endBoxRotation(event: PointerEvent): void {
 
 async function displayGaussian(): Promise<void> {
   if (!engine || !props.gaussianUrl || loading.value || props.largeOriginalBytes || props.largeOriginalCount) return;
+  const gaussianUrl = props.gaussianUrl;
+  const filename = props.filename;
   adaptiveBudgetMillions.value = 24;
   slowFpsSamples = 0;
   gaussianShownAt = 0;
@@ -486,7 +488,7 @@ async function displayGaussian(): Promise<void> {
     if (generation === displayGeneration) loadingSeconds.value = Math.floor((Date.now() - started) / 1000);
   }, 1000);
   try {
-    await currentEngine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => {
+    await currentEngine.showGaussian(gaussianUrl, filename, props.gaussianLod, stage => {
       if (generation === displayGeneration) loadingStage.value = stage;
     }, props.adaptiveLodPreview);
     if (generation === displayGeneration) {
@@ -496,7 +498,16 @@ async function displayGaussian(): Promise<void> {
     }
   } catch (error) {
     if (generation === displayGeneration) {
-      lastGaussianError = error instanceof Error ? error.message : String(error);
+      let detail = error instanceof Error ? error.message : String(error);
+      if (detail === 'Invalid ply header' && /\.ply$/i.test(filename)) {
+        try {
+          const probe = await fetch(gaussianUrl, { headers: { Range: 'bytes=0-3' } });
+          if (!probe.ok) detail = `高斯模型请求失败：HTTP ${probe.status}`;
+          await probe.body?.cancel();
+        } catch { /* Keep the parser error if the status cannot be checked. */ }
+      }
+      if (generation !== displayGeneration) return;
+      lastGaussianError = detail;
       emit('notify', lastGaussianError);
     }
   } finally {
