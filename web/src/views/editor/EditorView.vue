@@ -45,6 +45,9 @@ function operationElapsed(status: string | undefined, startedAt: number | undefi
     ? Math.max(0, Math.floor(clock.value / 1000 - startedAt)) : null;
 }
 const message = ref('');
+function clearNotify(expected: string): void {
+  if (message.value === expected) message.value = '';
+}
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
 const transformDraft = ref<EditorTransform>(identityTransform());
@@ -531,7 +534,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         @move-vertex="movePolygonVertex" @insert-vertex="insertPolygonVertex"
         @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
-        @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event">
+        @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event"
+        @clear-notify="clearNotify">
         <template #tools>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>

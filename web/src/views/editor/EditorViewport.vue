@@ -17,7 +17,7 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, number]];
   insertVertex: [index: number, point: [number, number]];
-  notify: [message: string]; moveVertex: [index: number, point: [number, number]];
+  notify: [message: string]; clearNotify: [message: string]; moveVertex: [index: number, point: [number, number]];
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
   moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
   rotateBox: [rotation: [number, number, number, number]] }>();
@@ -57,6 +57,7 @@ let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let boundaryTimer: ReturnType<typeof setInterval> | null = null;
 let loadingTimer: ReturnType<typeof setInterval> | null = null;
+let lastGaussianError = '';
 let displayGeneration = 0;
 let lastPointer: [number, number] | null = null;
 let polygonPointerDown: [number, number] | null = null;
@@ -488,9 +489,16 @@ async function displayGaussian(): Promise<void> {
     await currentEngine.showGaussian(props.gaussianUrl, props.filename, props.gaussianLod, stage => {
       if (generation === displayGeneration) loadingStage.value = stage;
     }, props.adaptiveLodPreview);
-    if (generation === displayGeneration) { loaded.value = true; gaussianShownAt = Date.now(); }
+    if (generation === displayGeneration) {
+      loaded.value = true; gaussianShownAt = Date.now();
+      if (lastGaussianError) emit('clearNotify', lastGaussianError);
+      lastGaussianError = '';
+    }
   } catch (error) {
-    if (generation === displayGeneration) emit('notify', error instanceof Error ? error.message : String(error));
+    if (generation === displayGeneration) {
+      lastGaussianError = error instanceof Error ? error.message : String(error);
+      emit('notify', lastGaussianError);
+    }
   } finally {
     if (generation === displayGeneration) invalidateGaussianLoad();
   }
