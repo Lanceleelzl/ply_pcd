@@ -33,6 +33,7 @@ const uploadTotal = ref(0);
 const clock = ref(Date.now());
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
+const savingLevelSelection = ref(false);
 const submittingExport = ref<string | null>(null);
 const taskOperationBusy = computed(() => !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
@@ -372,16 +373,19 @@ function historyShortcut(event: KeyboardEvent): void {
   const next = task.value.history_cursor + (redo ? 1 : -1);
   if (next >= 0 && next < task.value.history.length) void jump(next);
 }
-function toggleLevel(level: number, checked: boolean): void {
+async function toggleLevel(level: number, checked: boolean): Promise<void> {
+  if (savingLevelSelection.value || taskOperationBusy.value) return;
+  savingLevelSelection.value = true;
   const levels = checked ? [...currentState.value.selected_lods, level] : currentState.value.selected_lods.filter(item => item !== level);
-  void saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
+  try { await saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) }); }
+  finally { savingLevelSelection.value = false; }
 }
 function confirmLocalFrame(checked: boolean): void {
   void saveEdit(checked ? '确认同一局部坐标框架' : '撤销局部坐标框架确认',
     { ...currentState.value, same_local_frame_confirmed: checked });
 }
 async function run(): Promise<void> {
-  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
+  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value || savingLevelSelection.value) return;
   submittingTask.value = 'process';
   try { task.value = await processEditorTask(task.value.task_id, currentState.value.selected_lods); panel.value = 'results'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
@@ -529,10 +533,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
               @click="selectDerived(item)">{{ selectedDerived?.version === item.version ? '当前工作层' : '用作工作层' }}</button></p>
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
-          <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
+          <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" :disabled="savingLevelSelection || taskOperationBusy" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
           <label v-if="task.input_kind === 'lod_group'"><input type="checkbox" :checked="currentState.same_local_frame_confirmed ?? false" @change="confirmLocalFrame(($event.target as HTMLInputElement).checked)">确认各层属于同一模型，并使用相同的局部坐标框架</label>
           <p v-if="task.input_kind === 'lod_group'">坐标头完整且一致时自动核验；缺少 EPSG、offset、shift 或 scale 时，跨层处理需要上述确认。已知字段冲突仍会拒绝处理。</p>
-          <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : '处理选中层级' }}</button>
+          <button type="button" :disabled="taskOperationBusy || savingLevelSelection || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : savingLevelSelection ? '正在保存目标层级…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
