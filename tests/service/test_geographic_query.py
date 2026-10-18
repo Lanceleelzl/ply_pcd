@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from pydantic import ValidationError
 from service.geographic_query import GeographicQuery, GeographicOrigin, project_origin, query_coordinates
 
@@ -28,6 +29,18 @@ class GeographicQueryTests(unittest.TestCase):
                 projected_origin=(origin['east'], origin['north'], 20), target_epsg=target))
             self.assertAlmostEqual(result['longitude'], 120.5, places=7)
             self.assertAlmostEqual(result['latitude'], 30, places=7)
+
+    def test_editor_origin_endpoint_reuses_projected_conversion(self):
+        from service.routes.gaussian_editor import create_editor_router
+        tasks = SimpleNamespace(read=lambda task_id: (None, {}) if task_id == 'sample' else None)
+        route = next(route for route in create_editor_router(tasks).routes
+                     if route.path.endswith('/coordinate-origin'))
+        origin = route.endpoint('sample', GeographicOrigin(source_epsg=32651,
+                                longitude=120.5, latitude=30))
+        result = query_coordinates(self.request(point=(0, 0, 0),
+            projected_origin=(origin['east'], origin['north'], 20)))
+        self.assertAlmostEqual(result['longitude'], 120.5, places=7)
+        self.assertAlmostEqual(result['latitude'], 30, places=7)
 
     def test_cgcs2000_output_is_not_supported(self):
         with self.assertRaises(ValidationError):

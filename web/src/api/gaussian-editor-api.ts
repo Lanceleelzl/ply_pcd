@@ -132,3 +132,11 @@ export async function queryEditorCoordinates(taskId: string, point: XYZ, frame: 
     }),
   }));
 }
+
+export async function projectEditorOrigin(taskId: string, sourceEpsg: number,
+  longitude: number, latitude: number): Promise<{ east: number; north: number; source_name: string }> {
+  return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/coordinate-origin`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_epsg: sourceEpsg, longitude, latitude }),
+  }));
+}

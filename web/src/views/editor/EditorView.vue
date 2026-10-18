@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
 import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl,
   exportEditorResult, jumpEditorHistory,
-  listEditorTasks, loadEditorTask, processEditorTask, queryEditorCoordinates, recordEditorEdit,
+  listEditorTasks, loadEditorTask, processEditorTask, projectEditorOrigin, queryEditorCoordinates, recordEditorEdit,
   type EditorDisplayClip, type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
   type EditorTransform } from '../../api/gaussian-editor-api';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
@@ -56,6 +56,9 @@ const geographyDraft = ref<EditorGeography>({ reference: [0, 0, 0], projected_or
   axes: [1, 2, 3], metres_per_unit: 1, source_epsg: 0 });
 const coordinateResult = ref<{ independent: XYZ; projected: XYZ; longitude: number; latitude: number; height_note: string } | null>(null);
 const coordinateBusy = ref(false);
+const originBusy = ref(false);
+const originLongitude = ref<number | string>('');
+const originLatitude = ref<number | string>('');
 let geographyTaskId = '';
 function copyGeography(frame: EditorGeography): EditorGeography {
   return { ...frame, reference: [...frame.reference], projected_origin: [...frame.projected_origin], axes: [...frame.axes] };
@@ -162,6 +165,7 @@ async function refresh(): Promise<void> {
         geographyDraft.value = copyGeography(loaded.history[loaded.history_cursor]?.state.geography
           ?? initialGeography(loaded));
         coordinateResult.value = null;
+        originLongitude.value = ''; originLatitude.value = '';
         transformDraft.value = structuredClone(loaded.history[loaded.history_cursor]?.state.transform ?? identityTransform());
       }
       if (!loaded.available_levels.includes(workLevel.value) && loaded.available_levels.length) {
@@ -334,12 +338,37 @@ function insertPolygonVertex(index: number, point: [number, number]): void {
   polygonDraft.value.splice(index, 0, point);
 }
 async function saveGeography(): Promise<void> {
+  if (originBusy.value) return;
   const frame = copyGeography(geographyDraft.value);
   if (!Number.isInteger(frame.source_epsg) || frame.source_epsg <= 0
     || frame.metres_per_unit <= 0 || ![...frame.reference, ...frame.projected_origin].every(Number.isFinite)) {
     message.value = '请输入有效 EPSG、参考坐标、投影原点和单位'; return;
   }
-  await saveEdit('修改坐标原点', { ...currentState.value, geography: frame });
+  if (await saveEdit('修改坐标原点', { ...currentState.value, geography: frame })) coordinateResult.value = null;
+}
+async function setProjectedOriginFromWgs84(): Promise<void> {
+  if (!task.value || originBusy.value) return;
+  const taskId = task.value.task_id;
+  const sourceEpsg = geographyDraft.value.source_epsg;
+  const longitude = Number(originLongitude.value), latitude = Number(originLatitude.value);
+  if (!Number.isInteger(sourceEpsg) || sourceEpsg <= 0 || originLongitude.value === ''
+    || originLatitude.value === '' || !Number.isFinite(longitude) || !Number.isFinite(latitude)
+    || longitude < -180 || longitude > 180 || latitude < -80 || latitude > 84) {
+    message.value = '请输入有效的投影 EPSG、经度和纬度'; return;
+  }
+  originBusy.value = true;
+  try {
+    const projected = await projectEditorOrigin(taskId, sourceEpsg, longitude, latitude);
+    if (task.value?.task_id !== taskId || route.params.taskId !== taskId
+      || geographyDraft.value.source_epsg !== sourceEpsg
+      || Number(originLongitude.value) !== longitude || Number(originLatitude.value) !== latitude) return;
+    geographyDraft.value.projected_origin[0] = projected.east;
+    geographyDraft.value.projected_origin[1] = projected.north;
+    coordinateResult.value = null;
+    message.value = '已换算投影原点 E／N；请核对高度 H 后保存坐标设置';
+  } catch (error) {
+    if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
+  } finally { originBusy.value = false; }
 }
 async function saveTransform(): Promise<void> {
   const translation = [...transformDraft.value.translation] as XYZ;
@@ -355,9 +384,17 @@ async function queryCoordinates(): Promise<void> {
   if (!task.value || !lastPoint.value || !currentState.value.geography) {
     message.value = '请先保存坐标设置并在场景中取点'; return;
   }
+  const taskId = task.value.task_id;
+  const point = [...lastPoint.value] as XYZ;
+  const frame = copyGeography(currentState.value.geography);
   coordinateBusy.value = true; coordinateResult.value = null;
-  try { coordinateResult.value = await queryEditorCoordinates(task.value.task_id, lastPoint.value, currentState.value.geography); }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  try {
+    const result = await queryEditorCoordinates(taskId, point, frame);
+    if (route.params.taskId === taskId && task.value?.task_id === taskId
+      && JSON.stringify(lastPoint.value) === JSON.stringify(point)
+      && JSON.stringify(currentState.value.geography) === JSON.stringify(frame)) coordinateResult.value = result;
+  }
+  catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { coordinateBusy.value = false; }
 }
 function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
@@ -629,8 +666,13 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <label>文件单位换算为米<input v-model.number="geographyDraft.metres_per_unit" type="number" min="0.000001" step="any"></label>
           <h3>文件参考点 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.reference" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="geographyDraft.reference[axis]" type="number" step="any"></div>
           <h3>对应投影坐标 E／N／H</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.projected_origin" :key="axis"><span>{{ ['E','N','H'][axis] }}</span><input v-model.number="geographyDraft.projected_origin[axis]" type="number" step="any"></div>
+          <h3>由 WGS84 设置投影原点</h3>
+          <p>经纬度按上方 EPSG 换算为 E／N；高度 H 保持当前值，需单独核对。</p>
+          <label>经度<input v-model.number="originLongitude" type="number" min="-180" max="180" step="any"></label>
+          <label>纬度<input v-model.number="originLatitude" type="number" min="-80" max="84" step="any"></label>
+          <button type="button" :disabled="originBusy || historyBusy" @click="setProjectedOriginFromWgs84">{{ originBusy ? '正在换算…' : '换算并填入 E／N' }}</button>
           <h3>东／北／上对应文件轴</h3><label v-for="(_, axis) in geographyDraft.axes" :key="axis">{{ ['东','北','上'][axis] }}<select v-model.number="geographyDraft.axes[axis]"><option v-for="candidate in [1,-1,2,-2,3,-3]" :key="candidate" :value="candidate">{{ candidate > 0 ? '+' : '−' }}{{ ['X','Y','Z'][Math.abs(candidate) - 1] }}</option></select></label>
-          <button type="button" @click="saveGeography">保存坐标设置</button>
+          <button type="button" :disabled="originBusy" @click="saveGeography">保存坐标设置</button>
           <p v-if="lastPoint">场景／文件坐标：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
           <button type="button" :disabled="coordinateBusy || !lastPoint || !currentState.geography" @click="queryCoordinates">{{ coordinateBusy ? '正在转换…' : '查询取点坐标' }}</button>
           <template v-if="coordinateResult"><p>独立场景坐标：{{ coordinateResult.independent.join('，') }}</p><p>原 EPSG 投影坐标：{{ coordinateResult.projected.join('，') }}</p><p>WGS84：{{ coordinateResult.longitude.toFixed(8) }}°，{{ coordinateResult.latitude.toFixed(8) }}°</p><p>{{ coordinateResult.height_note }}</p></template>

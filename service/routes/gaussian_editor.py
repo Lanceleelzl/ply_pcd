@@ -27,7 +27,7 @@ from service.auth import current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset
 from service.dataset_preparation import _convert_to_ply, _ply_vertex_count
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
-from service.geographic_query import GeographicQuery, query_coordinates
+from service.geographic_query import GeographicOrigin, GeographicQuery, project_origin, query_coordinates
 from service.gaussian_merge import read_layout
 from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
 from service.routes.streaming import StreamingTasks
@@ -700,6 +700,14 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         tasks.read(task_id)
         try:
             return query_coordinates(request)
+        except Exception as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/{task_id}/coordinate-origin")
+    def coordinate_origin(task_id: str, request: GeographicOrigin):
+        tasks.read(task_id)
+        try:
+            return project_origin(request)
         except Exception as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
