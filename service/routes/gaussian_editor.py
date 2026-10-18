@@ -660,7 +660,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         validate_rules(state["rules"])
         version = str(uuid.uuid4())
         status.update(process_status="queued", process_phase="等待处理", process_progress=None, process_level=None,
-                      process_version=version, process_completed=0,
+                      process_started_at_unix=time.time(), process_version=version, process_completed=0,
                       process_total=len(levels), process_results=[], process_error=None)
         write_status(directory, status)
         tasks.start_process(task_id, levels, state, version)
@@ -686,7 +686,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                         "state": state, "at": time.time()})
         status.update(history=history, history_cursor=len(history) - 1)
         status.update(decimate_status="queued", decimate_phase="等待抽稀", decimate_progress=None,
-                      decimate_version=version, decimate_level=request.level,
+                      decimate_started_at_unix=time.time(), decimate_version=version, decimate_level=request.level,
                       decimate_target_count=request.target_count,
                       decimate_retain_percent=request.retain_percent, decimate_error=None)
         write_status(directory, status)
@@ -703,7 +703,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         if not entry:
             raise HTTPException(status_code=404, detail="Editor result is unavailable")
         status.update(export_status="queued", export_phase="等待格式转换", export_progress=None,
-                      export_error=None, export_request=request.model_dump())
+                      export_started_at_unix=time.time(), export_error=None, export_request=request.model_dump())
         write_status(directory, status)
         tasks.start_export(task_id, request, entry["path"])
         return tasks.present(status)

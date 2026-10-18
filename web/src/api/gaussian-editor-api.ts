@@ -32,12 +32,12 @@ export interface EditorTask {
   level_counts?: number[];
   history: Array<{ label: string; state: EditorState; at: number }>;
   history_cursor: number;
-  process_status: string; process_phase?: string; process_progress?: number | null;
+  process_status: string; process_phase?: string; process_progress?: number | null; process_started_at_unix?: number;
   process_level?: number | null; process_completed?: number; process_total?: number;
   process_error?: string; process_results?: EditorResult[]; process_version?: string;
-  decimate_status: string; decimate_phase?: string; decimate_progress?: number | null;
+  decimate_status: string; decimate_phase?: string; decimate_progress?: number | null; decimate_started_at_unix?: number;
   decimate_error?: string;
-  export_status?: string; export_phase?: string; export_progress?: number | null;
+  export_status?: string; export_phase?: string; export_progress?: number | null; export_started_at_unix?: number;
   export_error?: string; export_request?: { version: string; level: number; format: 'compressed_ply' | 'sog' };
   exports?: Array<{ version: string; level: number; format: 'compressed_ply' | 'sog'; path: string; bytes: number }>;
   versions: Array<{ version: string; created_at_unix: number; history_cursor: number; levels: EditorResult[] }>;
