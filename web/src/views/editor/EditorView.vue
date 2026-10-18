@@ -13,6 +13,7 @@ import { formatTaskTime } from '../../shared/task-time';
 import { pickDirectory } from '../../shared/directory-selection';
 import type { XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
+import { polygonValidationError } from './editor-rule-preview';
 import '../../styles/module-entry.css';
 
 const route = useRoute();
@@ -241,7 +242,8 @@ function addRule(rule: EditorRule, label: string): void {
   void saveEdit(label, { ...currentState.value, rules: [...currentState.value.rules, rule] });
 }
 async function addPolygon(): Promise<void> {
-  if (polygonDraft.value.length < 3) { message.value = '平面边界至少需要三个取点'; return; }
+  const invalid = polygonValidationError(polygonDraft.value);
+  if (invalid) { message.value = invalid; return; }
   const rule: EditorRule = { type: 'polygon', action: boundaryAction.value,
     points: polygonDraft.value.map(point => [...point]) };
   const saved = await saveEdit(editingPolygon.value === null ? '新增平面边界' : '修改平面边界',

@@ -17,6 +17,15 @@ def test_2d_and_3d_rules_combine_as_keep_union_minus_removals():
     assert not keeps_point(rules, (3, 0, 0))
 
 
+@pytest.mark.parametrize(("points", "reason"), [
+    ([[0, 0], [1, 1], [2, 2]], "面积为零"),
+    ([[0, 0], [4, 4], [0, 4], [4, 0], [5, -2]], "不能自相交"),
+])
+def test_invalid_polygon_is_rejected_before_clipping(points, reason):
+    with pytest.raises(ValueError, match=reason):
+        validate_rules([{"type": "polygon", "action": "keep", "points": points}])
+
+
 def test_rotated_box_and_invalid_quaternion():
     box = {"type": "box", "action": "keep", "center": [0, 0, 0],
            "size": [2, 1, 1], "rotation": [0.7071067811865476, 0, 0, 0.7071067811865476]}

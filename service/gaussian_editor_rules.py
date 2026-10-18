@@ -7,7 +7,7 @@ import struct
 from pathlib import Path
 from typing import Callable
 
-from service.gaussian_merge import _contains, read_layout, rotate_point
+from service.gaussian_merge import _contains, _cross, _proper_cross, read_layout, rotate_point
 
 
 def validate_rules(rules: list[dict]) -> None:
@@ -23,6 +23,16 @@ def validate_rules(rules: list[dict]) -> None:
                 not _vector(point, 2) for point in points
             ):
                 raise ValueError("平面边界至少需要三个有效顶点")
+            if abs(sum(_cross([0, 0], points[index - 1], points[index])
+                       for index in range(len(points)))) <= 1e-9:
+                raise ValueError("平面边界面积为零")
+            for first in range(len(points)):
+                for second in range(first + 2, len(points)):
+                    if first == 0 and second == len(points) - 1:
+                        continue
+                    if _proper_cross(points[first], points[(first + 1) % len(points)],
+                                     points[second], points[(second + 1) % len(points)]):
+                        raise ValueError("平面边界不能自相交")
         elif kind == "sphere":
             if not _vector(rule.get("center"), 3) or not _positive(rule.get("radius")):
                 raise ValueError("球形边界参数无效")

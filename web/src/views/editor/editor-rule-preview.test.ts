@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { EditorRule } from '../../api/gaussian-editor-api';
-import { containsEditorRule, keepsEditorPoint } from './editor-rule-preview.ts';
+import { containsEditorRule, keepsEditorPoint, polygonValidationError } from './editor-rule-preview.ts';
+
+test('polygon validation rejects zero area and crossing edges before saving', () => {
+  assert.equal(polygonValidationError([[0, 0], [1, 1], [2, 2]]), '平面边界面积为零');
+  assert.equal(polygonValidationError([[0, 0], [4, 4], [0, 4], [4, 0], [5, -2]]), '平面边界不能自相交');
+  assert.equal(polygonValidationError([[0, 0], [4, 0], [4, 4], [0, 4]]), null);
+});
 
 test('polygon includes its edges and applies across the full height', () => {
   const polygon: EditorRule = { type: 'polygon', action: 'keep', points: [[0, 0], [4, 0], [4, 4], [0, 4]] };

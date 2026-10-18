@@ -1,6 +1,25 @@
 import type { XYZ } from '../../coordinate-math';
 import type { EditorRule } from '../../api/gaussian-editor-api';
 
+export function polygonValidationError(points: [number, number][]): string | null {
+  if (points.length < 3 || points.length > 256 || points.some(point => point.length !== 2
+    || point.some(value => !Number.isFinite(value)))) return '平面边界需要 3～256 个有效顶点';
+  const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  if (Math.abs(points.reduce((area, point, index) => area + cross([0, 0], points[index - 1] ?? points.at(-1)!, point), 0)) <= 1e-9)
+    return '平面边界面积为零';
+  for (let first = 0; first < points.length; first++) {
+    for (let second = first + 2; second < points.length; second++) {
+      if (first === 0 && second === points.length - 1) continue;
+      const a = points[first], b = points[(first + 1) % points.length];
+      const c = points[second], d = points[(second + 1) % points.length];
+      if (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0)
+        return '平面边界不能自相交';
+    }
+  }
+  return null;
+}
+
 export function containsEditorRule(rule: EditorRule, [x, y, z]: XYZ): boolean {
   if (rule.type === 'polygon') {
     let inside = false;
