@@ -33,9 +33,9 @@ const uploadTotal = ref(0);
 const clock = ref(Date.now());
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
-const savingLevelSelection = ref(false);
+const savingEdit = ref(false);
 const submittingExport = ref<string | null>(null);
-const taskOperationBusy = computed(() => !!submittingTask.value || [task.value?.process_status,
+const taskOperationBusy = computed(() => savingEdit.value || !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
 const prepareElapsed = computed(() => task.value?.prepare_started_at_unix
   ? Math.max(0, Math.floor(clock.value / 1000 - task.value.prepare_started_at_unix)) : null);
@@ -92,6 +92,7 @@ const decimationMode = ref<'count' | 'ratio'>('count');
 const retainPercent = ref(10);
 let timer: ReturnType<typeof setInterval> | null = null;
 let jumpingHistory = false;
+let editRevision = 0;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
   ?? { rules: [], selected_lods: [] });
@@ -142,9 +143,11 @@ const largeOriginalCount = computed(() => !useDerived.value && task.value?.input
 
 async function refresh(): Promise<void> {
   const id = route.params.taskId;
+  const revision = editRevision;
   try {
     if (typeof id === 'string') {
       const loaded = await loadEditorTask(id);
+      if (route.params.taskId !== id || revision !== editRevision || savingEdit.value) return;
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
@@ -204,9 +207,18 @@ async function create(): Promise<void> {
   finally { busy.value = false; }
 }
 async function saveEdit(label: string, state: EditorState): Promise<boolean> {
-  if (!task.value) return false;
-  try { task.value = await recordEditorEdit(task.value.task_id, label, state); message.value = ''; return true; }
+  if (!task.value || savingEdit.value) return false;
+  const taskId = task.value.task_id;
+  savingEdit.value = true;
+  editRevision++;
+  try {
+    const updated = await recordEditorEdit(taskId, label, state);
+    if (task.value?.task_id === taskId) task.value = updated;
+    message.value = '';
+    return true;
+  }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); return false; }
+  finally { editRevision++; savingEdit.value = false; }
 }
 function addRule(rule: EditorRule, label: string): void {
   void saveEdit(label, { ...currentState.value, rules: [...currentState.value.rules, rule] });
@@ -348,7 +360,7 @@ async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
   await saveEdit(label, { ...currentState.value, display_clip: value });
 }
 async function jump(index: number): Promise<void> {
-  if (!task.value || jumpingHistory || index < 0 || index >= task.value.history.length) return;
+  if (!task.value || jumpingHistory || savingEdit.value || index < 0 || index >= task.value.history.length) return;
   jumpingHistory = true;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
     polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
@@ -374,18 +386,16 @@ function historyShortcut(event: KeyboardEvent): void {
   if (next >= 0 && next < task.value.history.length) void jump(next);
 }
 async function toggleLevel(level: number, checked: boolean): Promise<void> {
-  if (savingLevelSelection.value || taskOperationBusy.value) return;
-  savingLevelSelection.value = true;
+  if (taskOperationBusy.value) return;
   const levels = checked ? [...currentState.value.selected_lods, level] : currentState.value.selected_lods.filter(item => item !== level);
-  try { await saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) }); }
-  finally { savingLevelSelection.value = false; }
+  await saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
 }
 function confirmLocalFrame(checked: boolean): void {
   void saveEdit(checked ? '确认同一局部坐标框架' : '撤销局部坐标框架确认',
     { ...currentState.value, same_local_frame_confirmed: checked });
 }
 async function run(): Promise<void> {
-  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value || savingLevelSelection.value) return;
+  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
   submittingTask.value = 'process';
   try { task.value = await processEditorTask(task.value.task_id, currentState.value.selected_lods); panel.value = 'results'; }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
@@ -507,14 +517,14 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
           <button type="button" @click="panel = panel === 'coordinates' ? null : 'coordinates'">坐标</button>
           <button type="button" @click="panel = panel === 'transform' ? null : 'transform'">模型变换</button>
-          <button type="button" :disabled="task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
-          <button type="button" :disabled="task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
+          <button type="button" :disabled="savingEdit || task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
+          <button type="button" :disabled="savingEdit || task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
           <button type="button" @click="panel = panel === 'history' ? null : 'history'">历史操作</button>
           <button type="button" @click="panel = panel === 'results' ? null : 'results'">成果</button>
         </template>
       </EditorViewport>
       <div v-else class="editor-wait" role="status"><span v-if="task.status !== 'failed'" class="editor-wait-spinner" aria-hidden="true"></span><span>{{ task.status === 'failed' ? task.error : task.status === 'queued' ? '等待预读任务开始' : task.prepare_phase ?? '预读模型中' }}</span><small v-if="task.status === 'preparing' && prepareElapsed !== null">已用 {{ prepareElapsed }} 秒</small></div>
-      <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`">
+      <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`" :inert="savingEdit" :aria-busy="savingEdit">
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
@@ -533,10 +543,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
               @click="selectDerived(item)">{{ selectedDerived?.version === item.version ? '当前工作层' : '用作工作层' }}</button></p>
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
-          <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" :disabled="savingLevelSelection || taskOperationBusy" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
+          <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" :disabled="taskOperationBusy" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
           <label v-if="task.input_kind === 'lod_group'"><input type="checkbox" :checked="currentState.same_local_frame_confirmed ?? false" @change="confirmLocalFrame(($event.target as HTMLInputElement).checked)">确认各层属于同一模型，并使用相同的局部坐标框架</label>
           <p v-if="task.input_kind === 'lod_group'">坐标头完整且一致时自动核验；缺少 EPSG、offset、shift 或 scale 时，跨层处理需要上述确认。已知字段冲突仍会拒绝处理。</p>
-          <button type="button" :disabled="taskOperationBusy || savingLevelSelection || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : savingLevelSelection ? '正在保存目标层级…' : '处理选中层级' }}</button>
+          <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : savingEdit ? '正在保存编辑…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
@@ -606,6 +616,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
+      <p v-if="savingEdit" class="editor-edit-status" role="status">正在保存编辑…</p>
       <p v-if="downloadProgress" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
       <p v-if="message" class="editor-message" role="status">{{ message }}</p>
     </div>
@@ -639,6 +650,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .editor-vertex-row { grid-template-columns: 20px 1fr 1fr auto; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
 .editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; }
+.editor-edit-status { position: absolute; z-index: 6; left: 12px; bottom: 98px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; }
 .editor-download-progress { position: absolute; z-index: 6; right: 12px; bottom: 44px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; }
 .editor-entry-message { margin: 0 auto; width: min(1040px, calc(100% - 40px)); }
 </style>
