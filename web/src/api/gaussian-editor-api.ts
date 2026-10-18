@@ -53,11 +53,13 @@ async function jsonResponse<T>(response: Response): Promise<T> {
 }
 
 export function createEditorTask(input: { kind: EditorInputKind; workspaceId: string;
-  file?: File; files?: File[]; paths?: string[]; onProgress?: (loaded: number, total: number) => void }): Promise<EditorTask> {
+  file?: File; files?: File[]; paths?: string[]; coordinateManifest?: File;
+  onProgress?: (loaded: number, total: number) => void }): Promise<EditorTask> {
   const form = new FormData();
   form.set('input_kind', input.kind);
   form.set('workspace_id', input.workspaceId);
   if (input.file) form.set('file', input.file);
+  if (input.coordinateManifest) form.set('coordinate_manifest', input.coordinateManifest);
   input.files?.forEach((file, index) => form.append('files', file, input.paths?.[index] ?? file.name));
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();

@@ -12,6 +12,7 @@ import time
 import uuid
 import zipfile
 from functools import lru_cache
+from hashlib import file_digest
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -135,6 +136,40 @@ def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
                 **{f"shift{axis}": "0" for axis in "xyz"},
                 **{f"scale{axis}": "1" for axis in "xyz"}}
     return "embedded", comments
+
+
+def geography_from_result_manifest(manifest: dict[str, Any], digest: str,
+                                   format_name: str, count: int, size: int) -> dict[str, Any]:
+    if not isinstance(manifest.get("result_file_sha256"), str):
+        raise ValueError("坐标说明缺少文件校验值，请从原任务重新下载")
+    if (manifest.get("result_format") != format_name or manifest.get("result_gaussians") != count
+            or manifest.get("result_file_bytes") != size
+            or not hmac.compare_digest(manifest["result_file_sha256"], digest)):
+        raise ValueError("坐标说明与上传模型的格式、数量或文件校验值不一致")
+    if manifest.get("coordinate_mode") not in {"source", "embedded"}:
+        raise ValueError("此坐标说明的地理框架不能自动还原，请在任务中手动设置")
+    hints = manifest.get("result_ply_coordinate_hints")
+    if not isinstance(hints, dict):
+        raise ValueError("坐标说明缺少成果 PLY 坐标信息")
+    try:
+        epsg = int(hints["epsg"])
+        offset = [float(value) for value in hints["offset"]]
+        shift = [float(value) for value in hints["shift"]]
+        scale = [float(value) for value in hints["scale"]]
+        crs = CRS.from_epsg(epsg)
+        axes = crs.axis_info[:2]
+        if (len(offset) != 3 or len(shift) != 3 or len(scale) != 3
+                or not all(math.isfinite(value) for value in (*offset, *shift, *scale))
+                or not all(math.isclose(value, 0) for value in shift)
+                or not all(math.isclose(value, 1) for value in scale)
+                or not crs.is_projected or len(axes) != 2
+                or [axis.direction for axis in axes] != ["east", "north"]
+                or any(not math.isclose(axis.unit_conversion_factor, 1) for axis in axes)):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, CRSError) as error:
+        raise ValueError("坐标说明缺少可安全还原的米制投影框架") from error
+    return {"reference": [0, 0, 0], "projected_origin": offset,
+            "axes": [1, 2, 3], "metres_per_unit": 1, "source_epsg": epsg}
 
 
 def exported_gaussian_count(path: Path, format_name: str, entrypoint: str) -> int:
@@ -486,7 +521,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
     @router.post("", status_code=202)
     async def create_task(input_kind: Annotated[str, Form()], workspace_id: Annotated[str, Form()],
                           file: Annotated[UploadFile | None, File()] = None,
-                          files: Annotated[list[UploadFile] | None, File()] = None):
+                          files: Annotated[list[UploadFile] | None, File()] = None,
+                          coordinate_manifest: Annotated[UploadFile | None, File()] = None):
         if input_kind not in {"single", "dataset", "lod_group"}:
             raise HTTPException(status_code=400, detail="Unsupported editor input kind")
         if input_kind == "lod_group":
@@ -497,6 +533,20 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         elif input_kind == "dataset" and (file is not None and Path(file.filename or "").suffix.lower() != ".zip"
                                            or file is None and not files):
             raise HTTPException(status_code=400, detail="Dataset requires ZIP or directory")
+        manifest_bytes = None
+        manifest = None
+        if coordinate_manifest is not None:
+            if input_kind != "single" or Path(coordinate_manifest.filename or "").suffix.lower() != ".json":
+                raise HTTPException(status_code=400, detail="坐标说明仅支持单个压缩高斯文件和 JSON 文件")
+            manifest_bytes = await coordinate_manifest.read(65537)
+            if len(manifest_bytes) > 65536:
+                raise HTTPException(status_code=400, detail="坐标说明文件不能超过 64 KiB")
+            try:
+                manifest = json.loads(manifest_bytes)
+                if not isinstance(manifest, dict):
+                    raise ValueError
+            except (UnicodeError, ValueError) as error:
+                raise HTTPException(status_code=400, detail="坐标说明不是有效的 JSON 对象") from error
         workspace = parse_workspace_id(workspace_id)
         task_id = str(uuid.uuid4())
         directory = tasks.directory(task_id)
@@ -545,6 +595,19 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                 status.update(source_path=path.relative_to(directory).as_posix(), source_bytes=size,
                               source_sha256=digest, format=probe.format,
                               filename=Path(file.filename or "dataset").name if file else "数据集目录")
+                if manifest is not None:
+                    if probe.format not in {"compressed_ply", "sog"}:
+                        raise HTTPException(status_code=422, detail="坐标说明仅可随 Compressed PLY 或 SOG 导入")
+                    try:
+                        count = exported_gaussian_count(path, probe.format, probe.entrypoint)
+                        initial_state["geography"] = geography_from_result_manifest(
+                            manifest, digest, probe.format, count, size)
+                    except ValueError as error:
+                        raise HTTPException(status_code=422, detail=str(error)) from error
+                    manifest_path = input_dir / "coordinate-manifest.json"
+                    manifest_path.write_bytes(manifest_bytes)
+                    status["coordinate_manifest_path"] = manifest_path.relative_to(directory).as_posix()
+                    status["history"][0].update(label="导入模型及坐标说明", state=initial_state)
             write_status(directory, status)
         except (DatasetFormatError, HTTPException) as error:
             status.update(status="failed", error=str(error.detail) if isinstance(error, HTTPException) else str(error))
@@ -778,13 +841,21 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         source_format = source_lod["format"] if source_lod else status["format"]
         source_hints = (read_model_coordinates(directory / source_lod["path"]) if source_lod
                         else tasks.present(status).get("coordinate_metadata"))
-        return JSONResponse({"task_id": task_id, "version": version, "source_name": source_name,
+        response = {"task_id": task_id, "version": version, "source_name": source_name,
                              "source_format": source_format, "source_coordinate_hints": source_hints,
                              "level": level, "source_gaussians": result["source_count"],
                              "result_gaussians": result["count"], "result_format": format_name,
                              "edit_state": snapshot, "coordinate_mode": coordinate_mode,
                              "result_ply_coordinate_hints": read_ply_coordinates(directory / result["path"]),
-                             "coordinate_note": coordinate_note},
+                             "coordinate_note": coordinate_note}
+        if format_name != "ply":
+            export = next(item for item in status["exports"] if item["version"] == version
+                          and item["level"] == level and item["format"] == format_name)
+            export_path = directory / export["path"]
+            with export_path.open("rb") as stream:
+                response["result_file_sha256"] = file_digest(stream, "sha256").hexdigest()
+            response["result_file_bytes"] = export_path.stat().st_size
+        return JSONResponse(response,
                             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited-{format_name}-manifest.json')}"})
 
     return router
