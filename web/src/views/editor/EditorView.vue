@@ -33,9 +33,9 @@ const uploadTotal = ref(0);
 const clock = ref(Date.now());
 const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
-const savingEdit = ref(false);
+const historyBusy = ref(false);
 const submittingExport = ref<string | null>(null);
-const taskOperationBusy = computed(() => savingEdit.value || !!submittingTask.value || [task.value?.process_status,
+const taskOperationBusy = computed(() => historyBusy.value || !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
 const prepareElapsed = computed(() => task.value?.prepare_started_at_unix
   ? Math.max(0, Math.floor(clock.value / 1000 - task.value.prepare_started_at_unix)) : null);
@@ -91,7 +91,6 @@ const targetCount = ref(100_000);
 const decimationMode = ref<'count' | 'ratio'>('count');
 const retainPercent = ref(10);
 let timer: ReturnType<typeof setInterval> | null = null;
-let jumpingHistory = false;
 let editRevision = 0;
 
 const currentState = computed<EditorState>(() => task.value?.history[task.value.history_cursor]?.state
@@ -147,7 +146,7 @@ async function refresh(): Promise<void> {
   try {
     if (typeof id === 'string') {
       const loaded = await loadEditorTask(id);
-      if (route.params.taskId !== id || revision !== editRevision || savingEdit.value) return;
+      if (route.params.taskId !== id || revision !== editRevision || historyBusy.value) return;
       task.value = loaded;
       if (geographyTaskId !== id) {
         geographyTaskId = id;
@@ -207,9 +206,9 @@ async function create(): Promise<void> {
   finally { busy.value = false; }
 }
 async function saveEdit(label: string, state: EditorState): Promise<boolean> {
-  if (!task.value || savingEdit.value) return false;
+  if (!task.value || historyBusy.value) return false;
   const taskId = task.value.task_id;
-  savingEdit.value = true;
+  historyBusy.value = true;
   editRevision++;
   try {
     const updated = await recordEditorEdit(taskId, label, state);
@@ -218,7 +217,7 @@ async function saveEdit(label: string, state: EditorState): Promise<boolean> {
     return true;
   }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); return false; }
-  finally { editRevision++; savingEdit.value = false; }
+  finally { editRevision++; historyBusy.value = false; }
 }
 function addRule(rule: EditorRule, label: string): void {
   void saveEdit(label, { ...currentState.value, rules: [...currentState.value.rules, rule] });
@@ -360,8 +359,9 @@ async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
   await saveEdit(label, { ...currentState.value, display_clip: value });
 }
 async function jump(index: number): Promise<void> {
-  if (!task.value || jumpingHistory || savingEdit.value || index < 0 || index >= task.value.history.length) return;
-  jumpingHistory = true;
+  if (!task.value || historyBusy.value || index < 0 || index >= task.value.history.length) return;
+  historyBusy.value = true;
+  editRevision++;
   try { task.value = await jumpEditorHistory(task.value.task_id, index);
     polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
     editingVolume.value = null; volumeDraft.value = null;
@@ -372,7 +372,7 @@ async function jump(index: number): Promise<void> {
     coordinateResult.value = null;
   }
   catch (error) { message.value = error instanceof Error ? error.message : String(error); }
-  finally { jumpingHistory = false; }
+  finally { editRevision++; historyBusy.value = false; }
 }
 function historyShortcut(event: KeyboardEvent): void {
   if (!task.value || !(event.ctrlKey || event.metaKey) || event.altKey || event.repeat) return;
@@ -517,14 +517,14 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
           <button type="button" @click="panel = panel === 'coordinates' ? null : 'coordinates'">坐标</button>
           <button type="button" @click="panel = panel === 'transform' ? null : 'transform'">模型变换</button>
-          <button type="button" :disabled="savingEdit || task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
-          <button type="button" :disabled="savingEdit || task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
+          <button type="button" :disabled="historyBusy || task.history_cursor === 0" @click="jump(task.history_cursor - 1)">撤销</button>
+          <button type="button" :disabled="historyBusy || task.history_cursor >= task.history.length - 1" @click="jump(task.history_cursor + 1)">重做</button>
           <button type="button" @click="panel = panel === 'history' ? null : 'history'">历史操作</button>
           <button type="button" @click="panel = panel === 'results' ? null : 'results'">成果</button>
         </template>
       </EditorViewport>
       <div v-else class="editor-wait" role="status"><span v-if="task.status !== 'failed'" class="editor-wait-spinner" aria-hidden="true"></span><span>{{ task.status === 'failed' ? task.error : task.status === 'queued' ? '等待预读任务开始' : task.prepare_phase ?? '预读模型中' }}</span><small v-if="task.status === 'preparing' && prepareElapsed !== null">已用 {{ prepareElapsed }} 秒</small></div>
-      <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`" :inert="savingEdit" :aria-busy="savingEdit">
+      <aside v-if="panel" class="editor-panel" :class="`editor-panel-${panel}`" :inert="historyBusy" :aria-busy="historyBusy">
         <header><h2>{{ { lod: '层级与抽稀', bounds: '裁剪边界', slice: '显示剖切', coordinates: '坐标与原点', transform: '模型整体变换', history: '历史操作', results: '处理成果' }[panel] }}</h2><button type="button" @click="panel = null" aria-label="关闭面板">×</button></header>
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
@@ -546,7 +546,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" :disabled="taskOperationBusy" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
           <label v-if="task.input_kind === 'lod_group'"><input type="checkbox" :checked="currentState.same_local_frame_confirmed ?? false" @change="confirmLocalFrame(($event.target as HTMLInputElement).checked)">确认各层属于同一模型，并使用相同的局部坐标框架</label>
           <p v-if="task.input_kind === 'lod_group'">坐标头完整且一致时自动核验；缺少 EPSG、offset、shift 或 scale 时，跨层处理需要上述确认。已知字段冲突仍会拒绝处理。</p>
-          <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : savingEdit ? '正在保存编辑…' : '处理选中层级' }}</button>
+          <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : historyBusy ? '正在更新编辑历史…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
@@ -616,7 +616,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
-      <p v-if="savingEdit" class="editor-edit-status" role="status">正在保存编辑…</p>
+      <p v-if="historyBusy" class="editor-edit-status" role="status">正在更新编辑历史…</p>
       <p v-if="downloadProgress" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
       <p v-if="message" class="editor-message" role="status">{{ message }}</p>
     </div>
