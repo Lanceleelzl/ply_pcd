@@ -45,6 +45,14 @@ export class SingleGaussianDisplay {
         this.app.scene.gsplat.splatBudget = adaptiveLod ? 24_000_000 : 5_000_000;
       if (!direct) {
         this.app.assets.add(asset);
+        let reportedPercent = -1;
+        asset.on('progress', (received: number, total: number) => {
+          if (generation !== this.generation || !onStage || !(total > 0)) return;
+          const percent = Math.min(100, Math.floor(received / total * 20) * 5);
+          if (percent === reportedPercent) return;
+          reportedPercent = percent;
+          onStage(percent === 100 ? '模型下载完成，正在解析' : `下载模型 ${percent}%`);
+        });
         await new Promise<void>((resolve, reject) => {
           const loaded = () => { asset.off('error', failed); resolve(); };
           const failed = (error: unknown) => { asset.off('load', loaded); reject(error); };
