@@ -11,8 +11,9 @@ import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
 import { pickDirectory } from '../../shared/directory-selection';
-import { transformParametersMatrix, transformXYZ, type XYZ } from '../../coordinate-math';
+import type { XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
+import { sliceClipBounds, transformedClipBounds } from './editor-clip-coordinates';
 import { projectedOriginForPoint } from './editor-geography';
 import { polygonValidationError, rectangleFromCorners } from './editor-rule-preview';
 import '../../styles/module-entry.css';
@@ -432,21 +433,15 @@ function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
   const bounds = task.value?.metadata?.bounds;
   if (!bounds || !Number.isFinite(clipThickness.value) || clipThickness.value <= 0) return;
   const axis = { xoy: 2, xoz: 1, yoz: 0 }[plane];
-  clip.value.min = [...bounds.min]; clip.value.max = [...bounds.max];
-  const middle = (bounds.min[axis] + bounds.max[axis]) / 2;
-  clip.value.min[axis] = middle - clipThickness.value / 2;
-  clip.value.max[axis] = middle + clipThickness.value / 2;
+  const range = sliceClipBounds(bounds, currentTransform.value, axis, clipThickness.value);
+  clip.value.min = range.min; clip.value.max = range.max;
   clip.value.mode = 'axis';
   void saveDisplayClip(`设置 ${plane.toUpperCase()} 显示剖切`);
 }
 function changeClipMode(mode: EditorDisplayClip['mode']): void {
   const bounds = task.value?.metadata?.bounds;
   if (bounds && mode !== 'off') {
-    const transform = transformParametersMatrix(currentTransform.value);
-    const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(corner => transformXYZ(transform,
-      [0, 1, 2].map(axis => corner & (1 << axis) ? bounds.max[axis] : bounds.min[axis]) as XYZ));
-    const min = [0, 1, 2].map(axis => Math.min(...corners.map(point => point[axis]))) as XYZ;
-    const max = [0, 1, 2].map(axis => Math.max(...corners.map(point => point[axis]))) as XYZ;
+    const { min, max } = transformedClipBounds(bounds, currentTransform.value);
     if (mode === 'axis' && clip.value.min.every(value => value <= -1e29)
       && clip.value.max.every(value => value >= 1e29)) {
       clip.value.min = min; clip.value.max = max;
