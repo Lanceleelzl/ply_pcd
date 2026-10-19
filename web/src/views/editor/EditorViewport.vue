@@ -43,6 +43,7 @@ const insertHint = ref<{ x: number; y: number } | null>(null);
 const volumeCenterHandle = ref<{ x: number; y: number } | null>(null);
 const volumeHeightHandle = ref<{ x: number; y: number } | null>(null);
 const volumeRadiusHandle = ref<{ x: number; y: number } | null>(null);
+const volumeDepthRadiusHandle = ref<{ x: number; y: number } | null>(null);
 const boxSizeHandles = ref<Array<{ axis: number; x: number; y: number }>>([]);
 const boxRotationHandles = ref<Array<{ axis: number; x: number; y: number }>>([]);
 const sceneSize = ref({ width: 1, height: 1 });
@@ -50,6 +51,7 @@ let draggingVertex: number | null = null;
 let draggingVolume = false;
 let draggingHeight = false;
 let draggingRadius = false;
+let draggingDepthRadius = false;
 let draggingBoxAxis: number | null = null;
 let draggingRotation: { axis: XYZ; reference: XYZ; center: XYZ; base: [number, number, number, number] } | null = null;
 let engine: SingleModelEngine | null = null;
@@ -269,7 +271,19 @@ function updateBoundaryLines(): void {
       selected.center[1] - origin[1], selected.center[2] - origin[2]));
     if (volumeRadiusHandle.value?.x !== screen.x || volumeRadiusHandle.value?.y !== screen.y)
       volumeRadiusHandle.value = { x: screen.x, y: screen.y };
-  } else if (volumeRadiusHandle.value) volumeRadiusHandle.value = null;
+    const depthScreen = component.worldToScreen(new pc.Vec3(selected.center[0] - origin[0],
+      selected.center[1] - origin[1], selected.center[2] - selected.radius - origin[2]));
+    const center = volumeCenterHandle.value!;
+    const height = volumeHeightHandle.value!;
+    const depthHandle = (draggingDepthRadius || Math.hypot(depthScreen.x - center.x, depthScreen.y - center.y) >= 20
+      && Math.hypot(depthScreen.x - height.x, depthScreen.y - height.y) >= 20)
+      ? { x: depthScreen.x, y: depthScreen.y } : null;
+    if (JSON.stringify(depthHandle) !== JSON.stringify(volumeDepthRadiusHandle.value))
+      volumeDepthRadiusHandle.value = depthHandle;
+  } else {
+    if (volumeRadiusHandle.value) volumeRadiusHandle.value = null;
+    if (volumeDepthRadiusHandle.value) volumeDepthRadiusHandle.value = null;
+  }
   const boxHandles = selected?.type === 'box' ? ([0, 1, 2] as const).map(axis => {
     const local: XYZ = [0, 0, 0];
     local[axis] = selected.size[axis] / 2;
@@ -351,6 +365,22 @@ function moveVolumeRadius(event: PointerEvent): void {
   const point = pointOnVolumePlane(event);
   if (point) emit('moveVolumeRadius', Math.max(0.001, Math.hypot(point[0] - rule.center[0], point[1] - rule.center[1])));
 }
+function pointerDistanceAlongVolumeZ(event: PointerEvent): number | null {
+  if (!engine || !canvas.value || props.editingVolumeIndex == null) return null;
+  const rule = props.rules[props.editingVolumeIndex];
+  const camera = engine.application.camera.camera;
+  if (!rule || rule.type === 'polygon' || !camera) return null;
+  const bounds = canvas.value.getBoundingClientRect();
+  const near = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.nearClip);
+  const far = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.farClip);
+  const direction = far.sub(near).normalize();
+  const denominator = 1 - direction.z * direction.z;
+  if (denominator < 1e-5) return null;
+  const origin = engine.scene.displayOrigin;
+  const offset = new pc.Vec3(near.x + origin[0] - rule.center[0],
+    near.y + origin[1] - rule.center[1], near.z + origin[2] - rule.center[2]);
+  return (offset.z - direction.z * direction.dot(offset)) / denominator;
+}
 function startVolumeDrag(event: PointerEvent): void {
   draggingVolume = true;
   (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
@@ -361,21 +391,28 @@ function endVolumeDrag(event: PointerEvent): void {
   (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
 function moveVolumeHeight(event: PointerEvent): void {
-  if (!draggingHeight || !engine || !canvas.value || props.editingVolumeIndex == null) return;
+  if (!draggingHeight || props.editingVolumeIndex == null) return;
   const rule = props.rules[props.editingVolumeIndex];
-  const camera = engine.application.camera.camera;
-  if (!rule || rule.type === 'polygon' || !camera) return;
-  const bounds = canvas.value.getBoundingClientRect();
-  const near = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.nearClip);
-  const far = camera.screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, camera.farClip);
-  const direction = far.sub(near).normalize();
-  const denominator = 1 - direction.z * direction.z;
-  if (denominator < 1e-5) return;
-  const origin = engine.scene.displayOrigin;
-  const offset = new pc.Vec3(near.x + origin[0] - rule.center[0],
-    near.y + origin[1] - rule.center[1], near.z + origin[2] - rule.center[2]);
-  const distance = (offset.z - direction.z * direction.dot(offset)) / denominator;
+  if (!rule || rule.type === 'polygon') return;
+  const distance = pointerDistanceAlongVolumeZ(event);
+  if (distance === null) return;
   emit('moveVolumeHeight', rule.center[2] + distance - (rule.type === 'sphere' ? rule.radius * 0.7 : Math.max(...rule.size) * 1.1));
+}
+function moveVolumeDepthRadius(event: PointerEvent): void {
+  if (!draggingDepthRadius || props.editingVolumeIndex == null) return;
+  const rule = props.rules[props.editingVolumeIndex];
+  if (rule?.type !== 'sphere') return;
+  const distance = pointerDistanceAlongVolumeZ(event);
+  if (distance !== null) emit('moveVolumeRadius', Math.max(0.001, Math.abs(distance)));
+}
+function startDepthRadiusDrag(event: PointerEvent): void {
+  draggingDepthRadius = true;
+  (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
+  event.stopPropagation();
+}
+function endDepthRadiusDrag(event: PointerEvent): void {
+  draggingDepthRadius = false;
+  (event.currentTarget as SVGCircleElement).releasePointerCapture(event.pointerId);
 }
 function startHeightDrag(event: PointerEvent): void {
   draggingHeight = true;
@@ -639,6 +676,10 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       </circle>
       <circle v-if="volumeRadiusHandle" class="volume-radius" :cx="volumeRadiusHandle.x" :cy="volumeRadiusHandle.y" r="8"
         @pointerdown="startRadiusDrag" @pointermove="moveVolumeRadius" @pointerup="endRadiusDrag" @pointercancel="endRadiusDrag" />
+      <circle v-if="volumeDepthRadiusHandle" class="volume-depth-radius" :cx="volumeDepthRadiusHandle.x" :cy="volumeDepthRadiusHandle.y" r="8"
+        @pointerdown="startDepthRadiusDrag" @pointermove="moveVolumeDepthRadius" @pointerup="endDepthRadiusDrag" @pointercancel="endDepthRadiusDrag">
+        <title>沿 Z 方向调整球半径</title>
+      </circle>
       <circle v-for="handle in boxSizeHandles" :key="handle.axis" class="box-size" :class="`axis-${handle.axis}`"
         :cx="handle.x" :cy="handle.y" r="8" @pointerdown="startBoxSizeDrag(handle.axis, $event)"
         @pointermove="moveBoxSize" @pointerup="endBoxSizeDrag" @pointercancel="endBoxSizeDrag" />
@@ -664,7 +705,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       <span class="editor-loading-spinner" aria-hidden="true" />
       <span>加载高斯：{{ loadingStage || '准备中' }} · 已用 {{ loadingSeconds }} 秒</span>
     </div>
-    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄从水平或 Z 向调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '源层总高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="loaded"> · 本帧绘制 {{ submittedSplats.toLocaleString() }} · 显存估算 {{ allocatedVramMiB }} MiB<template v-if="adaptiveLodPreview"> · 预览预算 {{ adaptiveBudgetMillions }}M<template v-if="adaptiveBudgetMillions < 24">（低帧率已降低）</template></template></template><template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>
@@ -685,6 +726,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
 .editor-boundary-overlay circle.volume-center { fill: #8fe3ff; stroke: #104a64; stroke-width: 3; }
 .editor-boundary-overlay circle.volume-height { fill: #cb93ff; stroke: #422361; stroke-width: 3; }
 .editor-boundary-overlay circle.volume-radius { fill: #f6d265; stroke: #55420d; stroke-width: 3; cursor: ew-resize; }
+.editor-boundary-overlay circle.volume-depth-radius { fill: #f6d265; stroke: #55420d; stroke-width: 3; cursor: ns-resize; }
 .editor-boundary-overlay circle.box-size { stroke: #07121e; stroke-width: 3; }
 .editor-boundary-overlay circle.axis-0 { fill: #f47878; }
 .editor-boundary-overlay circle.axis-1 { fill: #71d690; }
