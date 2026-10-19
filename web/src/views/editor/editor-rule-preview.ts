@@ -1,6 +1,14 @@
 import type { XYZ } from '../../coordinate-math';
 import type { EditorRule } from '../../api/gaussian-editor-api';
 
+export function rectangleFromCorners(first: [number, number], second: [number, number]): [number, number][] | null {
+  if (![...first, ...second].every(Number.isFinite)) return null;
+  const minX = Math.min(first[0], second[0]), maxX = Math.max(first[0], second[0]);
+  const minY = Math.min(first[1], second[1]), maxY = Math.max(first[1], second[1]);
+  if ((maxX - minX) * (maxY - minY) <= 1e-9) return null;
+  return [[minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY]];
+}
+
 export function polygonValidationError(points: [number, number][]): string | null {
   if (points.length < 3 || points.length > 256 || points.some(point => point.length !== 2
     || point.some(value => !Number.isFinite(value)))) return '平面边界需要 3～256 个有效顶点';

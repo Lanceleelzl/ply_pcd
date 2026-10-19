@@ -14,7 +14,7 @@ import { pickDirectory } from '../../shared/directory-selection';
 import type { XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
 import { projectedOriginForPoint } from './editor-geography';
-import { polygonValidationError } from './editor-rule-preview';
+import { polygonValidationError, rectangleFromCorners } from './editor-rule-preview';
 import '../../styles/module-entry.css';
 
 const route = useRoute();
@@ -85,6 +85,7 @@ const workLevel = ref(0);
 const lastPoint = ref<XYZ | null>(null);
 const polygonDraft = ref<[number, number][]>([]);
 const drawingPolygon = ref(false);
+const drawingRectangle = ref(false);
 const editingPolygon = ref<number | null>(null);
 const editingVolume = ref<number | null>(null);
 const volumeDraft = ref<Extract<EditorRule, { type: 'sphere' | 'box' }> | null>(null);
@@ -257,6 +258,7 @@ async function addPolygon(): Promise<void> {
   if (!saved) return;
   polygonDraft.value = [];
   drawingPolygon.value = false;
+  drawingRectangle.value = false;
   editingPolygon.value = null;
 }
 function editPolygon(index: number): void {
@@ -264,6 +266,7 @@ function editPolygon(index: number): void {
   if (rule.type !== 'polygon') return;
   editingPolygon.value = index;
   drawingPolygon.value = false;
+  drawingRectangle.value = false;
   boundaryAction.value = rule.action;
   polygonDraft.value = rule.points.map(point => [...point]);
 }
@@ -337,6 +340,23 @@ function movePolygonVertex(index: number, point: [number, number]): void {
 }
 function insertPolygonVertex(index: number, point: [number, number]): void {
   polygonDraft.value.splice(index, 0, point);
+}
+function pickPolygonPoint(point: [number, number]): void {
+  if (!drawingRectangle.value) { polygonDraft.value.push(point); return; }
+  if (!polygonDraft.value.length) { polygonDraft.value = [point]; return; }
+  const rectangle = rectangleFromCorners(polygonDraft.value[0], point);
+  if (!rectangle) { message.value = '矩形需要两个不同 X／Y 的角点'; return; }
+  polygonDraft.value = rectangle;
+  drawingRectangle.value = false;
+  message.value = '矩形草稿已生成，请检查顶点后保存边界';
+}
+function toggleRectangleDrawing(): void {
+  if (drawingRectangle.value) {
+    drawingRectangle.value = false;
+    polygonDraft.value = [];
+  } else {
+    drawingRectangle.value = true;
+  }
 }
 async function saveGeography(): Promise<void> {
   if (originBusy.value) return;
@@ -435,7 +455,7 @@ async function jump(index: number): Promise<void> {
     const updated = await jumpEditorHistory(taskId, index);
     if (route.params.taskId !== taskId || task.value?.task_id !== taskId) return;
     task.value = updated;
-    polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false;
+    polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false; drawingRectangle.value = false;
     editingVolume.value = null; volumeDraft.value = null;
     geographyDraft.value = copyGeography(task.value.history[index].state.geography ?? initialGeography(task.value));
     const selectedTransform = task.value.history[index]?.state.transform ?? identityTransform();
@@ -577,8 +597,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :preview-lod-label="`LOD ${previewLevel}`"
         :preview-point-count="task.metadata.source_point_count" :clip="clip" :transform="currentTransform"
         :rules="displayRules" :polygon-draft="polygonDraft" :editing-polygon-index="editingPolygon"
-        :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && drawingPolygon"
-        :editing-volume-index="editingVolume" @pick-polygon="polygonDraft.push($event)"
+        :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && (drawingPolygon || drawingRectangle)"
+        :drawing-rectangle="panel === 'bounds' && drawingRectangle"
+        :editing-volume-index="editingVolume" @pick-polygon="pickPolygonPoint"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
         :adaptive-lod-preview="adaptiveStreamPreview"
         @move-vertex="movePolygonVertex" @insert-vertex="insertPolygonVertex"
@@ -624,14 +645,15 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : historyBusy ? '正在更新编辑历史…' : '处理选中层级' }}</button>
         </template>
         <template v-else-if="panel === 'bounds'">
-          <p>点击「开始 2D 绘制」后逐点点击场景平面，空白区域也可取点；平面边界沿模型全高生效。「场景取点」用于球心或坐标查询。</p>
+          <p>多边形逐点绘制；矩形在场景中点击两个对角点即可生成四点草稿。平面边界沿模型全高生效；「场景取点」用于球心或坐标查询。</p>
           <p v-if="lastPoint">当前取点：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
           <label>边界规则<select v-model="boundaryAction"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
-          <button type="button" @click="drawingPolygon = !drawingPolygon">{{ drawingPolygon ? '结束 2D 绘制' : '开始 2D 绘制' }}</button>
+          <button type="button" :disabled="drawingRectangle" @click="drawingPolygon = !drawingPolygon">{{ drawingPolygon ? '结束 2D 绘制' : '开始 2D 绘制' }}</button>
+          <button type="button" :disabled="drawingPolygon || (!drawingRectangle && !!polygonDraft.length)" @click="toggleRectangleDrawing">{{ drawingRectangle ? '取消矩形绘制' : '两点绘制 2D 矩形' }}</button>
           <p>{{ editingPolygon === null ? '平面草稿' : '正在编辑平面边界' }}：{{ polygonDraft.length }} 点</p>
           <div v-for="(point, index) in polygonDraft" :key="index" class="editor-clip-row editor-vertex-row"><span>{{ index + 1 }}</span><input v-model.number="point[0]" type="number" step="any" :aria-label="`顶点 ${index + 1} X`"><input v-model.number="point[1]" type="number" step="any" :aria-label="`顶点 ${index + 1} Y`"><button type="button" @click="polygonDraft.splice(index, 1)">删点</button></div>
           <button type="button" :disabled="polygonDraft.length < 3" @click="addPolygon">{{ editingPolygon === null ? '完成 2D 平面边界' : '保存平面边界' }}</button>
-          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []; editingPolygon = null; drawingPolygon = false">清空草稿</button>
+          <button type="button" :disabled="!polygonDraft.length" @click="polygonDraft = []; editingPolygon = null; drawingPolygon = false; drawingRectangle = false">清空草稿</button>
           <label>球半径<input v-model.number="sphereRadius" type="number" min="0.001" step="any"></label>
           <button type="button" :disabled="!lastPoint || sphereRadius <= 0" @click="addSphere">以取点为球心添加球体</button>
           <div class="editor-size"><label v-for="(_, axis) in boxSize" :key="axis">{{ ['X','Y','Z'][axis] }} 尺寸<input v-model.number="boxSize[axis]" type="number" min="0.001" step="any"></label></div>

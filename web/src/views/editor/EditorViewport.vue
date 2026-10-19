@@ -13,7 +13,7 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   transform: EditorTransform; largeOriginalBytes?: number;
   largeOriginalCount?: number;
   rules: EditorRule[]; polygonDraft: [number, number][]; editingPolygonIndex?: number | null;
-  snappingPolygon?: boolean; drawingPolygon?: boolean; editingVolumeIndex?: number | null;
+  snappingPolygon?: boolean; drawingPolygon?: boolean; drawingRectangle?: boolean; editingVolumeIndex?: number | null;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, number]];
   insertVertex: [index: number, point: [number, number]];
@@ -705,7 +705,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       <span class="editor-loading-spinner" aria-hidden="true" />
       <span>加载高斯：{{ loadingStage || '准备中' }} · 已用 {{ loadingSeconds }} 秒</span>
     </div>
-    <div class="editor-scene-hint" role="status">{{ drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄从水平或 Z 向调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
+    <div class="editor-scene-hint" role="status">{{ drawingRectangle ? '单击矩形两个对角点 · 生成后检查顶点并保存' : drawingPolygon ? '单击场景绘制平面边界 · 端点／中点／边线可吸附 · 保存后生效' : editingPolygonIndex != null ? '点击边线插点 · 拖动顶点 · 保存后生效' : volumeRadiusHandle ? '青色手柄移动 X／Y · 紫色手柄移动 Z · 黄色手柄从水平或 Z 向调整半径 · 保存后生效' : boxSizeHandles.length ? '青／紫手柄移动中心 · 实心手柄调整尺寸 · 空心手柄旋转 · 保存后生效' : 'WASD 移动 · Shift 加速 · 滚轮拉近／拉远 · 中键平移 · 左键转向' }}</div>
     <div class="editor-scene-stats">{{ loaded ? lodLabel : previewLodLabel }} · {{ loaded ? '源层总高斯' : '点云预览源高斯' }} {{ (loaded ? pointCount : previewPointCount)?.toLocaleString() ?? '数量未知' }}<template v-if="loaded"> · 本帧绘制 {{ submittedSplats.toLocaleString() }} · 显存估算 {{ allocatedVramMiB }} MiB<template v-if="adaptiveLodPreview"> · 预览预算 {{ adaptiveBudgetMillions }}M<template v-if="adaptiveBudgetMillions < 24">（低帧率已降低）</template></template></template><template v-if="!loaded && lodLabel !== previewLodLabel"> · 目标 {{ lodLabel }}</template><template v-if="!loaded && rules.length && previewCount !== null"> · 抽样裁剪预览 {{ previewCount.toLocaleString() }}／{{ sampleCount.toLocaleString() }}</template> · {{ fps }} FPS</div>
   </div>
 </template>

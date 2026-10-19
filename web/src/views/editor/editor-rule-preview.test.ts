@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { EditorRule } from '../../api/gaussian-editor-api';
-import { containsEditorRule, keepsEditorPoint, polygonValidationError } from './editor-rule-preview.ts';
+import { containsEditorRule, keepsEditorPoint, polygonValidationError, rectangleFromCorners } from './editor-rule-preview.ts';
+
+test('two opposite corners create a valid axis-aligned polygon', () => {
+  const points = rectangleFromCorners([4, 5], [1, 2]);
+  assert.deepEqual(points, [[1, 2], [4, 2], [4, 5], [1, 5]]);
+  assert.equal(polygonValidationError(points!), null);
+  assert.equal(rectangleFromCorners([1, 2], [1, 5]), null);
+});
 
 test('polygon validation rejects zero area and crossing edges before saving', () => {
   assert.equal(polygonValidationError([[0, 0], [1, 1], [2, 2]]), '平面边界面积为零');
