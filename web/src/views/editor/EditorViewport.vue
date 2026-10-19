@@ -6,6 +6,7 @@ import type { EditorDisplayClip, EditorRule, EditorTransform } from '../../api/g
 import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 import { keepsEditorPoint } from './editor-rule-preview';
+import { clipToLocal, clipToScene } from './editor-clip-coordinates';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   adaptiveLodPreview?: boolean;
@@ -14,13 +15,15 @@ const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; fil
   largeOriginalCount?: number;
   rules: EditorRule[]; polygonDraft: [number, number][]; editingPolygonIndex?: number | null;
   snappingPolygon?: boolean; drawingPolygon?: boolean; drawingRectangle?: boolean; editingVolumeIndex?: number | null;
+  clipEditing?: boolean;
   clip: EditorDisplayClip }>();
 const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, number]];
   insertVertex: [index: number, point: [number, number]];
   notify: [message: string]; clearNotify: [message: string]; moveVertex: [index: number, point: [number, number]];
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
   moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
-  rotateBox: [rotation: [number, number, number, number]] }>();
+  rotateBox: [rotation: [number, number, number, number]];
+  clipValuesChanged: [values: { min: XYZ; max: XYZ; center: XYZ; size: XYZ }] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
 const loading = ref(false);
 const loadingStage = ref('');
@@ -574,8 +577,10 @@ function toggleQuery(): void {
 }
 function applyClip(): void {
   if (!engine) return;
-  engine.setAxisClip(props.clip.mode === 'axis', props.clip.min, props.clip.max);
-  engine.setBoxClip(props.clip.mode === 'box', props.clip.center, props.clip.size);
+  const origin = engine.scene.displayOrigin;
+  engine.setAxisClip(props.clip.mode === 'axis', clipToLocal(props.clip.min, origin),
+    clipToLocal(props.clip.max, origin));
+  engine.setBoxClip(props.clip.mode === 'box', clipToLocal(props.clip.center, origin), props.clip.size);
   for (const plane of ['xoy', 'xoz', 'yoz'] as const) {
     const value = props.clip.planes[plane];
     engine.setOriginPlane(plane, value.visible, value.side);
@@ -588,6 +593,14 @@ function applyRules(): void {
   engine.gaussian.setEditorRules(props.rules, engine.scene.displayOrigin);
 }
 watch(() => props.clip, applyClip, { deep: true });
+watch(() => props.clipEditing, value => {
+  if (value && query.value) {
+    query.value = false;
+    engine?.setQueryEnabled(false);
+    engine?.setQueryPicking(false);
+  }
+  engine?.setClipHelpersVisible(!!value);
+});
 watch(() => JSON.stringify(props.rules), applyRules);
 watch(() => props.snappingPolygon, value => { if (!value) { snapHint.value = null; insertHint.value = null; lastPointer = null; } });
 watch(() => props.drawingPolygon, value => {
@@ -614,7 +627,17 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
         emit('pick', point);
         if (query.value && !props.drawingPolygon) queueMicrotask(() => engine?.setQueryPicking(true));
       },
-      undefined, undefined, undefined, undefined, undefined, 'fly', 'editor');
+      values => {
+        const origin = engine?.scene.displayOrigin ?? [0, 0, 0];
+        emit('clipValuesChanged', {
+          min: clipToScene(values.axisMin, origin),
+          max: clipToScene(values.axisMax, origin),
+          center: clipToScene(values.boxCenter, origin),
+          size: [...values.boxSize],
+        });
+      }, undefined, undefined, undefined, undefined, 'fly', 'editor');
+    engine.setClipRotationEnabled(false);
+    engine.setClipHelpersVisible(!!props.clipEditing);
     engine.setQueryEnabled(query.value && !props.drawingPolygon);
     engine.setQueryPicking(query.value && !props.drawingPolygon);
     applyClip();

@@ -11,7 +11,7 @@ import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
 import { pickDirectory } from '../../shared/directory-selection';
-import type { XYZ } from '../../coordinate-math';
+import { transformParametersMatrix, transformXYZ, type XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
 import { projectedOriginForPoint } from './editor-geography';
 import { polygonValidationError, rectangleFromCorners } from './editor-rule-preview';
@@ -439,12 +439,38 @@ function slice(plane: 'xoy' | 'xoz' | 'yoz'): void {
   clip.value.mode = 'axis';
   void saveDisplayClip(`设置 ${plane.toUpperCase()} 显示剖切`);
 }
+function changeClipMode(mode: EditorDisplayClip['mode']): void {
+  const bounds = task.value?.metadata?.bounds;
+  if (bounds && mode !== 'off') {
+    const transform = transformParametersMatrix(currentTransform.value);
+    const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(corner => transformXYZ(transform,
+      [0, 1, 2].map(axis => corner & (1 << axis) ? bounds.max[axis] : bounds.min[axis]) as XYZ));
+    const min = [0, 1, 2].map(axis => Math.min(...corners.map(point => point[axis]))) as XYZ;
+    const max = [0, 1, 2].map(axis => Math.max(...corners.map(point => point[axis]))) as XYZ;
+    if (mode === 'axis' && clip.value.min.every(value => value <= -1e29)
+      && clip.value.max.every(value => value >= 1e29)) {
+      clip.value.min = min; clip.value.max = max;
+    }
+    if (mode === 'box' && clip.value.center.every(value => value === 0)
+      && clip.value.size.every(value => value === 1)) {
+      clip.value.center = min.map((value, axis) => (value + max[axis]) / 2) as XYZ;
+      clip.value.size = min.map((value, axis) => Math.max(max[axis] - value, 0.001)) as XYZ;
+    }
+  }
+  clip.value.mode = mode;
+}
 async function saveDisplayClip(label = '修改显示剖切'): Promise<void> {
   const value = copyClip(clip.value);
   if (![...value.min, ...value.max, ...value.center, ...value.size].every(Number.isFinite)
     || value.min.some((minimum, axis) => minimum > value.max[axis])
     || value.size.some(size => size <= 0)) { message.value = '请输入有效的剖切范围和矩形框尺寸'; return; }
   await saveEdit(label, { ...currentState.value, display_clip: value });
+}
+function updateClipValues(values: { min: XYZ; max: XYZ; center: XYZ; size: XYZ }): void {
+  clip.value.min = values.min;
+  clip.value.max = values.max;
+  clip.value.center = values.center;
+  clip.value.size = values.size;
 }
 async function jump(index: number): Promise<void> {
   if (!task.value || historyBusy.value || index < 0 || index >= task.value.history.length) return;
@@ -599,6 +625,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :rules="displayRules" :polygon-draft="polygonDraft" :editing-polygon-index="editingPolygon"
         :snapping-polygon="panel === 'bounds'" :drawing-polygon="panel === 'bounds' && (drawingPolygon || drawingRectangle)"
         :drawing-rectangle="panel === 'bounds' && drawingRectangle"
+        :clip-editing="panel === 'slice' && !taskOperationBusy" @clip-values-changed="updateClipValues"
         :editing-volume-index="editingVolume" @pick-polygon="pickPolygonPoint"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
         :adaptive-lod-preview="adaptiveStreamPreview"
@@ -678,9 +705,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </template>
         <template v-else-if="panel === 'slice'">
           <p>剖切仅改变场景显示；裁剪导出请使用「边界」规则。</p>
+          <p>启用三轴范围或矩形框后，可在场景中拖动对应手柄调整剖切草稿；点击「保存显示剖切」后才写入历史。矩形框保持轴向对齐。</p>
           <label>切片厚度<input v-model.number="clipThickness" type="number" min="0.001" step="any"></label>
           <div><button v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane" type="button" @click="slice(plane)">{{ plane.toUpperCase() }}</button></div>
-          <label>剖切方式<select v-model="clip.mode"><option value="off">关闭</option><option value="axis">三轴范围</option><option value="box">矩形框</option></select></label>
+          <label>剖切方式<select :value="clip.mode" @change="changeClipMode(($event.target as HTMLSelectElement).value as EditorDisplayClip['mode'])"><option value="off">关闭</option><option value="axis">三轴范围</option><option value="box">矩形框</option></select></label>
           <template v-if="clip.mode === 'axis'"><div v-for="(_, axis) in clip.min" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.min[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最小值`"><input v-model.number="clip.max[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 最大值`"></div></template>
           <template v-if="clip.mode === 'box'"><div v-for="(_, axis) in clip.center" :key="axis" class="editor-clip-row"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="clip.center[axis]" type="number" step="any" :aria-label="`${['X','Y','Z'][axis]} 中心`"><input v-model.number="clip.size[axis]" type="number" min="0.001" step="any" :aria-label="`${['X','Y','Z'][axis]} 尺寸`"></div></template>
           <h3>原点平面</h3><label v-for="plane in ['xoy', 'xoz', 'yoz'] as const" :key="plane"><input v-model="clip.planes[plane].visible" type="checkbox">{{ plane.toUpperCase() }}</label>

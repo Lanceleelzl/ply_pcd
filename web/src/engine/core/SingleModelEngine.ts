@@ -34,6 +34,7 @@ export class SingleModelEngine {
   private readonly handleBounds: { min: pc.Vec3; max: pc.Vec3 };
   private clipHelpersVisible = true;
   private clipGizmosAttached = false;
+  private clipRotationEnabled = true;
   private gizmoTransforming = false;
   private originSides = new pc.Vec3();
   private readonly queryAnchor: pc.Entity;
@@ -277,6 +278,13 @@ export class SingleModelEngine {
   setClipHelpersVisible(visible: boolean): void {
     this.clipHelpersVisible = visible; this.syncClipGizmos();
   }
+  setClipRotationEnabled(enabled: boolean): void {
+    this.clipRotationEnabled = enabled;
+    if (this.clipGizmosAttached) {
+      if (enabled) this.clipRotate.attach(this.clipBox);
+      else this.clipRotate.detach();
+    }
+  }
   setAxesVisible(visible: boolean): void { this.scene.setAxesVisible(visible); }
   setSceneAxesVisible(visible: boolean): void {
     this.sceneAxesVisible = visible;
@@ -307,7 +315,7 @@ export class SingleModelEngine {
     this.syncQueryGizmo();
     const show = this.boxClip.enabled && this.clipHelpersVisible && this.tools.isActive('clipping');
     if (show === this.clipGizmosAttached) return;
-    if (show) { this.clipTranslate.attach(this.clipBox); this.clipRotate.attach(this.clipBox); }
+    if (show) { this.clipTranslate.attach(this.clipBox); if (this.clipRotationEnabled) this.clipRotate.attach(this.clipBox); }
     else { this.clipTranslate.detach(); this.clipRotate.detach(); }
     this.clipGizmosAttached = show;
   }
