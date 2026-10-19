@@ -34,7 +34,7 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const clock = ref(Date.now());
-const downloadProgress = ref<{ loaded: number; total: number | null } | null>(null);
+const downloadProgress = ref<{ taskId: string; loaded: number; total: number | null } | null>(null);
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const historyBusy = ref(false);
 const historyRecoveryKey = ref(0);
@@ -221,16 +221,17 @@ async function create(): Promise<void> {
   finally { busy.value = false; }
 }
 async function saveEdit(label: string, state: EditorState): Promise<boolean> {
-  if (!task.value || historyBusy.value) return false;
+  if (!task.value || route.params.taskId !== task.value.task_id || historyBusy.value) return false;
   const taskId = task.value.task_id;
   historyBusy.value = true;
   editRevision++;
   let failed = false;
   try {
     const updated = await recordEditorEdit(taskId, label, state);
-    if (task.value?.task_id === taskId) task.value = updated;
+    const current = route.params.taskId === taskId && task.value?.task_id === taskId;
+    if (current) task.value = updated;
     if (route.params.taskId === taskId) message.value = '';
-    return true;
+    return current;
   }
   catch (error) {
     failed = true;
@@ -468,7 +469,8 @@ function updateClipValues(values: { min: XYZ; max: XYZ; center: XYZ; size: XYZ }
   clip.value.size = values.size;
 }
 async function jump(index: number): Promise<void> {
-  if (!task.value || historyBusy.value || index < 0 || index >= task.value.history.length) return;
+  if (!task.value || route.params.taskId !== task.value.task_id || historyBusy.value
+    || index < 0 || index >= task.value.history.length) return;
   const taskId = task.value.task_id;
   historyBusy.value = true;
   editRevision++;
@@ -510,14 +512,22 @@ function confirmLocalFrame(checked: boolean): void {
     { ...currentState.value, same_local_frame_confirmed: checked });
 }
 async function run(): Promise<void> {
-  if (!task.value || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
+  if (!task.value || route.params.taskId !== task.value.task_id
+    || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
+  const taskId = task.value.task_id;
+  const levels = [...currentState.value.selected_lods];
   submittingTask.value = 'process';
-  try { task.value = await processEditorTask(task.value.task_id, currentState.value.selected_lods); panel.value = 'results'; }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  try {
+    const updated = await processEditorTask(taskId, levels);
+    if (route.params.taskId === taskId && task.value?.task_id === taskId) {
+      task.value = updated; panel.value = 'results';
+    }
+  }
+  catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; }
 }
 async function decimate(): Promise<void> {
-  if (!task.value || taskOperationBusy.value) return;
+  if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
   const ratio = decimationMode.value === 'ratio' ? retainPercent.value : undefined;
   const count = ratio === undefined ? targetCount.value : ratioTargetCount.value;
   if (ratio !== undefined && (!sourceLevelCount.value || !Number.isFinite(ratio) || ratio <= 0 || ratio >= 100)) {
@@ -526,9 +536,16 @@ async function decimate(): Promise<void> {
   if (!Number.isSafeInteger(count) || count <= 0 || sourceLevelCount.value && count >= sourceLevelCount.value) {
     message.value = '请输入有效的抽稀目标高斯数'; return;
   }
+  const taskId = task.value.task_id;
+  const level = workLevel.value;
   submittingTask.value = 'decimate';
-  try { task.value = await decimateEditorTask(task.value.task_id, workLevel.value, count, ratio); panel.value = 'lod'; }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  try {
+    const updated = await decimateEditorTask(taskId, level, count, ratio);
+    if (route.params.taskId === taskId && task.value?.task_id === taskId) {
+      task.value = updated; panel.value = 'lod';
+    }
+  }
+  catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; }
 }
 async function selectDerived(item: EditorTask['derived_lods'][number] | null): Promise<void> {
@@ -538,15 +555,22 @@ async function selectDerived(item: EditorTask['derived_lods'][number] | null): P
       target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
 async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
-  if (!task.value || taskOperationBusy.value) return;
+  if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
+  const taskId = task.value.task_id;
   submittingTask.value = 'export';
   submittingExport.value = `${version}:${level}:${format}`;
-  try { task.value = await exportEditorResult(task.value.task_id, version, level, format); panel.value = 'results'; }
-  catch (error) { message.value = error instanceof Error ? error.message : String(error); }
+  try {
+    const updated = await exportEditorResult(taskId, version, level, format);
+    if (route.params.taskId === taskId && task.value?.task_id === taskId) {
+      task.value = updated; panel.value = 'results';
+    }
+  }
+  catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; submittingExport.value = null; }
 }
 async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' = 'ply'): Promise<void> {
-  if (!task.value) return;
+  if (!task.value || route.params.taskId !== task.value.task_id) return;
+  const taskId = task.value.task_id;
   type WritableResult = { write(value: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
     Promise<{ createWritable(): Promise<WritableResult> }> }).showSaveFilePicker;
@@ -556,19 +580,21 @@ async function download(version: string, level: number, format: 'ply' | 'compres
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
     const handle = await picker({ suggestedName: `lod-${level}-edited.${suffix}` });
-    const response = await apiFetch(format === 'ply' ? editorDownloadUrl(task.value.task_id, version, level)
-      : editorExportUrl(task.value.task_id, version, level, format));
+    const response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
+      : editorExportUrl(taskId, version, level, format));
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('Content-Length'));
-    downloadProgress.value = { loaded: 0, total: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null };
+    downloadProgress.value = { taskId, loaded: 0,
+      total: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null };
     writable = await handle.createWritable();
     reader = response.body.getReader();
     while (true) { const { value, done } = await reader.read(); if (done) break; await writable.write(value);
       downloadProgress.value.loaded += value.byteLength; }
-    await writable.close(); writable = null; message.value = '成果下载完成';
+    await writable.close(); writable = null;
+    if (route.params.taskId === taskId) message.value = '成果下载完成';
   } catch (error) {
     await Promise.allSettled([reader?.cancel(), writable?.abort()]);
-    message.value = error instanceof Error ? error.message : String(error);
+    if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
   }
   finally { downloadProgress.value = null; }
 }
@@ -743,7 +769,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </template>
       </aside>
       <p v-if="historyBusy" class="editor-edit-status" role="status">正在更新编辑历史…</p>
-      <p v-if="downloadProgress" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
+      <p v-if="downloadProgress && downloadProgress.taskId === task.task_id" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
       <p v-if="message" class="editor-message" role="status">{{ message }}</p>
     </div>
     <p v-if="message && !task" role="status" class="editor-entry-message">{{ message }}</p>
