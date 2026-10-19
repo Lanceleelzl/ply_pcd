@@ -13,6 +13,7 @@ import { formatTaskTime } from '../../shared/task-time';
 import { pickDirectory } from '../../shared/directory-selection';
 import type { XYZ } from '../../coordinate-math';
 import EditorViewport from './EditorViewport.vue';
+import { projectedOriginForPoint } from './editor-geography';
 import { polygonValidationError } from './editor-rule-preview';
 import '../../styles/module-entry.css';
 
@@ -346,11 +347,14 @@ async function saveGeography(): Promise<void> {
   }
   if (await saveEdit('修改坐标原点', { ...currentState.value, geography: frame })) coordinateResult.value = null;
 }
-async function setProjectedOriginFromWgs84(): Promise<void> {
+async function setProjectedOriginFromWgs84(atPickedPoint = false): Promise<void> {
   if (!task.value || originBusy.value) return;
   const taskId = task.value.task_id;
-  const sourceEpsg = geographyDraft.value.source_epsg;
+  const frame = copyGeography(geographyDraft.value);
+  const point = lastPoint.value ? [...lastPoint.value] as XYZ : null;
+  const sourceEpsg = frame.source_epsg;
   const longitude = Number(originLongitude.value), latitude = Number(originLatitude.value);
+  if (atPickedPoint && !point) { message.value = '请先在场景中取点'; return; }
   if (!Number.isInteger(sourceEpsg) || sourceEpsg <= 0 || originLongitude.value === ''
     || originLatitude.value === '' || !Number.isFinite(longitude) || !Number.isFinite(latitude)
     || longitude < -180 || longitude > 180 || latitude < -80 || latitude > 84) {
@@ -360,12 +364,19 @@ async function setProjectedOriginFromWgs84(): Promise<void> {
   try {
     const projected = await projectEditorOrigin(taskId, sourceEpsg, longitude, latitude);
     if (task.value?.task_id !== taskId || route.params.taskId !== taskId
-      || geographyDraft.value.source_epsg !== sourceEpsg
+      || JSON.stringify(geographyDraft.value) !== JSON.stringify(frame)
+      || atPickedPoint && JSON.stringify(lastPoint.value) !== JSON.stringify(point)
       || Number(originLongitude.value) !== longitude || Number(originLatitude.value) !== latitude) return;
-    geographyDraft.value.projected_origin[0] = projected.east;
-    geographyDraft.value.projected_origin[1] = projected.north;
+    const [east, north] = atPickedPoint && point
+      ? projectedOriginForPoint(point, frame, [projected.east, projected.north],
+        projected.metres_per_projected_unit)
+      : [projected.east, projected.north];
+    geographyDraft.value.projected_origin[0] = east;
+    geographyDraft.value.projected_origin[1] = north;
     coordinateResult.value = null;
-    message.value = '已换算投影原点 E／N；请核对高度 H 后保存坐标设置';
+    message.value = atPickedPoint
+      ? '已按取点反算投影原点 E／N；请核对高度 H 后保存坐标设置'
+      : '已换算投影原点 E／N；请核对高度 H 后保存坐标设置';
   } catch (error) {
     if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
   } finally { originBusy.value = false; }
@@ -667,10 +678,11 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <h3>文件参考点 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.reference" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="geographyDraft.reference[axis]" type="number" step="any"></div>
           <h3>对应投影坐标 E／N／H</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.projected_origin" :key="axis"><span>{{ ['E','N','H'][axis] }}</span><input v-model.number="geographyDraft.projected_origin[axis]" type="number" step="any"></div>
           <h3>由 WGS84 设置投影原点</h3>
-          <p>经纬度按上方 EPSG 换算为 E／N；高度 H 保持当前值，需单独核对。</p>
+          <p>经纬度按上方 EPSG 换算为 E／N。可用于文件参考点，也可将场景取点定位到该经纬度；高度 H 保持当前值，需单独核对。</p>
           <label>经度<input v-model.number="originLongitude" type="number" min="-180" max="180" step="any"></label>
           <label>纬度<input v-model.number="originLatitude" type="number" min="-80" max="84" step="any"></label>
-          <button type="button" :disabled="originBusy || historyBusy" @click="setProjectedOriginFromWgs84">{{ originBusy ? '正在换算…' : '换算并填入 E／N' }}</button>
+          <button type="button" :disabled="originBusy || historyBusy" @click="setProjectedOriginFromWgs84()">{{ originBusy ? '正在换算…' : '换算并填入 E／N' }}</button>
+          <button type="button" :disabled="originBusy || historyBusy || !lastPoint" @click="setProjectedOriginFromWgs84(true)">将场景取点定位到此经纬度</button>
           <h3>东／北／上对应文件轴</h3><label v-for="(_, axis) in geographyDraft.axes" :key="axis">{{ ['东','北','上'][axis] }}<select v-model.number="geographyDraft.axes[axis]"><option v-for="candidate in [1,-1,2,-2,3,-3]" :key="candidate" :value="candidate">{{ candidate > 0 ? '+' : '−' }}{{ ['X','Y','Z'][Math.abs(candidate) - 1] }}</option></select></label>
           <button type="button" :disabled="originBusy" @click="saveGeography">保存坐标设置</button>
           <p v-if="lastPoint">场景／文件坐标：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
