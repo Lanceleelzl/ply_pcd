@@ -257,6 +257,24 @@ def validate_streamed_editor_levels(directory: Path, levels: list[dict[str, Any]
     return ordered
 
 
+def streamed_editor_coordinate_manifest(directory: Path, group: dict[str, Any],
+                                        levels: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "result_format": "streamed_sog",
+        "version": group["version"],
+        "coordinate_note": "Streamed SOG 不保证携带 PLY 地理注释；各层坐标框架见本说明。高程基准未自动转换。",
+        "edit_state": group.get("state"),
+        "levels": [
+            {"streamed_lod": index, "source_lod": item["level"],
+             "source_gaussians": item["source_count"], "result_gaussians": item["count"],
+             "coordinate_mode": item.get("coordinate_mode", "legacy"),
+             "result_ply_coordinate_hints": read_ply_coordinates(directory / item["path"])}
+            for index, item in enumerate(levels)
+        ],
+    }
+
+
 class EditorTasks(StreamingTasks):
     def __init__(self, runtime_root: Path, converter: list[str], worker: str, retention_hours: int) -> None:
         super().__init__(runtime_root, converter, worker, retention_hours)
@@ -576,6 +594,9 @@ class EditorTasks(StreamingTasks):
                 counts = await asyncio.to_thread(read_streamed_sog_level_counts, destination)
                 if counts != tuple(item["count"] for item in levels):
                     raise ValueError("流式成果各层高斯数量与 PLY 成果不一致")
+                coordinate_manifest = streamed_editor_coordinate_manifest(directory, group, levels)
+                (destination.parent / "coordinate-manifest.json").write_text(
+                    json.dumps(coordinate_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
                 exports = [item for item in status.get("streamed_exports", []) if item["version"] != version]
                 exports.append({"version": version, "path": destination.relative_to(directory).as_posix(),
                                 "levels": [item["level"] for item in levels]})
