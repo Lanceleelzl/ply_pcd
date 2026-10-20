@@ -18,13 +18,13 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from pyproj import CRS
 from pyproj.exceptions import CRSError
 
 from service.auth import current_principal
-from service.dataset_formats import DatasetFormatError, probe_dataset
+from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 from service.dataset_preparation import _convert_to_ply, _ply_vertex_count
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicOrigin, GeographicQuery, project_origin, query_coordinates
@@ -33,6 +33,7 @@ from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
 from service.routes.streaming import StreamingTasks
 from service.schemas import TransformParameters
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
+from service.streaming_zip import directory_zip_metadata, stream_directory_zip
 from service.streaming_tasks import GAUSSIAN_FORMATS
 from service.transform_math import transform_matrix
 from service.uploads import save_upload_directory_with_sha256, save_upload_with_sha256
@@ -89,6 +90,10 @@ class ExportRequest(BaseModel):
     version: str
     level: int = Field(ge=0)
     format: Literal["compressed_ply", "sog"]
+
+
+class StreamedExportRequest(BaseModel):
+    version: str
 
 
 def lod_coordinate_frame(hints: dict[str, Any]) -> tuple:
@@ -229,6 +234,29 @@ def read_streamed_sog_level_counts(entrypoint: Path) -> tuple[int, ...]:
     return tuple(streamed_sog_level_counts(metadata))
 
 
+def validate_streamed_editor_levels(directory: Path, levels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(levels, key=lambda item: item["level"])
+    if not ordered or [item["level"] for item in ordered] != list(range(ordered[0]["level"], ordered[-1]["level"] + 1)):
+        raise ValueError("流式生成要求成果 LOD 连续")
+    first = None
+    previous_count = None
+    for item in ordered:
+        path = directory / item["path"]
+        if not path.is_file():
+            raise ValueError(f"LOD {item['level']} 成果文件缺失")
+        layout = read_layout(path)
+        if layout.count != item["count"] or layout.count <= 0 or path.stat().st_size != layout.data_start + layout.count * layout.stride:
+            raise ValueError(f"LOD {item['level']} 成果文件不完整")
+        fields = sorted((name, kind) for name, kind, _ in layout.fields)
+        if first and (fields != first[0] or layout.epsg != first[1] or layout.offset != first[2]):
+            raise ValueError("成果层级间属性或地理原点不一致")
+        if previous_count is not None and layout.count > previous_count:
+            raise ValueError("成果 LOD 点数不符合精细到粗略顺序")
+        first = first or (fields, layout.epsg, layout.offset)
+        previous_count = layout.count
+    return ordered
+
+
 class EditorTasks(StreamingTasks):
     def __init__(self, runtime_root: Path, converter: list[str], worker: str, retention_hours: int) -> None:
         super().__init__(runtime_root, converter, worker, retention_hours)
@@ -267,7 +295,7 @@ class EditorTasks(StreamingTasks):
                 continue
             status = read_status(directory)
             changed = False
-            for operation in ("process", "decimate", "export"):
+            for operation in ("process", "decimate", "export", "streamed_export"):
                 if status.get(f"{operation}_status") in {"queued", "running"}:
                     status[f"{operation}_status"] = "failed"
                     status[f"{operation}_error"] = "服务重启中断了处理；原始文件和已完成成果已保留，请重新提交"
@@ -487,6 +515,7 @@ class EditorTasks(StreamingTasks):
                 status.update(export_status="running", export_phase="格式转换中", export_progress=None,
                               export_error=None)
                 write_status(directory, status)
+
                 result = await asyncio.to_thread(subprocess.run,
                     [*self.converter, str(directory / source_path), str(destination)],
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=7200, check=False)
@@ -512,6 +541,50 @@ class EditorTasks(StreamingTasks):
                 write_status(directory, status)
             except Exception as error:
                 status.update(export_status="failed", export_error=str(error), export_progress=None)
+                write_status(directory, status)
+
+    def start_streamed_export(self, task_id: str, version: str) -> None:
+        job = asyncio.create_task(self._streamed_export(task_id, version))
+        self.running[task_id] = job
+        job.add_done_callback(lambda completed, key=task_id: self.running.pop(key, None))
+
+    async def _streamed_export(self, task_id: str, version: str) -> None:
+        async with self.semaphore:
+            directory = self.directory(task_id)
+            status = read_status(directory)
+            destination = directory / "streamed-exports" / version / uuid.uuid4().hex / "lod-meta.json"
+            try:
+                status.update(streamed_export_status="running", streamed_export_phase="校验成果层级",
+                              streamed_export_error=None)
+                write_status(directory, status)
+                group = next(item for item in status["versions"] if item["version"] == version)
+                levels = validate_streamed_editor_levels(directory, group["levels"])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                command = [*self.converter, "--gpu", "cpu"]
+                for index, level in enumerate(levels):
+                    command.extend([str(directory / level["path"]), "--tag-lod", str(index)])
+                command.append(str(destination))
+                status.update(streamed_export_phase="构建流式分块")
+                write_status(directory, status)
+                result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True,
+                                                 encoding="utf-8", errors="replace", timeout=7200, check=False)
+                if result.returncode:
+                    raise ValueError(result.stderr.strip() or result.stdout.strip() or "流式生成失败")
+                status.update(streamed_export_phase="校验流式目录")
+                write_status(directory, status)
+                validate_streamed_sog_directory(destination)
+                counts = await asyncio.to_thread(read_streamed_sog_level_counts, destination)
+                if counts != tuple(item["count"] for item in levels):
+                    raise ValueError("流式成果各层高斯数量与 PLY 成果不一致")
+                exports = [item for item in status.get("streamed_exports", []) if item["version"] != version]
+                exports.append({"version": version, "path": destination.relative_to(directory).as_posix(),
+                                "levels": [item["level"] for item in levels]})
+                status.update(streamed_exports=exports, streamed_export_status="ready",
+                              streamed_export_phase="完成", streamed_export_progress=100)
+                write_status(directory, status)
+            except Exception as error:
+                status.update(streamed_export_status="failed", streamed_export_error=str(error),
+                              streamed_export_progress=None)
                 write_status(directory, status)
 
 
@@ -562,7 +635,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                                   "history": [{"label": "导入模型", "state": initial_state, "at": now}],
                                   "history_cursor": 0, "versions": [], "process_status": "not_requested",
                                   "decimate_status": "not_requested", "export_status": "not_requested",
-                                  "exports": []}
+                                  "streamed_export_status": "not_requested", "exports": [], "streamed_exports": []}
         try:
             if input_kind == "lod_group":
                 lods = []
@@ -792,6 +865,39 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
         suffix = ".compressed.ply" if format_name == "compressed_ply" else ".sog"
         return FileResponse(path, media_type="application/octet-stream", headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'lod-{level}-edited{suffix}')}"})
+
+    @router.post("/{task_id}/streamed-exports", status_code=202)
+    async def export_streamed(task_id: str, request: StreamedExportRequest):
+        directory, status = tasks.read(task_id)
+        if status.get("status") != "ready" or task_id in tasks.running:
+            raise HTTPException(status_code=409, detail="Editor task is not ready")
+        if not any(item["version"] == request.version for item in status.get("versions", [])):
+            raise HTTPException(status_code=404, detail="Editor result is unavailable")
+        status.update(streamed_export_status="queued", streamed_export_phase="等待流式生成",
+                      streamed_export_progress=None, streamed_export_started_at_unix=time.time(),
+                      streamed_export_error=None, streamed_export_version=request.version)
+        write_status(directory, status)
+        tasks.start_streamed_export(task_id, request.version)
+        return tasks.present(status)
+
+    @router.get("/{task_id}/streamed-exports/{version}")
+    def download_streamed(task_id: str, version: str):
+        directory, status = tasks.read(task_id)
+        entry = next((item for item in status.get("streamed_exports", []) if item["version"] == version), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Streamed result is unavailable")
+        path = directory / entry["path"]
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Streamed result is missing")
+        count, size = directory_zip_metadata(path.parent)
+
+        def protected_zip():
+            with tasks.reading(task_id):
+                yield from stream_directory_zip(path.parent)
+
+        return StreamingResponse(protected_zip(), media_type="application/zip", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'gaussian-editor-{version}-streamed-sog.zip')}",
+            "X-Cache-File-Count": str(count), "X-Cache-Source-Bytes": str(size)})
 
     @router.get("/{task_id}/preview")
     def preview(task_id: str):

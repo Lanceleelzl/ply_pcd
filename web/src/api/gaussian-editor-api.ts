@@ -40,6 +40,9 @@ export interface EditorTask {
   export_status?: string; export_phase?: string; export_progress?: number | null; export_started_at_unix?: number;
   export_error?: string; export_request?: { version: string; level: number; format: 'compressed_ply' | 'sog' };
   exports?: Array<{ version: string; level: number; format: 'compressed_ply' | 'sog'; path: string; bytes: number }>;
+  streamed_export_status?: string; streamed_export_phase?: string; streamed_export_progress?: number | null;
+  streamed_export_started_at_unix?: number; streamed_export_error?: string; streamed_export_version?: string;
+  streamed_exports?: Array<{ version: string; path: string; levels: number[] }>;
   versions: Array<{ version: string; created_at_unix: number; history_cursor: number; levels: EditorResult[] }>;
   created_at_unix: number; updated_at_unix?: number;
 }
@@ -117,6 +120,14 @@ export async function exportEditorResult(taskId: string, version: string, level:
 export function editorExportUrl(taskId: string, version: string, level: number,
   format: 'compressed_ply' | 'sog'): string {
   return `${base}/${encodeURIComponent(taskId)}/exports/${encodeURIComponent(version)}/${level}/${format}`;
+}
+export async function exportEditorStreamed(taskId: string, version: string): Promise<EditorTask> {
+  return jsonResponse(await apiFetch(`${base}/${encodeURIComponent(taskId)}/streamed-exports`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }),
+  }));
+}
+export function editorStreamedUrl(taskId: string, version: string): string {
+  return `${base}/${encodeURIComponent(taskId)}/streamed-exports/${encodeURIComponent(version)}`;
 }
 export function editorManifestUrl(taskId: string, version: string, level: number,
   format: 'ply' | 'compressed_ply' | 'sog'): string {

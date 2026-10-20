@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { apiFetch } from '../../api/api-auth';
-import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl,
-  exportEditorResult, jumpEditorHistory,
+import { createEditorTask, decimateEditorTask, editorDownloadUrl, editorExportUrl, editorManifestUrl, editorStreamedUrl,
+  exportEditorResult, exportEditorStreamed, jumpEditorHistory,
   listEditorTasks, loadEditorTask, processEditorTask, projectEditorOrigin, queryEditorCoordinates, recordEditorEdit,
   type EditorDisplayClip, type EditorGeography, type EditorInputKind, type EditorRule, type EditorState, type EditorTask,
   type EditorTransform } from '../../api/gaussian-editor-api';
@@ -41,7 +41,7 @@ const historyBusy = ref(false);
 const historyRecoveryKey = ref(0);
 const submittingExport = ref<string | null>(null);
 const taskOperationBusy = computed(() => historyBusy.value || !!submittingTask.value || [task.value?.process_status,
-  task.value?.decimate_status, task.value?.export_status].some(status => status === 'queued' || status === 'running'));
+  task.value?.decimate_status, task.value?.export_status, task.value?.streamed_export_status].some(status => status === 'queued' || status === 'running'));
 const prepareElapsed = computed(() => task.value?.prepare_started_at_unix
   ? Math.max(0, Math.floor(clock.value / 1000 - task.value.prepare_started_at_unix)) : null);
 function operationElapsed(status: string | undefined, startedAt: number | undefined): number | null {
@@ -569,7 +569,18 @@ async function convertExport(version: string, level: number, format: 'compressed
   catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; submittingExport.value = null; }
 }
-async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' = 'ply'): Promise<void> {
+async function convertStreamed(version: string): Promise<void> {
+  if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
+  const taskId = task.value.task_id;
+  submittingTask.value = 'export';
+  submittingExport.value = `${version}:streamed_sog`;
+  try {
+    const updated = await exportEditorStreamed(taskId, version);
+    if (route.params.taskId === taskId && task.value?.task_id === taskId) task.value = updated;
+  } catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
+  finally { submittingTask.value = null; submittingExport.value = null; }
+}
+async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' | 'streamed_sog' = 'ply'): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id || downloadBusy.value) return;
   const taskId = task.value.task_id;
   type WritableResult = { write(value: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
@@ -581,8 +592,10 @@ async function download(version: string, level: number, format: 'ply' | 'compres
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
-    const handle = await picker({ suggestedName: `lod-${level}-edited.${suffix}` });
+    const handle = await picker({ suggestedName: format === 'streamed_sog'
+      ? `gaussian-editor-${version}-streamed-sog.zip` : `lod-${level}-edited.${suffix}` });
     const response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
+      : format === 'streamed_sog' ? editorStreamedUrl(taskId, version)
       : editorExportUrl(taskId, version, level, format));
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('Content-Length'));
@@ -766,7 +779,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-else>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> {{ task.export_error }}</p>
+          <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> {{ task.streamed_export_error }}</p>
           <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
+          <section v-for="version in task.versions" :key="`${version.version}-streamed`"><p><template v-if="task.streamed_exports?.some(item => item.version === version.version)"><button type="button" :disabled="downloadBusy" @click="download(version.version, -1, 'streamed_sog')">下载整组 Streamed SOG ZIP</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertStreamed(version.version)">{{ submittingExport === `${version.version}:streamed_sog` ? '正在提交流式生成…' : '生成整组 Streamed SOG' }}</button><br><small>仅连续、点数递减的成果层级可生成；流式格式不携带 PLY 地理注释，请另存各层坐标说明。</small></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
