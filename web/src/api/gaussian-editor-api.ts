@@ -25,6 +25,7 @@ export interface EditorTask {
   prepare_phase?: string; prepare_started_at_unix?: number;
   metadata?: { source_point_count: number; preview_point_count: number; origin: XYZ; bounds: { min: XYZ; max: XYZ } };
   coordinate_metadata?: { epsg: string; offset: Array<string | null>; source: string; axes?: [number, number, number] };
+  coordinate_manifest_error?: string | null;
   preview_url?: string | null; gaussian_url?: string | null; gaussian_filename?: string;
   lods: EditorLod[]; derived_lods: Array<{ version: string; count: number; source_level: number;
     target_count: number; retain_percent?: number | null; gaussian_url: string }>;
@@ -57,7 +58,7 @@ async function jsonResponse<T>(response: Response): Promise<T> {
 
 export function createEditorTask(input: { kind: EditorInputKind; workspaceId: string;
   file?: File; files?: File[]; paths?: string[]; coordinateManifest?: File;
-  onProgress?: (loaded: number, total: number) => void }): Promise<EditorTask> {
+  onProgress?: (loaded: number, total: number) => void; onUploaded?: () => void }): Promise<EditorTask> {
   const form = new FormData();
   form.set('input_kind', input.kind);
   form.set('workspace_id', input.workspaceId);
@@ -69,6 +70,7 @@ export function createEditorTask(input: { kind: EditorInputKind; workspaceId: st
     request.open('POST', base);
     authenticateRequest(request);
     request.upload.onprogress = event => input.onProgress?.(event.loaded, event.lengthComputable ? event.total : 0);
+    request.upload.onload = () => input.onUploaded?.();
     request.onerror = () => reject(new Error('上传连接中断'));
     request.onload = () => {
       let value: EditorTask & { detail?: string };

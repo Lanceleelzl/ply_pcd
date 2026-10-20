@@ -215,6 +215,7 @@ async function create(): Promise<void> {
       coordinateManifest: kind.value === 'single' ? coordinateManifest.value ?? undefined : undefined,
       paths: paths.value,
       onProgress: (loaded, total) => { uploaded.value = loaded; uploadTotal.value = total; },
+      onUploaded: () => { phase.value = '服务端保存与数据校验'; },
     });
     phase.value = '服务端预读与生成场景预览';
     await router.push(`/editor/${created.task_id}`);
@@ -639,13 +640,13 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
             <label>输入方式<select v-model="kind" @change="files = []; paths = []; datasetDirectory = false; coordinateManifest = null"><option value="single">单个高斯文件</option><option value="lod_group">有序 LOD 文件组</option><option value="dataset">完整数据集 ZIP／目录</option></select></label>
             <template v-if="kind === 'single'"><input type="file" accept=".ply,.sog,.spz" @change="selectFiles"><label>坐标说明（可选，仅限本模块导出的 Compressed PLY／SOG）<input type="file" accept=".json" @change="coordinateManifest = ($event.target as HTMLInputElement).files?.[0] ?? null"></label><p v-if="coordinateManifest">已选择坐标说明：{{ coordinateManifest.name }}；系统将校验模型文件后恢复坐标。</p></template>
             <input v-else-if="kind === 'lod_group'" type="file" accept=".ply" multiple @change="selectFiles">
-            <template v-else><label>ZIP 文件<input type="file" accept=".zip" @change="selectFiles"></label><button type="button" @click="selectDirectory">选择数据集目录</button><input ref="fallbackDirectoryInput" hidden type="file" webkitdirectory multiple @change="selectFiles"></template>
+            <template v-else><label>ZIP 文件<input type="file" accept=".zip" @change="selectFiles"></label><button type="button" @click="selectDirectory">选择数据集目录</button><input ref="fallbackDirectoryInput" hidden type="file" webkitdirectory multiple @change="selectFiles"><p>本模块导出的 Streamed SOG ZIP 可自动校验并恢复安全的投影坐标框架。</p></template>
             <p v-if="kind === 'lod_group'">按精细到粗略顺序选择 LOD；输入文件须属于同一模型。</p>
             <p v-if="files.length">已选择 {{ files.length }} 个文件</p>
           </div>
           <button type="button" :disabled="busy || !files.length" @click="create">{{ busy ? '正在创建任务…' : '上传并创建任务' }}</button>
-          <p v-if="busy" role="status">{{ phase }}<template v-if="uploadTotal">：{{ Math.round(uploaded * 100 / uploadTotal) }}%</template></p>
-          <progress v-if="busy && uploadTotal" :value="uploaded" :max="uploadTotal"></progress>
+          <p v-if="busy" role="status">{{ phase }}<template v-if="phase === '上传中' && uploadTotal">：{{ Math.round(uploaded * 100 / uploadTotal) }}%</template></p>
+          <progress v-if="busy && phase === '上传中' && uploadTotal" :value="uploaded" :max="uploadTotal"></progress>
         </section>
         <section class="module-entry-card"><h2>历史任务</h2><p v-if="!history.length">暂无任务</p>
           <ul class="module-entry-history-list"><li v-for="item in history" :key="item.task_id"><RouterLink :to="`/editor/${item.task_id}`">{{ item.filename }}</RouterLink>
@@ -759,6 +760,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </template>
         <template v-else-if="panel === 'coordinates'">
           <p>文件坐标保持原值；设置文件参考点及其对应的投影坐标原点。头文件提示仅作预填，请核对 EPSG、轴向和高程基准。</p>
+          <p v-if="task.coordinate_manifest_error" role="status">随包坐标说明未恢复：{{ task.coordinate_manifest_error }}。模型仍可编辑，请手动核对坐标。</p>
+          <p v-else-if="task.history[0]?.label === '导入流式模型及坐标说明'" role="status">已校验流式 ZIP 内全部文件及逐层坐标说明，并恢复投影坐标框架；请核对高程基准。</p>
           <label>原投影 EPSG<input v-model.number="geographyDraft.source_epsg" type="number" min="1" step="1"></label>
           <label>文件单位换算为米<input v-model.number="geographyDraft.metres_per_unit" type="number" min="0.000001" step="any"></label>
           <h3>文件参考点 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in geographyDraft.reference" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="geographyDraft.reference[axis]" type="number" step="any"></div>

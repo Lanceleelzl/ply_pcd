@@ -12,8 +12,8 @@ import time
 import uuid
 import zipfile
 from functools import lru_cache
-from hashlib import file_digest
-from pathlib import Path
+from hashlib import file_digest, sha256
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -151,9 +151,13 @@ def geography_from_result_manifest(manifest: dict[str, Any], digest: str,
             or manifest.get("result_file_bytes") != size
             or not hmac.compare_digest(manifest["result_file_sha256"], digest)):
         raise ValueError("坐标说明与上传模型的格式、数量或文件校验值不一致")
-    if manifest.get("coordinate_mode") not in {"source", "embedded"}:
+    return geography_from_coordinate_hints(manifest.get("coordinate_mode"),
+                                           manifest.get("result_ply_coordinate_hints"))
+
+
+def geography_from_coordinate_hints(mode: Any, hints: Any) -> dict[str, Any]:
+    if mode not in {"source", "embedded"}:
         raise ValueError("此坐标说明的地理框架不能自动还原，请在任务中手动设置")
-    hints = manifest.get("result_ply_coordinate_hints")
     if not isinstance(hints, dict):
         raise ValueError("坐标说明缺少成果 PLY 坐标信息")
     try:
@@ -175,6 +179,72 @@ def geography_from_result_manifest(manifest: dict[str, Any], digest: str,
         raise ValueError("坐标说明缺少可安全还原的米制投影框架") from error
     return {"reference": [0, 0, 0], "projected_origin": offset,
             "axes": [1, 2, 3], "metres_per_unit": 1, "source_epsg": epsg}
+
+
+def geography_from_streamed_archive(path: Path, entrypoint: str) -> dict[str, Any] | None:
+    parent = PurePosixPath(entrypoint).parent
+    sidecar_name = str(parent / "coordinate-manifest.json")
+    cache_name = str(parent / "cache-manifest.json")
+    with zipfile.ZipFile(path) as archive:
+        try:
+            sidecar_info = archive.getinfo(sidecar_name)
+        except KeyError:
+            return None
+        try:
+            cache_info = archive.getinfo(cache_name)
+            metadata_info = archive.getinfo(entrypoint)
+            if sidecar_info.file_size > 65536 or cache_info.file_size > 16 * 1024 * 1024 or metadata_info.file_size > 16 * 1024 * 1024:
+                raise ValueError("流式坐标说明或校验清单过大")
+            sidecar_bytes = archive.read(sidecar_info)
+            cache = json.loads(archive.read(cache_info))
+            metadata = json.loads(archive.read(metadata_info))
+            manifest = json.loads(sidecar_bytes)
+            files = cache["files"]
+            if not isinstance(files, list) or any(not isinstance(item, dict) for item in files):
+                raise ValueError("流式 ZIP 校验清单无效")
+            matching = [item for item in files if item.get("path") == "coordinate-manifest.json"]
+            if (len(matching) != 1 or matching[0].get("bytes") != len(sidecar_bytes)
+                    or not isinstance(matching[0].get("sha256"), str)
+                    or not hmac.compare_digest(matching[0]["sha256"], sha256(sidecar_bytes).hexdigest())):
+                raise ValueError("流式坐标说明与 ZIP 校验清单不一致")
+            expected = {}
+            for item in files:
+                relative = PurePosixPath(item["path"])
+                if (relative.is_absolute() or ".." in relative.parts or not relative.parts
+                        or not isinstance(item.get("bytes"), int) or item["bytes"] < 0
+                        or not isinstance(item.get("sha256"), str) or len(item["sha256"]) != 64):
+                    raise ValueError("流式 ZIP 校验清单无效")
+                expected[str(parent / relative)] = item
+            actual = [info.filename for info in archive.infolist() if not info.is_dir() and info.filename != cache_name]
+            if len(expected) != len(files) or len(actual) != len(expected) or set(actual) != set(expected):
+                raise ValueError("流式 ZIP 文件与校验清单不一致")
+            for name, item in expected.items():
+                digest = sha256()
+                size = 0
+                with archive.open(name) as stream:
+                    while block := stream.read(1024 * 1024):
+                        digest.update(block)
+                        size += len(block)
+                if size != item["bytes"] or not hmac.compare_digest(digest.hexdigest(), item["sha256"]):
+                    raise ValueError(f"流式 ZIP 文件校验失败：{name}")
+            counts = streamed_sog_level_counts(metadata)
+            levels = manifest["levels"]
+            if (manifest.get("schema_version") != 1 or manifest.get("result_format") != "streamed_sog"
+                    or not isinstance(levels, list) or len(levels) != len(counts)):
+                raise ValueError("流式坐标说明层级无效")
+            origins = []
+            for index, item in enumerate(levels):
+                if (type(item.get("streamed_lod")) is not int or item["streamed_lod"] != index
+                        or type(item.get("source_lod")) is not int or item["source_lod"] < 0
+                        or type(item.get("result_gaussians")) is not int or item["result_gaussians"] != counts[index]):
+                    raise ValueError("流式坐标说明与模型层级数量不一致")
+                origins.append(geography_from_coordinate_hints(
+                    item.get("coordinate_mode"), item.get("result_ply_coordinate_hints")))
+            if any(origin != origins[0] for origin in origins[1:]):
+                raise ValueError("流式坐标说明各层投影原点不一致")
+            return origins[0]
+        except (AttributeError, KeyError, TypeError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+            raise ValueError("流式坐标说明或 ZIP 校验清单无效") from error
 
 
 def exported_gaussian_count(path: Path, format_name: str, entrypoint: str) -> int:
@@ -702,6 +772,17 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                     manifest_path.write_bytes(manifest_bytes)
                     status["coordinate_manifest_path"] = manifest_path.relative_to(directory).as_posix()
                     status["history"][0].update(label="导入模型及坐标说明", state=initial_state)
+                elif probe.format == "streamed_sog" and probe.container == "zip":
+                    geography = None
+                    try:
+                        geography = await asyncio.to_thread(geography_from_streamed_archive, path, probe.entrypoint)
+                    except ValueError as error:
+                        status["coordinate_manifest_error"] = str(error)
+                    else:
+                        status["coordinate_manifest_error"] = None
+                    if geography is not None:
+                        initial_state["geography"] = geography
+                        status["history"][0].update(label="导入流式模型及坐标说明", state=initial_state)
             write_status(directory, status)
         except (DatasetFormatError, HTTPException) as error:
             status.update(status="failed", error=str(error.detail) if isinstance(error, HTTPException) else str(error))
