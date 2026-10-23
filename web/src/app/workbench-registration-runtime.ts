@@ -40,6 +40,8 @@ export interface WorkbenchRegistrationRuntimeOptions {
   refreshRoles(reset: boolean): void;
   fitCamera(): void;
   initialSource?(): 'manual' | '4pcs' | '4pcs_adjusted';
+  regionPolygon?(): [number, number][] | null;
+  effectiveMoving?(): ModelId;
 }
 
 export function createWorkbenchRegistrationRuntime(options: WorkbenchRegistrationRuntimeOptions) {
@@ -72,16 +74,30 @@ export function createWorkbenchRegistrationRuntime(options: WorkbenchRegistratio
     buildRequest: () => buildRegistrationRequest({
       initialMovingLocalToFixedLocal: display.getMovingLocalToFixedLocal(),
       outputDirection: role.direction,
-      movingModel: role.moving,
+      movingModel: options.regionPolygon?.() ? options.effectiveMoving?.() ?? role.moving : role.moving,
       minRmsDecrease: icp.min_rms_decrease,
       samplingLimit: icp.sampling_limit,
       overlap: icp.overlap,
       randomSeed: icp.random_seed,
+      adjustScale: icp.adjust_scale,
+      regionPolygon: options.regionPolygon?.(),
       initialSource: options.initialSource?.() ?? 'manual',
     }),
   });
+  const runPreservingLastResult = async () => {
+    const previous = results.state.visible ? {
+      result: results.state.result,
+      direction: results.state.direction,
+      matrix: display.getMovingLocalToFixedLocal(),
+    } : null;
+    await actions.run();
+    if (previous?.result && results.state.status.startsWith('失败：')) {
+      display.setMovingLocalToFixedLocal(previous.matrix);
+      results.show(previous.result, previous.direction, display.signature());
+    }
+  };
   return {
-    actions,
+    actions: { ...actions, run: runPreservingLastResult },
     restore: () => restoreWorkbenchHistory({
       registrations: options.registrations, signal: options.signal, role, icp,
       signature: () => display.signature(), running: () => activity.state.running,

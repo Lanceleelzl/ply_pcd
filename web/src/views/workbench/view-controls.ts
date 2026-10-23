@@ -114,13 +114,16 @@ export function mountViewControls(root: HTMLElement, commands: ViewControlsComma
     event.stopImmediatePropagation();
     cubeDragMoved = false;
   }, { capture: true, signal });
+  const setProjectionActive = (orthographic: boolean) => {
+    root.querySelectorAll<HTMLButtonElement>('.projection-switch button').forEach(button =>
+      button.classList.toggle('active', (button.dataset.projection === 'orthographic') === orthographic));
+  };
   root.querySelectorAll<HTMLButtonElement>('.projection-switch button').forEach(button => {
     button.addEventListener('click', () => {
       const orthographic = button.dataset.projection === 'orthographic';
       commands.projection(orthographic);
-      root.querySelectorAll('.projection-switch button').forEach(item => item.classList.remove('active'));
-      button.classList.add('active');
+      setProjectionActive(orthographic);
     }, { signal });
   });
-  return { update, destroy: () => events.abort() };
+  return { update, setProjectionActive, destroy: () => events.abort() };
 }

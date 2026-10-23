@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import uuid
 from collections.abc import Callable
@@ -49,6 +50,19 @@ def create_registration_router(
             raise HTTPException(status_code=400, detail="coordinate_space must be file or business")
         if request.initial_source not in {"manual", "4pcs", "4pcs_adjusted"}:
             raise HTTPException(status_code=400, detail="initial_source is invalid")
+        polygon = request.region_polygon
+        if polygon is not None:
+            if request.coordinate_space != "business" or request.moving_model == "auto":
+                raise HTTPException(status_code=400, detail="ICP region requires business coordinates and an explicit moving model")
+            if len(polygon) < 3 or len(polygon) > 256 or any(
+                len(point) != 2 or any(not math.isfinite(value) for value in point) for point in polygon
+            ):
+                raise HTTPException(status_code=400, detail="ICP region requires 3 to 256 finite XY vertices")
+            area = abs(sum(polygon[i][0] * polygon[(i + 1) % len(polygon)][1]
+                           - polygon[(i + 1) % len(polygon)][0] * polygon[i][1]
+                           for i in range(len(polygon)))) / 2
+            if area <= 1e-8:
+                raise HTTPException(status_code=400, detail="ICP region polygon has no area")
         async with _manual_submission_lock:
             session_directory = _manual_session_directory(session_id)
             session_status = _read_status(session_directory)
@@ -92,6 +106,12 @@ def create_registration_router(
                 "--sampling-limit", str(request.sampling_limit), "--overlap", str(request.overlap),
                 "--random-seed", str(request.random_seed),
             ]
+            if request.adjust_scale:
+                command.append("--adjust-scale")
+            if polygon is not None:
+                polygon_path = input_directory / "region_polygon.txt"
+                polygon_path.write_text("\n".join(f"{x:.17g} {y:.17g}" for x, y in polygon) + "\n", encoding="utf-8")
+                command.extend(["--region-polygon", str(polygon_path)])
             if request.coordinate_space == "business":
                 transforms = _business_transforms(session_status)
                 for model in ("a", "b"):
@@ -107,6 +127,7 @@ def create_registration_router(
                 "owner_id": session_status.get("owner_id"),
                 "coordinate_space": request.coordinate_space,
                 "initial_source": request.initial_source,
+                "region_polygon": polygon,
             }
             _write_status(job_directory, status)
             session_status.setdefault("registrations", []).append({
@@ -115,11 +136,13 @@ def create_registration_router(
                 "output_direction": request.output_direction, "moving_model": request.moving_model,
                 "coordinate_space": request.coordinate_space,
                 "initial_source": request.initial_source,
+                "region_polygon": polygon,
                 "parameters": {
                     "min_rms_decrease": request.min_rms_decrease,
                     "sampling_limit": request.sampling_limit,
                     "overlap": request.overlap,
                     "random_seed": request.random_seed,
+                    "adjust_scale": request.adjust_scale,
                 },
                 "status_url": f"/api/v2/registrations/{job_id}",
                 "progress_url": f"/api/v2/registrations/{job_id}/events",

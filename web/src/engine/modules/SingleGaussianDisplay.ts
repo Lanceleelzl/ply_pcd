@@ -26,12 +26,12 @@ export class SingleGaussianDisplay {
     if (this.destroyed) return;
     const generation = ++this.generation;
     this.release();
-    const editorStream = this.clipMode === 'editor' && filename === 'lod-meta.json';
+    const streamed = (this.clipMode === 'editor' || this.clipMode === 'merge') && filename === 'lod-meta.json';
     let direct: Awaited<ReturnType<typeof import('./direct-lcc-loader').loadDirectGaussian>> | null = null;
     let asset: pc.Asset;
     try {
       onStage?.('读取并解析模型');
-      direct = /\.(?:spz|lcc2?)$/i.test(filename) || filename === 'lod-meta.json' && !editorStream
+      direct = /\.(?:spz|lcc2?)$/i.test(filename) || filename === 'lod-meta.json' && !streamed
         ? await import('./direct-lcc-loader').then(module => module.loadDirectGaussian(this.app, url, filename, lodIndex))
         : null;
       asset = direct?.asset ?? new pc.Asset('Single model Gaussian', 'gsplat', { url, filename });
@@ -41,8 +41,8 @@ export class SingleGaussianDisplay {
         return;
       }
       this.asset = asset;
-      if (editorStream)
-        this.app.scene.gsplat.splatBudget = adaptiveLod ? 24_000_000 : 5_000_000;
+      if (streamed)
+        this.app.scene.gsplat.splatBudget = this.clipMode === 'editor' && adaptiveLod ? 24_000_000 : 5_000_000;
       if (!direct) {
         this.app.assets.add(asset);
         let reportedPercent = -1;
@@ -64,7 +64,7 @@ export class SingleGaussianDisplay {
       const entity = new pc.Entity('Single model Gaussian');
       this.entity = entity;
       entity.addComponent('gsplat', { asset });
-      if (editorStream && lodIndex !== undefined) {
+      if (streamed && lodIndex !== undefined) {
         entity.gsplat!.lodRangeMin = lodIndex;
         const lodLevels = (asset.resource as { octree?: { lodLevels: number } }).octree?.lodLevels;
         entity.gsplat!.lodRangeMax = adaptiveLod && lodLevels ? lodLevels - 1 : lodIndex;

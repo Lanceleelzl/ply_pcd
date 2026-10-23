@@ -144,6 +144,10 @@
 .integrated-editor .coordinate-point-tools { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 8px; }
 .integrated-editor .coordinate-point-tools button { padding-inline: 6px; }
 .integrated-editor .viewport-tool-group button.active:hover { background: #2b8b6f; border-color: #66d6ad; }
+.integrated-editor .icp-region-status { color: var(--ui-muted); font-size: 11px; white-space: nowrap; }
+.integrated-editor .icp-region-hover { position: absolute; z-index: 8; pointer-events: none; padding: 5px 8px; border: 1px solid #35d4ec; border-radius: 6px; background: #0d1827ed; color: #e7faff; font-size: 12px; white-space: nowrap; }
+.integrated-editor .icp-region-vertex-delete { position: absolute; z-index: 9; width: 25px; height: 25px; padding: 0; border: 1px solid #ff9b91; border-radius: 50%; background: #502a30; color: white; cursor: pointer; }
+.integrated-editor .icp-region-vertex-delete:not(:disabled):hover { border-color: #ffcbc5; background: #71323a; }
 .integrated-editor .coordinate-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 8px 0; }
 .integrated-editor .coordinate-fields fieldset { min-width: 0; margin: 0; padding: 8px; }
 .integrated-editor .coordinate-fields legend { font-size: 12px; padding: 0 4px; }

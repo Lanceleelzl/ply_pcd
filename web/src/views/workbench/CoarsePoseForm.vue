@@ -6,13 +6,13 @@ const draft = reactive<string[]>([]);
 const focused = ref(-1);
 watch(() => props.values, values => {
   values.forEach((value, index) => {
-    if (focused.value !== index) draft[index] = value.toFixed(3);
+    if (focused.value !== index) draft[index] = index === 6 ? String(value) : value.toFixed(3);
   });
 }, { immediate: true });
 function change(index: number, event: Event) {
   const input = event.target as HTMLInputElement;
   draft[index] = input.value;
-  if (input.validity.badInput || draft.some(value => value === '' || !Number.isFinite(Number(value)))) return;
+  if (input.validity.badInput || draft.some(value => value === '' || !Number.isFinite(Number(value))) || Number(draft[6]) < 0.000001) return;
   emit('change', draft.map(Number));
 }
 </script>
@@ -29,5 +29,12 @@ function change(index: number, event: Event) {
         <span>{{ axis }}</span>
       </label>
     </div>
+  </div>
+  <div class="pose-row">
+    <span>放缩比例</span>
+    <label class="axis-input">
+      <input type="number" min="0.000001" step="any" :value="draft[6]" aria-label="放缩比例" :disabled="disabled"
+        @focus="focused = 6" @blur="focused = -1; draft[6] = String(values[6])" @input="change(6, $event)">
+    </label>
   </div>
 </template>

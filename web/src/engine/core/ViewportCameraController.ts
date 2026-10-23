@@ -61,6 +61,23 @@ export class ViewportCameraController {
     this.update();
   }
 
+  frame(bounds: ViewportBounds): void {
+    const { min, max } = bounds;
+    this.target.copy(min).add(max).mulScalar(0.5);
+    const diagonal = Math.max(max.clone().sub(min).length(), 0.1);
+    const aspect = Math.max(this.canvas.clientWidth / Math.max(this.canvas.clientHeight, 1), 0.1);
+    this.orthoHeight = diagonal * 0.65 * Math.max(1, 1 / aspect);
+    this.distance = diagonal * Math.max(1.2, 1.2 / aspect);
+    this.camera.camera!.orthoHeight = this.orthoHeight;
+    this.update();
+  }
+
+  resetToOrigin(): void {
+    this.fit();
+    this.target.set(0, 0, 0);
+    this.update();
+  }
+
   orbitByPixels(dx: number, dy: number): void {
     this.orbit(dx * 180 / Math.max(1, this.canvas.clientWidth), dy * 180 / Math.max(1, this.canvas.clientHeight));
   }

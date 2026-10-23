@@ -39,6 +39,7 @@ import { createWorkbenchToolRuntime } from './workbench-tool-runtime';
 import { createRegistrationPanelBindings } from '../views/workbench/registration-panel-binding';
 import { createWorkbenchOriginPlaneRuntime } from './workbench-origin-plane-runtime';
 import { createWorkbenchCoarseRegistration } from './workbench-coarse-registration';
+import { mountIcpRegionControl } from '../views/workbench/icp-region-control';
 
 export interface WorkbenchHost {
   signal: AbortSignal;
@@ -193,7 +194,7 @@ export async function initializeWorkbench(
   resources.add(() => clearInterval(gaussianPoll));
   resources.add(originPlaneRuntime.bindStatusRefresh(() => gaussianController.refreshStatus()));
 
-  const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0] });
+  const poseState = shallowReactive({ values: [0, 0, 0, 0, 0, 0, 1] });
   let markCoarseAdjusted = () => {};
   let resetCoarse = () => {};
 
@@ -227,6 +228,7 @@ export async function initializeWorkbench(
   resources.add(bindWorkbenchFrameUpdates(application, createWorkbenchFrameUpdater({
     invalidateResult: () => results.invalidateIfChanged(display.signature()),
     readPose: () => { const pose = display.getPose(); return [new pc.Vec3(...pose.position), new pc.Vec3(...pose.rotation)]; },
+    readScale: () => display.getPose().scale,
     updatePose: values => {
       if (values.some((value, index) => value !== poseState.values[index])) {
         poseState.values = values;
@@ -266,6 +268,15 @@ export async function initializeWorkbench(
   }));
 
   const icpValues = reactive<IcpParameterValues>(createIcpParameterValues());
+  const region = mountIcpRegionControl({
+    root, sessionId, app: application, canvas, camera, controller: cameraController,
+    projectionChanged: viewControls.setProjectionActive,
+    fixedModel: () => effectiveMoving() === 'a' ? 'b' : 'a',
+    fixedFrame: model => entities[model].parent as pc.Entity,
+    bounds: () => scene.bounds(),
+    running: () => activityState.running,
+  });
+  resources.add(region.destroy);
   const setRunning = (value: boolean) => {
     activity.setRunning(value);
     attach();
@@ -293,6 +304,8 @@ export async function initializeWorkbench(
     role: roleState, icp: icpValues, display, query: () => coordinateQuery,
     runningChanged: setRunning, refreshRoles, fitCamera: () => cameraController.fit(),
     initialSource: () => coarseInitialSource(),
+    regionPolygon: region.polygon,
+    effectiveMoving,
   });
   resources.add(registrationRuntime.destroy);
   const coarseRuntime = createWorkbenchCoarseRegistration({
@@ -313,7 +326,7 @@ export async function initializeWorkbench(
     pose: poseState, coarse: coarseRuntime, business, icp: icpValues, actions: registrationRuntime.actions,
     changePose: values => {
       const pose = splitCoarsePose(values);
-      display.setPose(pose.position, pose.rotation);
+      display.setPose(pose.position, pose.rotation, pose.scale);
       coarseRuntime.markAdjusted();
     },
     changeMoving: value => { coarseRuntime.reset(); roleState.moving = value; coordinateQuery?.invalidate(); refreshRoles(true); },

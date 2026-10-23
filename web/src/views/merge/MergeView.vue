@@ -10,6 +10,7 @@ import MergeViewport from './MergeViewport.vue';
 import ModuleTopbar from '../../components/ModuleTopbar.vue';
 import '../../styles/module-entry.css';
 import { formatTaskTime } from '../../shared/task-time';
+import { parseRegistrationMatrix, registrationComponents, multiplyQuaternions } from './registration-matrix';
 import type { ModelCoordinates } from '../../api/merge-api';
 
 const route = useRoute();
@@ -61,6 +62,9 @@ const previewTrimmed = ref<boolean[]>([]);
 const gaussianLoading = ref<boolean[]>([]);
 const corrections = ref<number[][]>([]);
 const rotations = ref<number[][]>([]);
+const registrationMatrices = ref<(number[][] | null)[]>([]);
+const registrationDrafts = ref<string[]>([]);
+const registrationErrors = ref<string[]>([]);
 const modelSettings = ref<MergeModelSetting[]>([]);
 const unitsConfirmed = computed(() => modelSettings.value.length > 0 && modelSettings.value.every(item =>
   item.confirmed && typeof item.scale === 'number' && Number.isFinite(item.scale) && item.scale > 0));
@@ -322,9 +326,45 @@ function cancelBoundaryChanges() {
 }
 function relativeOffset(index: number): string {
   if (!task.value) return '';
+  if (registrationMatrices.value[index]) return '已由配准矩阵替代';
   const source = task.value.models[index].offset;
   const origin = task.value.models[targetModel.value].offset;
   return source && origin ? source.map((value, axis) => (value - origin[axis]).toFixed(4)).join('／') : '未知，使用三维手柄匹配';
+}
+function matrixText(matrix: number[][] | null): string {
+  return matrix?.map(row => row.join(' ')).join('\n') ?? '';
+}
+async function applyRegistrationMatrix(index: number) {
+  if (!task.value || index === targetModel.value || busy.value) return;
+  try {
+    const matrix = registrationDrafts.value[index].trim()
+      ? parseRegistrationMatrix(registrationDrafts.value[index]) : null;
+    const firstApplication = matrix !== null && registrationMatrices.value[index] === null;
+    const previousCorrection = [...corrections.value[index]];
+    const previousRotation = [...rotations.value[index]];
+    registrationErrors.value[index] = '';
+    registrationMatrices.value[index] = matrix;
+    if (firstApplication) {
+      corrections.value[index] = [0, 0, 0];
+      rotations.value[index] = [1, 0, 0, 0];
+    }
+    await save();
+    if (JSON.stringify(task.value.models[index].registration_matrix ?? null) !== JSON.stringify(matrix)) {
+      registrationMatrices.value[index] = task.value.models[index].registration_matrix ?? null;
+      corrections.value[index] = previousCorrection;
+      rotations.value[index] = previousRotation;
+      registrationErrors.value[index] = '矩阵未保存，请检查上方错误提示';
+    } else if (firstApplication) message.value = '配准矩阵已应用；旧手柄位移和旋转已重置';
+  } catch (error) { registrationErrors.value[index] = error instanceof Error ? error.message : String(error); }
+}
+function changeTargetModel() {
+  if (!task.value) return;
+  if (registrationMatrices.value.some(Boolean) && targetModel.value !== (task.value.target_model ?? 0)) {
+    targetModel.value = task.value.target_model ?? 0;
+    message.value = '切换合并目标前，请先清除待合入模型的配准矩阵';
+    return;
+  }
+  void save();
 }
 const gaussianUrls = computed(() => !task.value ? [] : mergedPreview.value
   ? [mergedSource.value === 'streamed' ? task.value.cache_url ?? '' : mergedLodUrl(task.value.task_id, previewLevel.value)]
@@ -358,11 +398,17 @@ const sceneSamples = computed(() => mergedPreview.value ? mergedSamples.value :
     ? points.filter(point => keepPreviewPoint(point, index)) : points));
 const sceneDisplays = computed(() => mergedPreview.value ? [mergedDisplay.value] : modelDisplays.value);
 const sceneTranslations = computed<[number, number, number][]>(() => mergedPreview.value ? [[0, 0, 0]] : modelTranslations.value);
-const sceneRotations = computed(() => mergedPreview.value ? [[1, 0, 0, 0]] : rotations.value);
+function sceneMatrix(index: number): number[][] | null {
+  return registrationMatrices.value[index] ?? null;
+}
+const sceneRotations = computed(() => mergedPreview.value ? [[1, 0, 0, 0]] :
+  rotations.value.map((rotation, index) => multiplyQuaternions(rotation,
+    registrationComponents(sceneMatrix(index)).rotation)));
 const sceneAxes = computed(() => mergedPreview.value ? [modelSettings.value[targetModel.value]?.axes ?? [1, 2, 3]] :
   modelSettings.value.map(item => item.axes));
 const sceneScales = computed(() => mergedPreview.value ? [modelFactor(targetModel.value)] :
-  modelSettings.value.map((_, index) => modelFactor(index)));
+  modelSettings.value.map((_, index) => modelFactor(index) *
+    registrationComponents(sceneMatrix(index)).scale));
 const allTrimmed = computed(() => previewTrimmed.value.length > 0 && previewTrimmed.value.every(Boolean));
 function toggleTrimmedAll() { previewTrimmed.value = previewTrimmed.value.map(() => !allTrimmed.value); }
 function toggleMergedDisplay() {
@@ -389,8 +435,11 @@ const modelTranslations = computed<[number, number, number][]>(() => {
   const origin = task.value.models[targetModel.value]?.offset;
   return task.value.models.map((model, index) => (modelSettings.value[index]?.axes ?? [1, 2, 3]).map((fileAxis, projected) => {
     const fileIndex = Math.abs(fileAxis) - 1;
-    const geo = origin && model.offset ? model.offset[projected] - origin[projected] : 0;
-    return (corrections.value[index]?.[fileIndex] ?? 0) * Math.sign(fileAxis) * modelFactor(index) + geo;
+    const matrix = sceneMatrix(index);
+    const geo = !matrix && origin && model.offset ? model.offset[projected] - origin[projected] : 0;
+    const base = rotateVector(rotations.value[index] ?? [1, 0, 0, 0],
+      registrationComponents(matrix).translation)[projected];
+    return (corrections.value[index]?.[fileIndex] ?? 0) * Math.sign(fileAxis) * modelFactor(index) + geo + base;
   }) as [number, number, number]);
 });
 function addPoint(point: [number, number]) { snapshotVertices(); drawing.value.push(point); }
@@ -455,16 +504,18 @@ function rotateModel(model: number, delta: [number, number, number, number], piv
     .map((value, axis) => value + pivot[axis]);
   const source = task.value.models[model].offset;
   const origin = task.value.models[targetModel.value].offset;
-  modelSettings.value[model].axes.forEach((fileAxis, projected) => {
-    const geo = source && origin ? source[projected] - origin[projected] : 0;
-    corrections.value[model][Math.abs(fileAxis) - 1] = (rotated[projected] - geo) * Math.sign(fileAxis) / modelFactor(model);
-  });
   const [a, b, c, d] = delta;
   const [w, x, y, z] = rotations.value[model];
   const next = [a * w - b * x - c * y - d * z, a * x + b * w + c * z - d * y,
     a * y - b * z + c * w + d * x, a * z + b * y - c * x + d * w];
   const length = Math.hypot(...next);
   rotations.value[model] = next.map(value => value / length);
+  const matrix = sceneMatrix(model);
+  const base = rotateVector(rotations.value[model], registrationComponents(matrix).translation);
+  modelSettings.value[model].axes.forEach((fileAxis, projected) => {
+    const geo = !matrix && source && origin ? source[projected] - origin[projected] : 0;
+    corrections.value[model][Math.abs(fileAxis) - 1] = (rotated[projected] - geo - base[projected]) * Math.sign(fileAxis) / modelFactor(model);
+  });
 }
 async function selectModelCard(index: number) {
   if (busy.value || (selectedModel.value === index && !mergedPreview.value)) return;
@@ -539,6 +590,9 @@ async function refresh() {
         unit: model.unit ?? 'm', scale: model.scale ?? 1, confirmed: true }));
       corrections.value = task.value.models.map(model => [...model.correction]);
       rotations.value = task.value.models.map(model => [...(model.rotation ?? [1, 0, 0, 0])]);
+      registrationMatrices.value = task.value.models.map(model => model.registration_matrix ?? null);
+      registrationDrafts.value = registrationMatrices.value.map(matrixText);
+      registrationErrors.value = task.value.models.map(() => '');
       selectedLevels.value = task.value.selected_levels ?? task.value.models[0].lods.map((_, level) => level);
       await refreshOrigin();
       samples.value = (await loadMergePreview(id)).models;
@@ -579,13 +633,15 @@ function save(includeRegions = false): Promise<void> {
       do {
         saveQueued = false;
         const saved = await saveMergeRegions(task.value!.task_id, includeRegions ? regions.value : persistedRegions.value, corrections.value, rotations.value,
-          modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value);
+          modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value,
+          registrationMatrices.value);
         if (includeRegions) persistedRegions.value = saved.regions.map(region => cloneRegion(normalizeRegion(region, saved.models.length)));
         if (saveQueued) continue;
         task.value = saved;
         if (includeRegions) regions.value = persistedRegions.value.map(cloneRegion);
         corrections.value = saved.models.map(model => [...model.correction]);
         rotations.value = saved.models.map(model => [...(model.rotation ?? [1, 0, 0, 0])]);
+        registrationMatrices.value = saved.models.map(model => model.registration_matrix ?? null);
         modelSettings.value = saved.models.map(model => ({ axes: [...(model.axes ?? saved.axes)],
           unit: model.unit ?? 'm', scale: model.scale ?? 1, confirmed: model.confirmed ?? Boolean(saved.units_confirmed) }));
         correctionsDirty = false;
@@ -605,7 +661,8 @@ async function run(operation: 'merge' | 'generate') {
       !window.confirm('此任务已有合并记录。再次执行会创建新一轮成果；若模型位置与边界未变化，结果也不会变化。中途终止时，设置一致的旧成果可恢复下载。确定继续吗？')) return;
   busy.value = true; message.value = '';
   try { task.value = await saveMergeRegions(task.value.task_id, operation === 'merge' ? regions.value : persistedRegions.value, corrections.value, rotations.value,
-    modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value);
+    modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value,
+    registrationMatrices.value);
     if (operation === 'merge') {
       persistedRegions.value = task.value.regions.map(region => cloneRegion(normalizeRegion(region, task.value!.models.length)));
       regions.value = persistedRegions.value.map(cloneRegion);
@@ -749,13 +806,20 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
           <p v-if="index !== targetModel">相对目标模型的投影差值（东／北／高）：{{ relativeOffset(index) }}</p>
           <label v-for="axis in index === targetModel ? 0 : 3" :key="axis" class="model-correction">{{ 'XYZ'[axis - 1] }} 位移（{{ { m: '米', cm: '厘米', mm: '毫米' }[modelSettings[index].unit] }}）
             <input v-model.number="corrections[index][axis - 1]" type="number" step="any" @wheel="preventNumberWheel" @change="save()"></label>
+          <details v-if="index !== targetModel && (!model.offset || registrationMatrices[index])" class="registration-matrix-editor" @click.stop>
+            <summary>配准矩阵{{ registrationMatrices[index] ? '（已应用）' : '（未设置）' }}</summary>
+            <p>粘贴视界转换结果中的「复制矩阵」。应用后可在预览中检查与模型 {{ targetModel + 1 }} 的位置和方向，仍可使用模型卡片微调。</p>
+            <label>4×4 矩阵<textarea v-model="registrationDrafts[index]" rows="4" spellcheck="false" placeholder="1 0 0 0&#10;0 1 0 0&#10;0 0 1 0&#10;0 0 0 1"></textarea></label>
+            <p v-if="registrationErrors[index]" class="coordinate-warning" role="alert">{{ registrationErrors[index] }}</p>
+            <button type="button" :disabled="busy" @click="applyRegistrationMatrix(index)">{{ registrationDrafts[index]?.trim() ? '应用并预览' : '清除矩阵' }}</button>
+          </details>
           <button v-if="index !== targetModel" type="button" class="reset-model-position" :disabled="busy ||
             (corrections[index]?.every(value => value === 0) && rotations[index]?.every((value, axis) => value === (axis === 0 ? 1 : 0)))"
-            @click.stop="resetModelPosition(index)">重置位置</button>
+            @click.stop="resetModelPosition(index)">{{ registrationMatrices[index] ? '重置手柄微调' : '重置位置' }}</button>
         </div>
         <div class="merge-confirm">
           <h2>合并任务</h2>
-          <label>合并目标<select v-model.number="targetModel" @change="save()"><option v-for="(_, index) in task.models" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
+          <label>合并目标<select v-model.number="targetModel" @change="changeTargetModel"><option v-for="(_, index) in task.models" :key="index" :value="index">模型 {{ index + 1 }}</option></select></label>
           <div v-for="(lod, level) in task.models[0].lods" :key="level" class="merge-level">
             <label><input v-model="selectedLevels" type="checkbox" :value="level" :disabled="['queued', 'running', 'cancelling'].includes(task.merge_status)">LOD {{ level }}：{{ lod.name }}</label>
             <div class="merge-level-status"><span>{{ statusLabel(task.level_progress?.[level]?.status) }}<template v-if="task.level_progress?.[level]?.status === 'running' && task.level_progress[level].total">：{{ Math.floor(task.level_progress[level].processed / task.level_progress[level].total * 100) }}%</template></span>
@@ -809,7 +873,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
                   <div class="scene-preview-action-group">
                     <label for="merge-result-level">合并成果</label>
                     <select id="merge-result-level" v-model.number="previewLevel" aria-label="成果层级"
-                      :disabled="previewLoading" @change="mergedPreview && showPreview(true, 'ply')">
+                      :disabled="previewLoading || (mergedPreview && mergedSource === 'streamed')" @change="mergedPreview && showPreview(true, 'ply')">
                       <option v-for="level in task.merged_lods" :key="level.level" :value="level.level">LOD {{ level.level }}</option>
                     </select>
                     <button type="button" :disabled="previewLoading" :aria-pressed="mergedDisplay === 'gaussian'"
@@ -826,6 +890,9 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
                 </div>
               </div>
             </div>
+            <span class="scene-toolbar-divider" aria-hidden="true"></span>
+            <button type="button" @click="sceneViewport?.centerModels()">居中</button>
+            <button type="button" @click="sceneViewport?.resetView()">重置</button>
           </template>
           <template #preview-tools>
             <template v-if="!mergedPreview">
@@ -986,6 +1053,11 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .model-input .coordinate-fields input { width: 100%; min-width: 0; box-sizing: border-box; margin: 2px 0; }
 .model-input .model-correction { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; margin: 2px 0; font-size: 13px; white-space: nowrap; }
 .model-input .model-correction input[type=number] { width: 100%; min-width: 0; box-sizing: border-box; margin: 2px 0; }
+.registration-matrix-editor { margin: 10px 0; padding: 8px; border: 1px solid #385574; border-radius: 6px; font-size: 12px; }
+.registration-matrix-editor summary { cursor: pointer; font-weight: 600; }
+.registration-matrix-editor p { margin: 8px 0; color: #adbed2; }
+.registration-matrix-editor label { display: block; }
+.registration-matrix-editor textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; margin: 6px 0; padding: 8px; border: 1px solid #385574; border-radius: 6px; color: #edf5ff; background: #122238; font: 12px/1.4 monospace; }
 .model-input-content { display: grid; grid-template-columns: minmax(0, 9fr) minmax(0, 11fr); align-items: start; gap: 16px; }
 .model-input-content:not(:has(.coordinate-preview)) { grid-template-columns: 1fr; }
 .model-files { min-width: 0; }

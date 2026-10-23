@@ -60,4 +60,13 @@ for (const moving of ['a','b'] as const) {
   close(transformXYZ(display.localToDisplay(moving), [0,0,0]), handlePosition.toArray());
   close(multiplyMatrices(invertAffine(display.localToDisplay(moving)), display.localToDisplay(moving)).flat(), identityMatrix().flat());
 }
+display.reset('a');
+display.setPose([2, 3, 4], [0, 0, 90], 2);
+close([display.getPose().scale], [2]);
+close(transformXYZ(display.getMovingLocalToFixedLocal(), [1, 0, 0]), [2, 5, 4]);
+close(entities.a.getWorldTransform().transformPoint(new pc.Vec3(1, 0, 0)).toArray(),
+  transformXYZ(display.localToDisplay('a'), [1, 0, 0]), 0.25);
+display.handle.setLocalPosition(3, 4, 5);
+display.applyHandle();
+close([display.getPose().scale], [2]);
 console.log('Registration display: both roles, nonuniform scale, shear, large origins, original view, rigid handle and inverse passed');

@@ -3,6 +3,7 @@ import type * as pc from 'playcanvas';
 export interface WorkbenchFrameUpdater {
   invalidateResult: () => void;
   readPose: () => pc.Vec3[];
+  readScale?: () => number;
   updatePose: (values: number[]) => void;
   readMatrix: () => string;
   updateMatrix: (value: string) => void;
@@ -14,7 +15,7 @@ export function createWorkbenchFrameUpdater(actions: WorkbenchFrameUpdater): () 
   return () => {
     actions.invalidateResult();
     const pose = actions.readPose();
-    actions.updatePose(pose.flatMap(value => [value.x, value.y, value.z]));
+    actions.updatePose([...pose.flatMap(value => [value.x, value.y, value.z]), actions.readScale?.() ?? 1]);
     actions.updateMatrix(actions.readMatrix());
     actions.syncClipping();
     actions.updateClippingHandles();

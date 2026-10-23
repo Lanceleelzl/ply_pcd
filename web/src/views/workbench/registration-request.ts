@@ -8,6 +8,8 @@ export interface RegistrationRequestInputs {
   samplingLimit: string;
   overlap: string;
   randomSeed: string;
+  adjustScale: string;
+  regionPolygon?: [number, number][] | null;
   initialSource?: RegistrationRequest['initial_source'];
 }
 
@@ -20,6 +22,8 @@ export function buildRegistrationRequest(input: RegistrationRequestInputs): Regi
     sampling_limit: Number(input.samplingLimit),
     overlap: Number(input.overlap),
     random_seed: Number(input.randomSeed),
+    adjust_scale: input.adjustScale === 'true',
+    region_polygon: input.regionPolygon,
     show_registration_progress: true,
     coordinate_space: 'business',
     initial_source: input.initialSource ?? 'manual',

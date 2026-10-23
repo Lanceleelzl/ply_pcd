@@ -256,7 +256,102 @@ void testInitialMatrixValidation()
     {
         rejected = true;
     }
-    require(rejected, "ICP accepted an initial matrix containing scale");
+    require(rejected, "ICP accepted nonuniform initial scale");
+    options.initialPcdToPly.at(1, 1) = 2.0;
+    options.initialPcdToPly.at(2, 2) = 2.0;
+    const auto result = registration::IcpRegistration().registerPcdToPly(cloud, cloud, options);
+    require(std::abs(result.initialMovingLocalToFixedLocal.at(0, 0) - 2.0) < 1.0e-12,
+            "ICP did not preserve the initial uniform scale");
+    double finalScaleSquared = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        finalScaleSquared += result.movingLocalToFixedLocal.at(row, 0)
+            * result.movingLocalToFixedLocal.at(row, 0);
+    require(std::abs(std::sqrt(finalScaleSquared) - 2.0) < 1.0e-8,
+            "ICP result matrix lost the initial uniform scale");
+}
+
+void testIcpRefinesInitialScale()
+{
+    registration::PointCloud moving;
+    moving.points = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1},
+                     {1.7F, 0.3F, 0.2F}, {-0.5F, 1.8F, 0.1F},
+                     {0.2F, -0.7F, 1.9F}, {2, 2, 2}, {3, -1, 0.5F}, {-1, 2, 3}};
+    registration::PointCloud fixed;
+    for (const auto& point : moving.points)
+        fixed.points.push_back({2 * point[0], 2 * point[1], 2 * point[2]});
+    registration::IcpOptions options;
+    for (std::size_t axis = 0; axis < 3; ++axis)
+        options.initialMovingLocalToFixedLocal.at(axis, axis) = 1.8;
+    const auto fixedScaleResult = registration::IcpRegistration().registerMovingToFixed(moving, fixed, options);
+    double fixedScaleSquared = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        fixedScaleSquared += fixedScaleResult.movingLocalToFixedLocal.at(row, 0)
+            * fixedScaleResult.movingLocalToFixedLocal.at(row, 0);
+    require(std::abs(std::sqrt(fixedScaleSquared) - 1.8) < 1.0e-8,
+            "Rigid ICP changed the initial scale while scale adjustment was disabled");
+    options.adjustScale = true;
+    const auto result = registration::IcpRegistration().registerMovingToFixed(moving, fixed, options);
+    double finalScaleSquared = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        finalScaleSquared += result.movingLocalToFixedLocal.at(row, 0)
+            * result.movingLocalToFixedLocal.at(row, 0);
+    require(std::abs(std::sqrt(finalScaleSquared) - 2.0) < 1.0e-3,
+            "Scale-adjusting ICP did not refine the initial 1.8 ratio to 2");
+    require(result.finalRms < 1.0e-3, "Scale-adjusting ICP did not align the point clouds");
+}
+
+void testIcpKeepsUnitScaleWithoutClearImprovement()
+{
+    registration::PointCloud moving;
+    registration::PointCloud fixed;
+    for (int i = 0; i < 100; ++i)
+    {
+        const float x = static_cast<float>((i * 37) % 101) * 0.1F;
+        const float y = static_cast<float>((i * 53) % 103) * 0.1F;
+        const float z = static_cast<float>((i * 29) % 97) * 0.1F;
+        moving.points.push_back({x, y, z});
+        fixed.points.push_back({x * 1.0001F, y * 1.0001F, z * 1.0001F});
+    }
+    registration::IcpOptions options;
+    options.adjustScale = true;
+    const auto result = registration::IcpRegistration().registerMovingToFixed(moving, fixed, options);
+    double columnSquared = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        columnSquared += result.movingLocalToFixedLocal.at(row, 0) * result.movingLocalToFixedLocal.at(row, 0);
+    requireNear(std::sqrt(columnSquared), 1.0, 1.0e-12, "Tiny fitted scale changed an initial unit ratio");
+}
+
+void testIcpRegionFiltersBothModelsAfterInitialPose()
+{
+    auto a = syntheticModel({0, 0, 0});
+    auto b = syntheticModel({0, 0, 0});
+    a.cloud.points.clear();
+    b.cloud.points.clear();
+    for (int x = 0; x < 12; ++x)
+        for (int y = 0; y < 12; ++y)
+        {
+            a.cloud.points.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(x * y % 7)});
+            b.cloud.points.push_back({static_cast<float>(x + 3), static_cast<float>(y), static_cast<float>(x * y % 7)});
+        }
+    b.cloud.points.push_back({100, 100, 100});
+    b.cloud.points.push_back({6.25F, 6.25F, 5.0F});
+    registration::BidirectionalRegistrationOptions options;
+    options.movingModel = registration::MovingModel::A;
+    options.icp.initialMovingLocalToFixedLocal.at(0, 3) = 3;
+    options.regionPolygon = {{{4, 2}, {11, 2}, {11, 10}, {4, 10}}};
+    const auto result = registration::BidirectionalRegistration().registerModels(a, b, options);
+    require(result.regionMovingPointCount == 56, "Unexpected ICP region point count");
+    require(result.regionFixedPointCount == 57, "ICP region incorrectly required one-to-one points");
+    require(result.regionMovingCoverage > 0.99, "ROI moving coverage used the wrong points");
+    require(result.regionFixedCoverage > 0.98 && result.regionFixedCoverage < 1.0,
+            "ROI fixed coverage did not account for the unmatched point");
+    require(result.fullMovingCoverage > 0.99, "Full-model verification lost aligned moving points");
+    require(result.fullFixedCoverage > 0.98 && result.fullFixedCoverage < 1.0,
+            "Full-model verification did not account for the unmatched fixed point");
+    require(result.fullVerificationDistance > 0.0, "Full-model verification omitted its distance tolerance");
+    requireNear(result.movingLocalToFixedLocal.at(0, 3), 3.0, 1.0e-4,
+                "ROI registration applied the initial translation twice");
+    require(result.modelB.cloud.points.size() == 146, "ROI mutated the full model");
 }
 
 void testAsciiPlyWithWindowsLineEndings()
@@ -408,6 +503,9 @@ int main()
         testAsciiPlyWithWindowsLineEndings();
         testPreviewWriters();
         testInitialMatrixValidation();
+        testIcpRefinesInitialScale();
+        testIcpKeepsUnitScaleWithoutClearImprovement();
+        testIcpRegionFiltersBothModelsAfterInitialPose();
         testDeterministicCoarseRegistration();
         testRealIcpAgainstCloudCompare();
         std::cout << "All registration tests passed\n";

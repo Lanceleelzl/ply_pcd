@@ -2,6 +2,8 @@
 #include "worker_arguments.hpp"
 
 #include <iostream>
+#include <fstream>
+#include <cmath>
 #include <stdexcept>
 #include <sstream>
 
@@ -177,6 +179,20 @@ ModelRegisterArguments parseModelRegisterArguments(int argc, char** argv)
         else if (option == "--adjust-scale") result.options.icp.adjustScale = true;
         else if (option == "--filter-farthest") result.options.icp.filterOutFarthestPoints = true;
         else if (option == "--initial-matrix") result.options.icp.initialMovingLocalToFixedLocal = Matrix4d::fromFile(nextValue(index, argc, argv, option));
+        else if (option == "--region-polygon")
+        {
+            std::ifstream polygonInput(nextValue(index, argc, argv, option));
+            if (!polygonInput) throw std::runtime_error("Cannot read ICP region polygon");
+            double x = 0.0, y = 0.0;
+            while (polygonInput >> x >> y)
+            {
+                if (!std::isfinite(x) || !std::isfinite(y))
+                    throw std::runtime_error("ICP region polygon contains non-finite coordinates");
+                result.options.regionPolygon.push_back({x, y});
+            }
+            if (!polygonInput.eof() || result.options.regionPolygon.size() < 3)
+                throw std::runtime_error("ICP region polygon requires at least three valid vertices");
+        }
         else if (option == "--model-a-to-business") result.modelAToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
         else if (option == "--model-b-to-business") result.modelBToBusiness = Matrix4d::fromFile(nextValue(index, argc, argv, option));
         else throw std::runtime_error("Unknown register-models option: " + option);

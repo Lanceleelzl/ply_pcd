@@ -37,7 +37,12 @@ export function createWorkbenchRegistrationActions(options: WorkbenchRegistratio
     try {
       await options.jobs.run(options.sessionId, options.buildRequest());
     } catch (error) {
-      if (!options.signal.aborted) options.setStatus(`失败：${String(error)}`);
+      if (!options.signal.aborted) {
+        const reason = String(error);
+        options.setStatus(reason.includes('ICP region')
+          ? '失败：当前范围内有效重合不足，请缩小或重绘计算范围后重试。'
+          : `失败：${reason}`);
+      }
     }
   };
 

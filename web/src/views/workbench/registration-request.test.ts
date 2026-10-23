@@ -5,12 +5,13 @@ import { buildRegistrationRequest, resolveMovingModel } from './registration-req
 test('builds a business registration request with progress events enabled', () => {
   const request = buildRegistrationRequest({
     initialMovingLocalToFixedLocal: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
-    outputDirection: 'b_to_a', movingModel: 'b', minRmsDecrease: '0.001', samplingLimit: '50000', overlap: '1', randomSeed: '42',
+    outputDirection: 'b_to_a', movingModel: 'b', minRmsDecrease: '0.001', samplingLimit: '50000', overlap: '1', randomSeed: '42', adjustScale: 'true',
   });
   assert.equal(request.coordinate_space, 'business');
   assert.equal(request.show_registration_progress, true);
   assert.equal(request.sampling_limit, 50000);
   assert.equal(request.initial_source, 'manual');
+  assert.equal(request.adjust_scale, true);
 });
 
 test('resolves automatic moving model from session recommendation', () => {

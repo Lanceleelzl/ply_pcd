@@ -21,5 +21,11 @@ const fields = [
         @input="emit('change', field.key, ($event.target as HTMLInputElement).value)">
     </label>
   </div>
-  <p class="step-hint">重叠率按移动模型中与固定模型重叠的点数比例估计（0.2～1）；设得过低可能错配，请核对交叉区域。</p>
+  <label class="icp-adjust-scale">
+    <input type="checkbox" :checked="props.values.adjust_scale === 'true'" :disabled="disabled"
+      @change="emit('change', 'adjust_scale', String(($event.target as HTMLInputElement).checked))">
+    ICP 调整比例
+  </label>
+  <p class="step-hint">开启后，以粗配准比例为初值估计等比修正；只有残差明显改善且比例变化达到可信幅度时才采用。初始比例为 1 时，小于约 2% 的修正保持精确的 1。</p>
+  <p class="step-hint">重叠率是预计可匹配的移动点比例（0.2～1）。设置计算范围后，以范围内分别筛出的移动、固定点为参照；此参数裁剪范围内的移动点对应。设得过低可能错配，请核对交叉区域。</p>
 </template>

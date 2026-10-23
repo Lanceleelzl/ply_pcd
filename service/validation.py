@@ -49,22 +49,23 @@ def validate_initial_matrix(matrix: list[list[float]], field_name: str = "initia
     tolerance = 1.0e-5
     if any(abs(matrix[3][column] - (1.0 if column == 3 else 0.0)) > tolerance for column in range(4)):
         raise HTTPException(status_code=400, detail=f"{field_name} must have last row [0, 0, 0, 1]")
-    for column in range(3):
-        length_squared = sum(matrix[row][column] ** 2 for row in range(3))
-        if abs(length_squared - 1.0) > tolerance:
-            raise HTTPException(status_code=400, detail=f"{field_name} rotation must not contain scale")
+    lengths_squared = [sum(matrix[row][column] ** 2 for row in range(3)) for column in range(3)]
+    scale_squared = lengths_squared[0]
+    if scale_squared < 1.0e-12 or any(abs(length - scale_squared) > tolerance * scale_squared
+                                       for length in lengths_squared):
+        raise HTTPException(status_code=400, detail=f"{field_name} must have positive uniform scale")
     for left in range(3):
         for right in range(left + 1, 3):
             dot = sum(matrix[row][left] * matrix[row][right] for row in range(3))
-            if abs(dot) > tolerance:
+            if abs(dot) > tolerance * scale_squared:
                 raise HTTPException(status_code=400, detail=f"{field_name} rotation must be orthogonal")
     determinant = (
         matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
         - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
         + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
     )
-    if abs(determinant - 1.0) > tolerance:
-        raise HTTPException(status_code=400, detail=f"{field_name} rotation determinant must be +1")
+    if abs(determinant - scale_squared ** 1.5) > tolerance * scale_squared ** 1.5:
+        raise HTTPException(status_code=400, detail=f"{field_name} rotation determinant must be positive")
 
 
 def reference_extension(upload: UploadFile) -> str:

@@ -5,7 +5,7 @@ import { CoarseRegistrationController } from '../engine/modules/CoarseRegistrati
 interface CoarseDisplayPort {
   getMovingLocalToFixedLocal(): Matrix4;
   setMovingLocalToFixedLocal(matrix: Matrix4): void;
-  getPose(): { position: [number, number, number]; rotation: [number, number, number] };
+  getPose(): { position: [number, number, number]; rotation: [number, number, number]; scale?: number };
 }
 
 export function createWorkbenchCoarseRegistration(options: {
@@ -32,7 +32,7 @@ export function createWorkbenchCoarseRegistration(options: {
     if (!candidate) return;
     options.display.setMovingLocalToFixedLocal(candidate.moving_local_to_fixed_local);
     const pose = options.display.getPose();
-    options.updatePose([...pose.position, ...pose.rotation]);
+    options.updatePose([...pose.position, ...pose.rotation, pose.scale ?? 1]);
     options.invalidateResult();
     options.fitCamera();
     state.previewed = index;
@@ -69,7 +69,7 @@ export function createWorkbenchCoarseRegistration(options: {
         if (original) {
           options.display.setMovingLocalToFixedLocal(original);
           const pose = options.display.getPose();
-          options.updatePose([...pose.position, ...pose.rotation]);
+          options.updatePose([...pose.position, ...pose.rotation, pose.scale ?? 1]);
           options.invalidateResult();
           options.fitCamera();
         }

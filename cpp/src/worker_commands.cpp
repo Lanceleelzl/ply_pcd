@@ -381,6 +381,13 @@ int runModelRegistration(const ModelRegisterArguments& arguments)
     writeMatrixJson(output, result.bToA, 2);
     output << ",\n  \"metrics\": {\"final_rms\": " << result.finalRms
            << ", \"final_point_count\": " << result.finalPointCount
+           << ", \"region_moving_point_count\": " << result.regionMovingPointCount
+           << ", \"region_fixed_point_count\": " << result.regionFixedPointCount
+           << ", \"region_moving_coverage\": " << result.regionMovingCoverage
+           << ", \"region_fixed_coverage\": " << result.regionFixedCoverage
+           << ", \"full_moving_coverage\": " << result.fullMovingCoverage
+           << ", \"full_fixed_coverage\": " << result.fullFixedCoverage
+           << ", \"full_verification_distance\": " << result.fullVerificationDistance
            << ", \"scale\": " << result.scale << ", \"elapsed_seconds\": " << elapsed << "},\n"
            << "  \"parameters\": {\"min_rms_decrease\": " << arguments.options.icp.minRmsDecrease
            << ", \"sampling_limit\": " << arguments.options.icp.samplingLimit

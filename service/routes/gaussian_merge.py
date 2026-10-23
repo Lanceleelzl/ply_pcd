@@ -26,7 +26,7 @@ from pyproj.exceptions import CRSError
 from service.auth import authorize_resource, current_principal
 from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 from service.dataset_preparation import _safe_extract
-from service.gaussian_merge import merge_level, read_layout, rotate_point, validate_regions, model_transform, scene_vector, file_vector
+from service.gaussian_merge import merge_level, read_layout, rotate_point, validate_regions, model_transform, scene_vector, file_vector, registration_components, apply_registration
 from service.ply_coordinates import read_ply_coordinates
 from service.storage import read_status, workspace_id, write_status
 from service.streaming_zip import directory_zip_metadata, stream_directory_zip
@@ -77,6 +77,58 @@ def validate_merged_levels(directory: Path, status: dict) -> list[dict]:
     return levels
 
 
+def matching_completed_levels(directory: Path, status: dict) -> list[dict]:
+    """Find complete LOD files produced with the current merge inputs and rules."""
+    root = directory / "merged"
+    if not root.is_dir():
+        return []
+    target = status.get("target_model", 0)
+    origin = status.get("scene_origin", status["models"][target]["offset"])
+    epsg = status.get("scene_epsg", status["models"][target]["epsg"])
+    levels: dict[int, dict] = {}
+    for batch in sorted(root.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True):
+        manifest_path = batch / "merge-manifest.json"
+        if not batch.is_dir() or not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (manifest.get("models") != status["models"] or
+                    manifest.get("regions") != status["regions"] or
+                    manifest.get("axes") != status["axes"] or
+                    manifest.get("target_model") != target or
+                    manifest.get("scene_origin") != origin or
+                    manifest.get("source_epsg") != (epsg or None)):
+                continue
+            for item in manifest["merged_lods"]:
+                level = item["level"]
+                if type(level) is not int or not 0 <= level < status["level_count"] or level in levels:
+                    continue
+                source = (directory / item["path"]).resolve()
+                if not source.is_relative_to(root.resolve()) or not source.is_file():
+                    continue
+                layout = read_layout(source)
+                if layout.count == item["count"] and layout.count > 0 and \
+                        source.stat().st_size == layout.data_start + layout.count * layout.stride:
+                    levels[level] = item
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            continue
+    for item in status.get("merged_lods", []):
+        try:
+            level = item["level"]
+            if type(level) is not int or not 0 <= level < status["level_count"]:
+                continue
+            source = (directory / item["path"]).resolve()
+            if not source.is_relative_to(root.resolve()) or not source.is_file():
+                continue
+            layout = read_layout(source)
+            if layout.count == item["count"] and layout.count > 0 and \
+                    source.stat().st_size == layout.data_start + layout.count * layout.stride:
+                levels[level] = item
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            continue
+    return [levels[level] for level in sorted(levels)]
+
+
 def restore_completed_merge(directory: Path, status: dict) -> bool:
     """Relink a complete, still matching result after a replacement run was cancelled."""
     root = directory / "merged"
@@ -92,7 +144,8 @@ def restore_completed_merge(directory: Path, status: dict) -> bool:
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if (manifest.get("models") != status["models"] or
+            if (manifest.get("run_complete") is False or
+                    manifest.get("models") != status["models"] or
                     manifest.get("regions") != status["regions"] or
                     manifest.get("axes") != status["axes"] or
                     manifest.get("target_model") != target or
@@ -101,7 +154,7 @@ def restore_completed_merge(directory: Path, status: dict) -> bool:
                 continue
             levels = manifest["merged_lods"]
             if not levels or any(item["level"] < 0 or item["level"] >= status["level_count"] or
-                    (directory / item["path"]).parent != batch for item in levels):
+                    not (directory / item["path"]).resolve().is_relative_to(root.resolve()) for item in levels):
                 continue
             for item in levels:
                 source = directory / item["path"]
@@ -251,30 +304,42 @@ class MergeTasks:
                        if status["level_progress"][level]["status"] != "ready")
         if shutil.disk_usage(directory).free < required:
             raise ValueError("可用磁盘空间不足以写入合并 PLY 文件组")
-        result = []
+        result = list(status.get("merged_lods", []))
         root = directory / status.get("merge_path", "merged")
         root.mkdir(parents=True, exist_ok=True)
         target_model = status.get("target_model", 0)
         geography = {"epsg": status.get("scene_epsg", status["models"][target_model]["epsg"]),
                      "offset": status.get("scene_origin", status["models"][target_model]["offset"])}
+
+        def write_manifest(run_complete: bool) -> None:
+            manifest = {"schema_version": 1, "run_complete": run_complete,
+                        "coordinate_mode": "projected" if geography["offset"] is not None else "relative_local",
+                        "source_epsg": geography["epsg"] or None, "scene_origin": geography["offset"],
+                        "target_model": target_model, "axes": status["axes"],
+                        "models": status["models"], "regions": status["regions"], "merged_lods": result}
+            temporary = root / f"merge-manifest.{uuid.uuid4().hex}.tmp"
+            temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(root / "merge-manifest.json")
+
         for level in selected:
             if cancellation is not None and cancellation.is_set():
                 raise MergeCancelled()
             inputs = [directory / model["lods"][level]["path"] for model in status["models"]]
-            output = root / f"lod-{level}.ply"
             completed = next((item for item in status.get("merged_lods", []) if item["level"] == level), None)
-            if status["level_progress"][level]["status"] == "ready" and output.is_file():
-                layout = read_layout(output)
-                if layout.count > 0 and output.stat().st_size == layout.data_start + layout.count * layout.stride and \
+            output = root / f"lod-{level}.ply"
+            existing = directory / completed["path"] if completed else output
+            if status["level_progress"][level]["status"] == "ready" and existing.is_file():
+                layout = read_layout(existing)
+                if layout.count > 0 and existing.stat().st_size == layout.data_start + layout.count * layout.stride and \
                         (completed is None or layout.count == completed["count"]):
                     if completed is None:
-                        completed = {"level": level, "path": output.relative_to(directory).as_posix(),
+                        completed = {"level": level, "path": existing.relative_to(directory).as_posix(),
                                      "count": layout.count, "by_model": [], "bounds": None,
                                      "epsg": layout.epsg, "offset": layout.offset}
                         status.setdefault("merged_lods", []).append(completed)
                         status["merged_lods"].sort(key=lambda item: item["level"])
+                        result.append(completed)
                         write_status(directory, status)
-                    result.append(completed)
                     continue
             status["level_progress"][level].update(status="running", processed=0)
             write_status(directory, status)
@@ -287,21 +352,17 @@ class MergeTasks:
                                   [tuple(model["correction"]) for model in status["models"]],
                                   tuple(status["axes"]), target_model, status["models"], geography,
                                   update_progress,
-                                  [tuple(model.get("rotation", [1, 0, 0, 0])) for model in status["models"]])
+                                  [tuple(model.get("rotation", [1, 0, 0, 0])) for model in status["models"]],
+                                  [model.get("registration_matrix") for model in status["models"]])
             completed = {"level": level, "path": output.relative_to(directory).as_posix(), **summary}
-            result.append(completed)
+            result = [item for item in result if item["level"] != level] + [completed]
+            result.sort(key=lambda item: item["level"])
             status["merged_lods"] = [item for item in status.get("merged_lods", []) if item["level"] != level] + [completed]
             status["merged_lods"].sort(key=lambda item: item["level"])
             status["level_progress"][level].update(status="ready", processed=status["level_progress"][level]["total"])
+            write_manifest(False)
             write_status(directory, status)
-        manifest = {"schema_version": 1, "coordinate_mode":
-                    "projected" if geography["offset"] is not None else "relative_local",
-                    "source_epsg": geography["epsg"] or None,
-                    "scene_origin": geography["offset"],
-                    "target_model": target_model, "axes": status["axes"],
-                    "models": status["models"], "regions": status["regions"], "merged_lods": result}
-        (root / "merge-manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_manifest(True)
         return result
 
     def _encode(self, directory: Path, status: dict) -> str:
@@ -496,10 +557,18 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
 
     @router.get("/{task_id}")
     def get_merge(task_id: str) -> dict:
-        status = tasks.read(task_id)[1]
+        directory, status = tasks.read(task_id)
+        completed = {item["level"]: item for item in matching_completed_levels(directory, status)}
+        progress = {item["level"]: dict(item) for item in status.get("level_progress", [])}
+        for level in range(status["level_count"]):
+            item = progress.setdefault(level, {"level": level, "status": "not_selected", "processed": 0, "total": 0})
+            if level in completed and item["status"] == "not_selected":
+                item["status"] = "ready"
         cache_url = (f"/merge-resources/{task_id}/{status['resource_token']}/{status['cache_path']}"
                      if status.get("cache_status") == "ready" and status.get("cache_path") else None)
-        return {**status, "partial_lod_downloads": True, "cache_url": cache_url}
+        return {**status, "merged_lods": [completed[level] for level in sorted(completed)],
+                "level_progress": [progress[level] for level in range(status["level_count"])],
+                "partial_lod_downloads": True, "cache_url": cache_url}
 
     @router.get("/{task_id}/origin")
     def get_origin(task_id: str) -> dict:
@@ -585,11 +654,13 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                             "units_confirmed": status.get("units_confirmed", False), "corrections":
                             [model["correction"] for model in status["models"]], "rotations":
                             [model.get("rotation", [1, 0, 0, 0]) for model in status["models"]],
+                            "registration_matrices": [model.get("registration_matrix") for model in status["models"]],
                             "model_settings": [{key: model.get(key) for key in ("axes", "unit", "scale", "confirmed")}
                                                for model in status["models"]]}, sort_keys=True)
         regions = payload.get("regions")
         corrections = payload.get("corrections")
         rotations = payload.get("rotations", [model.get("rotation", [1, 0, 0, 0]) for model in status["models"]])
+        registration_matrices = payload.get("registration_matrices", [model.get("registration_matrix") for model in status["models"]])
         axes = payload.get("axes")
         units_confirmed = payload.get("units_confirmed")
         model_settings = payload.get("model_settings")
@@ -634,6 +705,18 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                         abs(sum(value * value for value in rotation) - 1) > 1e-4:
                     raise ValueError("模型校正旋转无效")
                 model["rotation"] = rotation
+            if not isinstance(registration_matrices, list) or len(registration_matrices) != len(status["models"]):
+                raise ValueError("配准矩阵数量不匹配")
+            if registration_matrices[target_model] is not None:
+                raise ValueError("配准矩阵只能作用于待合入模型；切换目标前请先清除矩阵")
+            for index, (model, matrix) in enumerate(zip(status["models"], registration_matrices)):
+                registration_components(matrix)
+                if matrix is not None and model.get("offset") is not None:
+                    raise ValueError("已有坐标的模型无需输入配准矩阵")
+                if matrix is None:
+                    model.pop("registration_matrix", None)
+                else:
+                    model["registration_matrix"] = matrix
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         previous_target = status.get("target_model", 0)
@@ -672,6 +755,7 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                            "units_confirmed": status["units_confirmed"], "corrections":
                            [model["correction"] for model in status["models"]], "rotations":
                            [model.get("rotation", [1, 0, 0, 0]) for model in status["models"]],
+                           "registration_matrices": [model.get("registration_matrix") for model in status["models"]],
                            "model_settings": [{key: model.get(key) for key in ("axes", "unit", "scale", "confirmed")}
                                               for model in status["models"]]}, sort_keys=True)
         if before != after:
@@ -696,6 +780,7 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
         models = []
         for model_number, model in enumerate(status["models"]):
             model_axes, factor = model_transform(model, tuple(axes))
+            registration_matrix = model.get("registration_matrix")
             source_path = directory / model["lods"][level if level is not None else -1]["path"]
             if level is None and model.get("stream_path"):
                 preview_path = directory / "preview" / f"stream-{model_number}.ply"
@@ -717,7 +802,7 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
             layout = read_layout(source_path, require_geo=False)
             xyz = [layout.field(axis) for axis in "xyz"]
             shift = scene_vector(model["correction"], model_axes, factor)
-            if model["offset"] is not None and origin is not None:
+            if registration_matrix is None and model["offset"] is not None and origin is not None:
                 shift = [value + model["offset"][axis] - origin[axis]
                          for axis, value in enumerate(shift)]
             count = min(layout.count, 30000)
@@ -731,7 +816,8 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                                     for code, position in xyz]
                     if all(math.isfinite(value) for value in source_point):
                         scene_point = rotate_point(model.get("rotation", [1, 0, 0, 0]),
-                                                   scene_vector(source_point, model_axes, factor))
+                                                   apply_registration(registration_matrix,
+                                                                      scene_vector(source_point, model_axes, factor)))
                         points.append([scene_point[axis] + shift[axis] for axis in range(3)])
             models.append(points)
         return {"models": models}
@@ -756,7 +842,7 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
     @router.get("/{task_id}/preview-merged/{level}")
     async def preview_merged(task_id: str, level: int) -> dict:
         directory, status = tasks.read(task_id)
-        entry = next((item for item in status.get("merged_lods", []) if item["level"] == level), None)
+        entry = next((item for item in matching_completed_levels(directory, status) if item["level"] == level), None)
         if status["merge_status"] != "ready" or entry is None:
             raise HTTPException(status_code=404, detail="合并 LOD 尚未就绪")
         layout = read_layout(directory / entry["path"])
@@ -794,11 +880,14 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
                 level < 0 or level >= status["level_count"] for level in selected) or len(set(selected)) != len(selected):
             raise HTTPException(status_code=422, detail="请选择有效的合并层级")
         selected.sort()
+        completed = matching_completed_levels(directory, status)
+        ready_levels = {item["level"] for item in completed}
         status["selected_levels"] = selected
-        status["level_progress"] = [{"level": level, "status": "queued" if level in selected else "not_selected",
+        status["level_progress"] = [{"level": level, "status": "ready" if level in ready_levels else
+                                     "queued" if level in selected else "not_selected",
                                      "processed": 0, "total": 0} for level in range(status["level_count"])]
         status["merge_path"] = f"merged/{uuid.uuid4().hex}"
-        status.update(merge_status="queued", merge_error=None, merged_lods=[],
+        status.update(merge_status="queued", merge_error=None, merged_lods=completed,
                       cache_status="not_requested", cache_path=None)
         write_status(directory, status)
         tasks.start(task_id, "merge")
@@ -826,6 +915,13 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
         directory, status = tasks.read(task_id)
         if status["merge_status"] != "ready":
             raise HTTPException(status_code=409, detail="请先完成 PLY 合并")
+        completed = {item["level"]: item for item in matching_completed_levels(directory, status)}
+        if len(completed) > len(status.get("merged_lods", [])):
+            status["merged_lods"] = [completed[level] for level in sorted(completed)]
+            for item in status.get("level_progress", []):
+                if item["level"] in completed:
+                    item["status"] = "ready"
+            write_status(directory, status)
         try:
             validate_merged_levels(directory, status)
         except (OSError, ValueError) as error:
@@ -856,11 +952,10 @@ def create_merge_router(tasks: MergeTasks) -> APIRouter:
     @router.get("/{task_id}/download/ply/{level}")
     def download_merged_lod(task_id: str, level: int) -> FileResponse:
         directory, status = tasks.read(task_id)
-        entry = next((item for item in status.get("merged_lods", []) if item["level"] == level), None)
-        progress = next((item for item in status.get("level_progress", []) if item["level"] == level), None)
-        if progress is None or progress["status"] != "ready":
+        entry = next((item for item in matching_completed_levels(directory, status) if item["level"] == level), None)
+        if entry is None:
             raise HTTPException(status_code=404, detail="合并 LOD 尚未就绪")
-        source = directory / (entry["path"] if entry else f"{status.get('merge_path', 'merged')}/lod-{level}.ply")
+        source = directory / entry["path"]
         if not source.is_file():
             raise HTTPException(status_code=404, detail="合并 PLY 文件不存在")
         layout = read_layout(source)

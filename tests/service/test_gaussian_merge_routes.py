@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import math
 import struct
 import tempfile
@@ -138,6 +139,28 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
             self.routes["download_merged_lod"](task_id, 1)
         with self.tasks.reading(task_id), self.assertRaises(HTTPException):
             await self.routes["start_merge"](task_id)
+
+    async def test_registration_matrix_persists_and_drives_preview_and_merge(self):
+        created = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
+            gaussian("known.ply", 1000), gaussian("unknown.ply", 9000, geo=False, point=(1, 0, 0))])
+        task_id = created["task_id"]
+        matrix = [[0, -1, 0, 5], [1, 0, 0, 7], [0, 0, 1, 0], [0, 0, 0, 1]]
+        payload = {"axes": [1, 2, 3], "units_confirmed": True, "target_model": 0,
+                   "corrections": [[0, 0, 0], [0, 0, 0]], "regions": [],
+                   "registration_matrices": [None, matrix]}
+        saved = self.routes["save_regions"](task_id, payload)
+        self.assertEqual(saved["models"][1]["registration_matrix"], matrix)
+        preview = await self.routes["preview"](task_id)
+        self.assertEqual(preview["models"][1], [[5, 8, 0]])
+        await self.routes["start_merge"](task_id)
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        status = self.tasks.read(task_id)[1]
+        layout = read_layout(self.tasks.directory(task_id) / status["merged_lods"][0]["path"])
+        with layout.path.open("rb") as data:
+            data.seek(layout.data_start + layout.stride)
+            self.assertEqual(struct.unpack("<3f", data.read(12)), (5, 8, 0))
+        with self.assertRaisesRegex(HTTPException, "配准矩阵只能作用于待合入模型"):
+            self.routes["save_regions"](task_id, {**payload, "registration_matrices": [matrix, None]})
 
     async def test_restoring_original_regions_relinks_finished_merge_and_cache(self):
         created = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [
@@ -303,6 +326,81 @@ class MergeRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["status"] for item in result["level_progress"]], ["not_selected", "ready"])
         self.assertEqual(validate_merged_levels(directory, result)[0]["level"], 1)
         self.assertEqual((await self.routes["preview_merged"](task_id, 1))["models"][0], [[0, 0, 0], [4, 0, 0]])
+
+    async def test_completed_lod_remains_downloadable_during_remaining_lod_merge(self):
+        created = await self.routes["create_merge"](str(uuid.uuid4()), "[2,2]", [
+            gaussian("a-0.ply", 1000), gaussian("a-1.ply", 1000),
+            gaussian("b-0.ply", 1004), gaussian("b-1.ply", 1004)])
+        task_id = created["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        await self.routes["start_merge"](task_id, {"levels": [0]})
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        directory, completed = self.tasks.read(task_id)
+        first = directory / completed["merged_lods"][0]["path"]
+        first_modified = first.stat().st_mtime_ns
+
+        # A previous service version cleared the result list when starting LOD 1.
+        interrupted = dict(completed, merge_status="running", selected_levels=[1], merged_lods=[],
+                           level_progress=[{"level": 0, "status": "not_selected"},
+                                           {"level": 1, "status": "running"}])
+        write_status(directory, interrupted)
+        visible = self.routes["get_merge"](task_id)
+        self.assertEqual(visible["level_progress"][0]["status"], "ready")
+        self.assertEqual(visible["merged_lods"][0]["path"], completed["merged_lods"][0]["path"])
+        self.assertEqual(Path(self.routes["download_merged_lod"](task_id, 0).path), first)
+        write_status(directory, dict(interrupted, merge_status="editing", level_progress=[]))
+        self.assertEqual(self.routes["get_merge"](task_id)["level_progress"][0]["status"], "ready")
+        write_status(directory, dict(interrupted, merge_status="ready"))
+        self.assertEqual((await self.routes["preview_merged"](task_id, 0))["models"][0], [[0, 0, 0], [4, 0, 0]])
+
+        write_status(directory, completed)
+        await self.routes["start_merge"](task_id, {"levels": [1]})
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        result = self.tasks.read(task_id)[1]
+        self.assertEqual([item["level"] for item in result["merged_lods"]], [0, 1])
+        self.assertEqual([item["status"] for item in result["level_progress"]], ["ready", "ready"])
+        self.assertEqual(first.stat().st_mtime_ns, first_modified)
+        self.assertEqual([item["level"] for item in validate_merged_levels(directory, result)], [0, 1])
+        self.assertEqual((await self.routes["preview_merged"](task_id, 0))["models"][0], [[0, 0, 0], [4, 0, 0]])
+        with patch("service.routes.gaussian_merge.merge_level", side_effect=AssertionError("recomputed")):
+            await self.routes["start_merge"](task_id, {"levels": [0, 1]})
+            await asyncio.wait_for(self.tasks.running[task_id], 5)
+        self.assertEqual(self.tasks.read(task_id)[1]["merge_status"], "ready")
+
+    async def test_partial_failed_run_keeps_finished_lod_after_reentry_and_resume(self):
+        created = await self.routes["create_merge"](str(uuid.uuid4()), "[2,2]", [
+            gaussian("a-0.ply", 1000), gaussian("a-1.ply", 1000),
+            gaussian("b-0.ply", 1004), gaussian("b-1.ply", 1004)])
+        task_id = created["task_id"]
+        self.routes["save_regions"](task_id, {"axes": [1, 2, 3], "units_confirmed": True,
+            "corrections": [[0, 0, 0], [0, 0, 0]], "regions": []})
+        from service.routes.gaussian_merge import merge_level as original_merge_level
+
+        def fail_second(inputs, output, *args, **kwargs):
+            if output.name == "lod-1.ply":
+                raise ValueError("interrupted")
+            return original_merge_level(inputs, output, *args, **kwargs)
+
+        with patch("service.routes.gaussian_merge.merge_level", side_effect=fail_second):
+            await self.routes["start_merge"](task_id, {"levels": [0, 1]})
+            await asyncio.wait_for(self.tasks.running[task_id], 5)
+        directory, failed = self.tasks.read(task_id)
+        self.assertEqual(failed["merge_status"], "failed")
+        partial_manifest = directory / failed["merge_path"] / "merge-manifest.json"
+        self.assertFalse(json.loads(partial_manifest.read_text(encoding="utf-8"))["run_complete"])
+        self.assertFalse(restore_completed_merge(directory, failed))
+        self.assertEqual(self.routes["get_merge"](task_id)["level_progress"][0]["status"], "ready")
+        first = Path(self.routes["download_merged_lod"](task_id, 0).path)
+        first_modified = first.stat().st_mtime_ns
+
+        await self.routes["start_merge"](task_id, {"levels": [1]})
+        await asyncio.wait_for(self.tasks.running[task_id], 5)
+        resumed = self.routes["get_merge"](task_id)
+        self.assertEqual([item["level"] for item in resumed["merged_lods"]], [0, 1])
+        self.assertEqual([item["status"] for item in resumed["level_progress"]], ["ready", "ready"])
+        self.assertEqual(Path(self.routes["download_merged_lod"](task_id, 0).path), first)
+        self.assertEqual(first.stat().st_mtime_ns, first_modified)
 
     async def test_rotation_persists_and_preview_matches_export(self):
         status = await self.routes["create_merge"](str(uuid.uuid4()), "[1,1]", [

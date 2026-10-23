@@ -8,7 +8,7 @@ export type ModelCoordinates = { epsg: string; offset: [string, string, string];
 export type MergeModelSetting = { axes: number[]; unit: 'm' | 'cm' | 'mm'; scale: number; confirmed: boolean };
 export type MergeTask = {
   task_id: string; created_at_unix?: number; updated_at_unix?: number;
-  models: ({ lods: { name: string; count: number }[]; epsg: string; offset: number[] | null; source?: string; correction: number[]; rotation?: number[] } & Partial<MergeModelSetting>)[];
+  models: ({ lods: { name: string; count: number }[]; epsg: string; offset: number[] | null; source?: string; correction: number[]; rotation?: number[]; registration_matrix?: number[][] | null } & Partial<MergeModelSetting>)[];
   regions: (Region | LegacyRegion)[]; axes: number[]; units_confirmed: boolean; target_model?: number;
   merge_status: string; merge_error?: string; cache_status: string; cache_error?: string;
   cache_url?: string | null;
@@ -95,11 +95,13 @@ export async function loadMergedPreview(id: string, level: number): Promise<{ mo
 }
 
 export async function saveMergeRegions(id: string, regions: Region[], corrections: number[][], rotations: number[][],
-  axes: number[], unitsConfirmed: boolean, targetModel: number, modelSettings?: MergeModelSetting[]): Promise<MergeTask> {
+  axes: number[], unitsConfirmed: boolean, targetModel: number, modelSettings?: MergeModelSetting[],
+  registrationMatrices?: (number[][] | null)[]): Promise<MergeTask> {
   return json<MergeTask>(await apiFetch(`/api/v2/gaussian-merges/${encodeURIComponent(id)}/regions`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ regions, corrections, rotations, axes, units_confirmed: unitsConfirmed, target_model: targetModel,
-      ...(modelSettings ? { model_settings: modelSettings } : {}) }),
+      ...(modelSettings ? { model_settings: modelSettings } : {}),
+      ...(registrationMatrices ? { registration_matrices: registrationMatrices } : {}) }),
   }));
 }
 

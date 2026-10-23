@@ -5,12 +5,18 @@ type Model = 'a' | 'b';
 const models: Model[] = ['a', 'b'];
 const translation = (point: XYZ): Matrix => [[1,0,0,point[0]], [0,1,0,point[1]], [0,0,1,point[2]], [0,0,0,1]];
 
-// Only rigid matrices or a single TRS are decomposed; the composed display can contain shear.
-function setRigid(entity: pc.Entity, matrix: Matrix): void {
-  const rotation = new pc.Mat4().set(Array.from({ length: 16 }, (_, index) => matrix[index % 4][Math.floor(index / 4)]));
+// Only uniform-scale poses or a single TRS are decomposed; the composed display can contain shear.
+function uniformScale(matrix: Matrix): number {
+  return Math.hypot(matrix[0][0], matrix[1][0], matrix[2][0]);
+}
+
+function setSimilarity(entity: pc.Entity, matrix: Matrix): void {
+  const scale = uniformScale(matrix);
+  const rotation = new pc.Mat4().set(Array.from({ length: 16 }, (_, index) =>
+    index % 4 < 3 && Math.floor(index / 4) < 3 ? matrix[index % 4][Math.floor(index / 4)] / scale : matrix[index % 4][Math.floor(index / 4)]));
   entity.setLocalPosition(matrix[0][3], matrix[1][3], matrix[2][3]);
   entity.setLocalRotation(new pc.Quat().setFromMat4(rotation).normalize());
-  entity.setLocalScale(1, 1, 1);
+  entity.setLocalScale(scale, scale, scale);
 }
 
 function rigidPose(position: pc.Vec3, rotation: pc.Quat): Matrix {
@@ -82,7 +88,7 @@ export class RegistrationDisplay {
   private refresh(): void {
     models.forEach(model => {
       const parameter = this.parameters[model];
-      setRigid(this.parents[model], this.parentMatrix(model));
+      setSimilarity(this.parents[model], this.parentMatrix(model));
       this.entities[model].setLocalPosition(0, 0, 0);
       this.entities[model].setLocalEulerAngles(...parameter.rotation_degrees);
       this.entities[model].setLocalScale(...parameter.scale);
@@ -90,23 +96,28 @@ export class RegistrationDisplay {
   }
 
   private syncHandle(): void {
-    setRigid(this.handle, this.parentMatrix(this.moving));
+    setSimilarity(this.handle, this.parentMatrix(this.moving));
+    this.handle.setLocalScale(1, 1, 1);
   }
 
   applyHandle(): void {
     const position = offsetXYZ(this.handle.getLocalPosition().toArray() as XYZ, offsetXYZ(this.businessOrigin(this.fixed), this.anchor!, -1), -1);
     const rotation = this.handle.getLocalRotation();
-    this.movingLocalToFixedLocal = rigidPose(new pc.Vec3(...position), rotation);
+    const rigid = rigidPose(new pc.Vec3(...position), rotation);
+    const scale = uniformScale(this.movingLocalToFixedLocal);
+    this.movingLocalToFixedLocal = rigid.map((row, index) => index < 3
+      ? row.map((value, column) => column < 3 ? value * scale : value) : row);
     this.refresh();
   }
 
-  setPose(position: XYZ, rotation: XYZ): void {
-    this.setMovingLocalToFixedLocal(transformParametersMatrix({ translation: position, rotation_degrees: rotation, scale: [1,1,1] }));
+  setPose(position: XYZ, rotation: XYZ, scale = 1): void {
+    this.setMovingLocalToFixedLocal(transformParametersMatrix({ translation: position, rotation_degrees: rotation, scale: [scale,scale,scale] }));
   }
 
-  getPose(): { position: XYZ; rotation: XYZ } {
+  getPose(): { position: XYZ; rotation: XYZ; scale: number } {
     const pose = new pc.Entity();
-    setRigid(pose, this.movingLocalToFixedLocal);
-    return { position: pose.getLocalPosition().toArray() as XYZ, rotation: pose.getLocalEulerAngles().toArray() as XYZ };
+    setSimilarity(pose, this.movingLocalToFixedLocal);
+    return { position: pose.getLocalPosition().toArray() as XYZ, rotation: pose.getLocalEulerAngles().toArray() as XYZ,
+      scale: Number(uniformScale(this.movingLocalToFixedLocal).toPrecision(15)) };
   }
 }

@@ -273,11 +273,60 @@ def conjugate(rotation: tuple[float, float, float, float]) -> tuple[float, float
     return (rotation[0], -rotation[1], -rotation[2], -rotation[3])
 
 
+def registration_components(matrix: list[list[float]] | None) -> tuple[float, tuple[float, float, float, float], list[float]]:
+    """Validate a scene-local similarity matrix and return scale, rotation, translation."""
+    if matrix is None:
+        return 1.0, (1.0, 0.0, 0.0, 0.0), [0.0, 0.0, 0.0]
+    if (not isinstance(matrix, list) or len(matrix) != 4 or
+            any(not isinstance(row, list) or len(row) != 4 or
+                any(type(value) not in (int, float) or not math.isfinite(value) for value in row)
+                for row in matrix) or matrix[3] != [0, 0, 0, 1]):
+        raise ValueError("配准矩阵必须是有限的 4×4 仿射矩阵，末行为 0 0 0 1")
+    columns = [[matrix[row][column] for row in range(3)] for column in range(3)]
+    lengths = [math.sqrt(sum(value * value for value in column)) for column in columns]
+    scale = sum(lengths) / 3
+    if not 1e-6 <= scale <= 1e6 or any(abs(length - scale) > scale * 1e-5 for length in lengths):
+        raise ValueError("配准矩阵仅支持正数等比缩放")
+    rotation = [[matrix[row][column] / scale for column in range(3)] for row in range(3)]
+    if any(abs(sum(rotation[row][left] * rotation[row][right] for row in range(3))) > 1e-5
+           for left in range(3) for right in range(left + 1, 3)):
+        raise ValueError("配准矩阵不能包含剪切")
+    determinant = (rotation[0][0] * (rotation[1][1] * rotation[2][2] - rotation[1][2] * rotation[2][1])
+                   - rotation[0][1] * (rotation[1][0] * rotation[2][2] - rotation[1][2] * rotation[2][0])
+                   + rotation[0][2] * (rotation[1][0] * rotation[2][1] - rotation[1][1] * rotation[2][0]))
+    if abs(determinant - 1) > 1e-5:
+        raise ValueError("配准矩阵不能包含镜像或退化变换")
+    trace = sum(rotation[index][index] for index in range(3))
+    if trace > 0:
+        root = math.sqrt(trace + 1) * 2
+        quaternion = (root / 4, (rotation[2][1] - rotation[1][2]) / root,
+                      (rotation[0][2] - rotation[2][0]) / root, (rotation[1][0] - rotation[0][1]) / root)
+    else:
+        index = max(range(3), key=lambda axis: rotation[axis][axis])
+        next_axis, last_axis = (index + 1) % 3, (index + 2) % 3
+        root = math.sqrt(1 + rotation[index][index] - rotation[next_axis][next_axis]
+                         - rotation[last_axis][last_axis]) * 2
+        values = [0.0, 0.0, 0.0]
+        values[index] = root / 4
+        values[next_axis] = (rotation[next_axis][index] + rotation[index][next_axis]) / root
+        values[last_axis] = (rotation[last_axis][index] + rotation[index][last_axis]) / root
+        quaternion = ((rotation[last_axis][next_axis] - rotation[next_axis][last_axis]) / root, *values)
+    return scale, quaternion, [matrix[row][3] for row in range(3)]
+
+
+def apply_registration(matrix: list[list[float]] | None, point: list[float]) -> list[float]:
+    if matrix is None:
+        return point
+    return [sum(matrix[row][column] * point[column] for column in range(3)) + matrix[row][3]
+            for row in range(3)]
+
+
 def merge_level(inputs: list[Path], destination: Path, regions: list[dict],
                 correction: list[tuple[float, float, float]] | None = None,
                 axes: tuple[int, int, int] = (1, 2, 3), target_model: int = 0,
                 coordinates: list[dict] | None = None, output_geography: dict | None = None,
-                progress=None, rotations: list[tuple[float, float, float, float]] | None = None) -> dict:
+                progress=None, rotations: list[tuple[float, float, float, float]] | None = None,
+                registration_matrices: list[list[list[float]] | None] | None = None) -> dict:
     """Two sequential passes avoid holding an output layer or temporary copy in memory."""
     layouts = [read_layout(path) for path in inputs]
     if not layouts:
@@ -314,17 +363,26 @@ def merge_level(inputs: list[Path], destination: Path, regions: list[dict],
                                                 or abs(sum(v * v for v in item) - 1) > 1e-4
                                                 for item in rotations):
         raise ValueError("模型校正旋转无效")
+    if registration_matrices is None:
+        registration_matrices = [None] * len(layouts)
+    if len(registration_matrices) != len(layouts) or registration_matrices[target_model] is not None:
+        raise ValueError("配准矩阵只能作用于待合入模型")
+    if any(matrix is not None and coordinates[index].get("offset") is not None
+           for index, matrix in enumerate(registration_matrices)):
+        raise ValueError("已有坐标的模型无需输入配准矩阵")
     transforms = [model_transform(item, axes) for item in coordinates]
+    registration = [registration_components(matrix) for matrix in registration_matrices]
     target_axes, target_factor = transforms[target_model]
     target_inverse = conjugate(axes_rotation(target_axes))
     file_rotations = [multiply_rotation(target_inverse, multiply_rotation(
-        rotation, axes_rotation(model_axes))) for rotation, (model_axes, _) in zip(rotations, transforms)]
+        rotation, multiply_rotation(registration[index][1], axes_rotation(model_axes))))
+        for index, (rotation, (model_axes, _)) in enumerate(zip(rotations, transforms))]
     orientation = [[layout.field(f"rot_{axis}") for axis in range(4)] for layout in layouts]
     shifts = []
     for index, (model_axes, factor) in enumerate(transforms):
         shift = scene_vector(corrections[index], model_axes, factor)
         source_geo, target_geo = coordinates[index], coordinates[target_model]
-        if source_geo.get("offset") is not None and target_geo.get("offset") is not None:
+        if registration_matrices[index] is None and source_geo.get("offset") is not None and target_geo.get("offset") is not None:
             shift = [value + source_geo["offset"][axis] - target_geo["offset"][axis]
                      for axis, value in enumerate(shift)]
         shifts.append(shift)
@@ -364,7 +422,8 @@ def merge_level(inputs: list[Path], destination: Path, regions: list[dict],
                         source_point = [struct.unpack_from("<" + code, record, position)[0]
                                         for code, position in xyz[model]]
                         model_axes, factor = transforms[model]
-                        scene_point = rotate_point(rotations[model], scene_vector(source_point, model_axes, factor))
+                        scene_point = rotate_point(rotations[model], apply_registration(
+                            registration_matrices[model], scene_vector(source_point, model_axes, factor)))
                         scene_point = [value + shifts[model][axis] for axis, value in enumerate(scene_point)]
                         point = file_vector(scene_point, target_axes, target_factor)
                         if not all(math.isfinite(value) for value in point):
@@ -375,7 +434,7 @@ def merge_level(inputs: list[Path], destination: Path, regions: list[dict],
                             data = bytearray(record)
                             for axis, (code, position) in enumerate(xyz[model]):
                                 struct.pack_into("<" + code, data, position, point[axis])
-                            size_adjustment = math.log(factor / target_factor)
+                            size_adjustment = math.log(factor * registration[model][0] / target_factor)
                             if size_adjustment:
                                 for code, position in sizes[model]:
                                     original_size = struct.unpack_from("<" + code, record, position)[0]

@@ -30,7 +30,7 @@ test('automatic coarse candidates require explicit preview and can restore manua
     display: {
       getMovingLocalToFixedLocal: () => matrix,
       setMovingLocalToFixedLocal: value => { matrix = value.map(row => [...row]); },
-      getPose: () => ({ position: [matrix[0][3], matrix[1][3], matrix[2][3]], rotation: [0, 0, 0] }),
+      getPose: () => ({ position: [matrix[0][3], matrix[1][3], matrix[2][3]], rotation: [0, 0, 0], scale: Math.abs(matrix[0][0]) }),
     },
     setRunning: value => running.push(value), updatePose: value => poses.push(value),
     invalidateResult: () => { invalidations += 1; }, fitCamera: () => {},
@@ -49,6 +49,7 @@ test('automatic coarse candidates require explicit preview and can restore manua
   assert.equal(runtime.initialSource(), 'manual');
   assert.equal(invalidations, 3);
   assert.ok(poses.length >= 2);
+  assert.ok(poses.every(pose => pose.length === 7 && pose[6] === 1));
   runtime.destroy();
 });
 

@@ -73,11 +73,22 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
           <button id="reset" class="coarse-reset" :disabled="toolbar.locked" @click="emit('toolbar', { type: 'reset' })">重置粗配准</button><div id="registration-roles"><slot name="roles" /></div><div id="coarse-pose-form"><slot name="pose" /></div>
           <details><summary>初始 moving-local→fixed-local</summary><pre id="initial-matrix" class="matrix">{{ view.initialMatrix }}</pre></details>
         </section>
-        <section class="workflow-step"><h2><span>3</span> ICP 精配准</h2><details><summary>ICP 参数</summary><div id="icp-parameters"><slot name="icp" /></div></details><div id="registration-actions-host"><slot name="actions" /></div></section>
+        <section class="workflow-step"><h2><span>3</span> ICP 精配准</h2>
+          <details><summary>ICP 参数</summary><div id="icp-parameters"><slot name="icp" /></div></details><div id="registration-actions-host"><slot name="actions" /></div></section>
         <section class="workflow-step result-summary">
           <h2><span>4</span> 配准结果</h2>
           <pre id="job-status" class="status timeline">{{ result.status }}</pre>
           <p v-if="result.visible && result.result">RMS：{{ result.result.metrics.final_rms.toFixed(6) }} m</p>
+          <p v-if="result.visible && result.result?.metrics.region_moving_point_count && result.result.metrics.region_fixed_point_count" class="step-hint">
+            参与 ICP：移动 {{ result.result.metrics.region_moving_point_count.toLocaleString() }} 点，固定 {{ result.result.metrics.region_fixed_point_count.toLocaleString() }} 点；有效对应 {{ result.result.metrics.final_point_count.toLocaleString() }} 点。
+          </p>
+          <p v-if="result.visible && result.result?.metrics.region_moving_coverage !== undefined && result.result.metrics.region_moving_coverage >= 0" class="step-hint">
+            范围内实测近邻覆盖：移动 {{ (result.result.metrics.region_moving_coverage * 100).toFixed(1) }}%，固定 {{ ((result.result.metrics.region_fixed_coverage ?? 0) * 100).toFixed(1) }}%。
+          </p>
+          <p v-if="result.visible && result.result?.metrics.full_moving_coverage !== undefined && result.result.metrics.full_moving_coverage >= 0" class="step-hint" role="status">
+            全模型验算：移动点近邻覆盖 {{ (result.result.metrics.full_moving_coverage * 100).toFixed(1) }}%，固定点近邻覆盖 {{ ((result.result.metrics.full_fixed_coverage ?? 0) * 100).toFixed(1) }}%（容差 {{ result.result.metrics.full_verification_distance?.toFixed(4) }} m）。
+            {{ Math.min(result.result.metrics.region_moving_coverage ?? 0, result.result.metrics.region_fixed_coverage ?? 0) < 0.5 ? '范围内对应证据不足，请缩小或重绘计算范围。' : Math.min(result.result.metrics.full_moving_coverage, result.result.metrics.full_fixed_coverage ?? 0) >= 0.5 ? '范围外也有较多点支持该矩阵；请在三维场景核对整体位置。' : '全模型重合证据有限；非重叠部分可能正常，请检查场景。若交叉区域错位，请缩小或重绘计算范围。' }}
+          </p>
           <button type="button" :class="{ 'result-ready': result.visible }" :disabled="!result.visible" :aria-expanded="resultOpen" @click="resultOpen = !resultOpen">{{ resultOpen ? '收起结果' : '查看结果' }}</button>
           <section id="result" v-show="resultOpen && result.visible" class="result result-column">
             <RegistrationResultPanel :result="result.result" :direction="result.direction" />
@@ -86,6 +97,9 @@ const corners = [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => ({
       </aside>
       <section ref="viewport" class="viewport">
         <canvas id="viewport"></canvas>
+        <svg id="icp-region-overlay" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3" aria-hidden="true"></svg>
+        <div id="icp-region-hover" class="icp-region-hover" hidden></div>
+        <button id="icp-region-vertex-delete" type="button" class="icp-region-vertex-delete" aria-label="删除计算范围顶点" title="删除顶点" hidden>−</button>
         <ViewportToolbar :session="session" :gaussian="gaussian" :state="toolbar" @command="emit('toolbar', $event)" />
         <div id="iteration-progress" class="viewport-progress" :class="{ completed: result.progressCompleted }" :style="{ top: `${progressTop}px` }"
           role="status" aria-live="polite" :hidden="!result.progressVisible">{{ result.progressText }}</div>

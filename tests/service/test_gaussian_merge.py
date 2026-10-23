@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from service.gaussian_merge import merge_level, read_layout, validate_regions
+from service.gaussian_merge import merge_level, read_layout, validate_regions, registration_components
 
 
 def sample(path, offset, points, geo=True):
@@ -30,6 +30,38 @@ class GaussianMergeTest(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_registration_matrix_aligns_unknown_source_and_gaussian_shape(self):
+        target, source, result = (self.root / name for name in ("target.ply", "source.ply", "merged.ply"))
+        sample(target, (1000, 2000, 10), [(0, 0, 0)])
+        sample(source, (9000, 2000, 10), [(1, 0, 0)], geo=False)
+        matrix = [[0, -2, 0, 5], [2, 0, 0, 7], [0, 0, 2, 0], [0, 0, 0, 1]]
+        merge_level([target, source], result, [], correction=[(0, 0, 0), (1, 0, 0)],
+                    registration_matrices=[None, matrix])
+        layout = read_layout(result)
+        with result.open("rb") as data:
+            data.seek(layout.data_start + layout.stride)
+            row = struct.unpack("<14f", data.read(layout.stride))
+        self.assertEqual(row[:3], (6, 9, 0))
+        self.assertAlmostEqual(row[3], 1 + math.log(2), places=6)
+        self.assertAlmostEqual(row[10], math.sqrt(0.5), places=6)
+        self.assertAlmostEqual(row[13], math.sqrt(0.5), places=6)
+
+    def test_registration_matrix_rejects_shear_mirror_and_target_transform(self):
+        valid = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        for matrix in (
+            [[1, 0.2, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+            [[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+        ):
+            with self.assertRaises(ValueError):
+                registration_components(matrix)
+        target, source, result = (self.root / name for name in ("target.ply", "source.ply", "merged.ply"))
+        sample(target, (1000, 2000, 10), [(0, 0, 0)])
+        sample(source, (1000, 2000, 10), [(0, 0, 0)])
+        with self.assertRaisesRegex(ValueError, "待合入模型"):
+            merge_level([target, source], result, [], registration_matrices=[valid, None])
+        with self.assertRaisesRegex(ValueError, "已有坐标"):
+            merge_level([target, source], result, [], registration_matrices=[None, valid])
 
     def test_merge_offsets_regions_and_attributes(self):
         first, second, result = (self.root / name for name in ("first.ply", "second.ply", "merged.ply"))

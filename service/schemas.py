@@ -12,6 +12,8 @@ class ModelRegistrationRequest(BaseModel):
     sampling_limit: int = 50000
     overlap: float = 1.0
     random_seed: int = 42
+    adjust_scale: bool = False
+    region_polygon: list[list[float]] | None = None
     show_registration_progress: bool = False
     coordinate_space: str = "file"
     initial_source: str = "manual"

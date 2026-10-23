@@ -4,6 +4,9 @@
 #include "registration/icp_registration.hpp"
 #include "registration/reference_cloud_reader.hpp"
 
+#include <array>
+#include <vector>
+
 namespace registration
 {
 enum class MovingModel
@@ -17,6 +20,7 @@ struct BidirectionalRegistrationOptions
 {
     MovingModel movingModel = MovingModel::Auto;
     IcpOptions icp;
+    std::vector<std::array<double, 2>> regionPolygon;
 };
 
 struct BidirectionalRegistrationResult
@@ -32,6 +36,13 @@ struct BidirectionalRegistrationResult
     double scale = 1.0;
     double finalRms = -1.0;
     unsigned finalPointCount = 0;
+    std::size_t regionMovingPointCount = 0;
+    std::size_t regionFixedPointCount = 0;
+    double regionMovingCoverage = -1.0;
+    double regionFixedCoverage = -1.0;
+    double fullMovingCoverage = -1.0;
+    double fullFixedCoverage = -1.0;
+    double fullVerificationDistance = 0.0;
 };
 
 class BidirectionalRegistration

@@ -50,7 +50,7 @@ export interface RegistrationSession {
     status: string;
     result_url?: string;
     output_direction: OutputDirection;
-    parameters: Record<string, number>;
+    parameters: Record<string, number | boolean>;
   }>;
   metadata?: {
     recommended_moving_model: ModelId;
@@ -71,6 +71,8 @@ export interface RegistrationRequest {
   sampling_limit: number;
   overlap: number;
   random_seed: number;
+  adjust_scale: boolean;
+  region_polygon?: [number, number][] | null;
   show_registration_progress: boolean;
   coordinate_space: 'business';
   initial_source: 'manual' | '4pcs' | '4pcs_adjusted';
@@ -86,7 +88,10 @@ export interface RegistrationResult {
   file_b_to_a?: Matrix4;
   business_transforms?: Record<ModelId, { matrix: Matrix4 }>;
   coordinate_space?: 'file' | 'business';
-  metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number };
+  metrics: { final_rms: number; final_point_count: number; elapsed_seconds: number;
+    scale?: number; region_moving_point_count?: number; region_fixed_point_count?: number;
+    region_moving_coverage?: number; region_fixed_coverage?: number;
+    full_moving_coverage?: number; full_fixed_coverage?: number; full_verification_distance?: number };
 }
 
 export interface RegistrationIteration {

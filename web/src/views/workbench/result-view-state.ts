@@ -1,8 +1,8 @@
-import type { RegistrationResult } from '../../api/contracts';
+import type { OutputDirection, RegistrationResult } from '../../api/contracts';
 
 export interface ResultViewState {
   result: RegistrationResult | null;
-  direction: string;
+  direction: OutputDirection;
   visible: boolean;
   status: string;
   progressVisible: boolean;

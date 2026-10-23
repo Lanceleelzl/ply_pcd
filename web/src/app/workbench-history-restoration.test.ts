@@ -11,7 +11,7 @@ test('applies restored roles, known ICP parameters, result and camera in order',
   const icp = createIcpParameterValues();
   const registration = {
     job_id: 'job-1', output_direction: 'b_to_a',
-    parameters: { overlap: 0.75, random_seed: 42, ignored: 9 },
+    parameters: { overlap: 0.75, random_seed: 42, adjust_scale: true, ignored: 9 },
   } as unknown as NonNullable<RegistrationSession['registrations']>[number];
   const result = { moving_model: 'b' } as RegistrationResult;
 
@@ -26,6 +26,7 @@ test('applies restored roles, known ICP parameters, result and camera in order',
   assert.deepEqual(mutableRole, { moving: 'b', direction: 'b_to_a' });
   assert.equal(icp.overlap, '0.75');
   assert.equal(icp.random_seed, '42');
+  assert.equal(icp.adjust_scale, 'true');
   assert.equal('ignored' in icp, false);
   assert.deepEqual(calls, ['roles:true', 'result:job-1', 'status:已恢复最近一次配准结果。', 'fit']);
 });

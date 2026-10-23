@@ -31,5 +31,12 @@ const models = ['a', 'b'] as const;
       <button v-for="model in models" :id="`origin-${model}`" :key="model" :class="{ active: state.axes[model] }" :aria-pressed="state.axes[model]"
         @click="emit('command', { type: 'origin-axes', model })">{{ model.toUpperCase() }} 原点／轴</button>
     </div>
+    <div class="viewport-tool-group" role="group" aria-label="ICP 计算范围">
+      <span class="tool-group-label">计算范围</span>
+      <button id="icp-region-draw" type="button">绘制范围</button>
+      <button id="icp-region-edit" type="button">编辑范围</button>
+      <button id="icp-region-clear" type="button">删除范围</button>
+      <span id="icp-region-status" class="icp-region-status">未设置，使用全模型 ICP</span>
+    </div>
   </div>
 </template>

@@ -15,7 +15,7 @@ namespace registration
 {
 namespace
 {
-void validateRigidTransform(const Matrix4d& matrix)
+void validateInitialTransform(const Matrix4d& matrix)
 {
     constexpr double tolerance = 1.0e-5;
     for (const double value : matrix.values())
@@ -25,13 +25,15 @@ void validateRigidTransform(const Matrix4d& matrix)
     if (std::abs(matrix.at(3, 0)) > tolerance || std::abs(matrix.at(3, 1)) > tolerance
         || std::abs(matrix.at(3, 2)) > tolerance || std::abs(matrix.at(3, 3) - 1.0) > tolerance)
         throw std::runtime_error("Initial matrix must have affine last row [0 0 0 1]");
+    double scaleSquared = 0.0;
     for (std::size_t column = 0; column < 3; ++column)
     {
         double lengthSquared = 0.0;
         for (std::size_t row = 0; row < 3; ++row)
             lengthSquared += matrix.at(row, column) * matrix.at(row, column);
-        if (std::abs(lengthSquared - 1.0) > tolerance)
-            throw std::runtime_error("Initial matrix rotation must not contain scale");
+        if (column == 0) scaleSquared = lengthSquared;
+        if (scaleSquared < 1.0e-12 || std::abs(lengthSquared - scaleSquared) > tolerance * scaleSquared)
+            throw std::runtime_error("Initial matrix must have positive uniform scale");
     }
     for (std::size_t left = 0; left < 3; ++left)
     {
@@ -40,7 +42,7 @@ void validateRigidTransform(const Matrix4d& matrix)
             double dot = 0.0;
             for (std::size_t row = 0; row < 3; ++row)
                 dot += matrix.at(row, left) * matrix.at(row, right);
-            if (std::abs(dot) > tolerance)
+            if (std::abs(dot) > tolerance * scaleSquared)
                 throw std::runtime_error("Initial matrix rotation must be orthogonal");
         }
     }
@@ -48,8 +50,9 @@ void validateRigidTransform(const Matrix4d& matrix)
         matrix.at(0, 0) * (matrix.at(1, 1) * matrix.at(2, 2) - matrix.at(1, 2) * matrix.at(2, 1))
         - matrix.at(0, 1) * (matrix.at(1, 0) * matrix.at(2, 2) - matrix.at(1, 2) * matrix.at(2, 0))
         + matrix.at(0, 2) * (matrix.at(1, 0) * matrix.at(2, 1) - matrix.at(1, 1) * matrix.at(2, 0));
-    if (std::abs(determinant - 1.0) > tolerance)
-        throw std::runtime_error("Initial matrix rotation determinant must be +1");
+    const double expectedDeterminant = std::pow(scaleSquared, 1.5);
+    if (std::abs(determinant - expectedDeterminant) > tolerance * expectedDeterminant)
+        throw std::runtime_error("Initial matrix rotation determinant must be positive");
 }
 
 std::unique_ptr<CCCoreLib::PointCloud> toCloudCompareCloud(const PointCloud& source,
@@ -108,7 +111,7 @@ IcpResult IcpRegistration::registerMovingToFixed(const PointCloud& moving,
     const Matrix4d& initial = genericInitialProvided
         ? options.initialMovingLocalToFixedLocal
         : options.initialPcdToPly;
-    validateRigidTransform(initial);
+    validateInitialTransform(initial);
 
     auto dataCloud = toCloudCompareCloud(moving, &initial);
     auto modelCloud = toCloudCompareCloud(fixed);
@@ -119,7 +122,7 @@ IcpResult IcpRegistration::registerMovingToFixed(const PointCloud& moving,
         : CCCoreLib::ICPRegistrationTools::MAX_ITER_CONVERGENCE;
     parameters.minRMSDecrease = options.minRmsDecrease;
     parameters.nbMaxIterations = options.maxIterations;
-    parameters.adjustScale = options.adjustScale;
+    parameters.adjustScale = false;
     parameters.filterOutFarthestPoints = options.filterOutFarthestPoints;
     parameters.samplingLimit = options.samplingLimit;
     parameters.finalOverlapRatio = options.finalOverlapRatio;
@@ -138,11 +141,42 @@ IcpResult IcpRegistration::registerMovingToFixed(const PointCloud& moving,
     CCCoreLib::PointProjectionTools::Transformation transform;
     double finalRms = -1.0;
     unsigned finalPointCount = 0;
-    const auto status = CCCoreLib::ICPRegistrationTools::Register(
+    auto status = CCCoreLib::ICPRegistrationTools::Register(
         modelCloud.get(), nullptr, dataCloud.get(), parameters,
         transform, finalRms, finalPointCount, nullptr);
     if (status >= CCCoreLib::ICPRegistrationTools::ICP_ERROR)
         throw std::runtime_error("CloudCompare ICP failed with status " + std::to_string(static_cast<int>(status)));
+
+    if (options.adjustScale && finalRms > options.minRmsDecrease)
+    {
+        double initialScaleSquared = 0.0;
+        for (std::size_t row = 0; row < 3; ++row)
+            initialScaleSquared += initial.at(row, 0) * initial.at(row, 0);
+        const double initialScale = std::sqrt(initialScaleSquared);
+        parameters.adjustScale = true;
+        parameters.iterationCallback = {};
+        CCCoreLib::CloudSamplingTools::SetRandomSeed(options.randomSeed);
+        CCCoreLib::PointProjectionTools::Transformation scaledTransform;
+        double scaledRms = -1.0;
+        unsigned scaledPointCount = 0;
+        const auto scaledStatus = CCCoreLib::ICPRegistrationTools::Register(
+            modelCloud.get(), nullptr, dataCloud.get(), parameters,
+            scaledTransform, scaledRms, scaledPointCount, nullptr);
+        // A free scale must explain substantially more than the rigid solution.
+        // The same seed and input clouds make this comparison reproducible.
+        if (scaledStatus < CCCoreLib::ICPRegistrationTools::ICP_ERROR
+            && std::isfinite(scaledTransform.s) && scaledTransform.s > 0.0
+            && std::abs(std::log(scaledTransform.s)) >= (std::abs(initialScale - 1.0) < 1.0e-12 ? 0.02 : 0.005)
+            && finalRms > 0.0 && scaledRms >= 0.0
+            && scaledRms <= finalRms * 0.95
+            && scaledPointCount >= finalPointCount * 0.95)
+        {
+            status = scaledStatus;
+            transform = scaledTransform;
+            finalRms = scaledRms;
+            finalPointCount = scaledPointCount;
+        }
+    }
 
     IcpResult result;
     result.initialMovingLocalToFixedLocal = initial;
@@ -156,7 +190,11 @@ IcpResult IcpRegistration::registerMovingToFixed(const PointCloud& moving,
     result.refinementPcdToPly = result.refinementMovingLocalToFixedLocal;
     result.pcdToPly = result.movingLocalToFixedLocal;
     result.plyToPcd = result.fixedLocalToMovingLocal;
-    result.scale = transform.s;
+    double finalScaleSquared = 0.0;
+    for (std::size_t row = 0; row < 3; ++row)
+        finalScaleSquared += result.movingLocalToFixedLocal.at(row, 0)
+            * result.movingLocalToFixedLocal.at(row, 0);
+    result.scale = std::sqrt(finalScaleSquared);
     result.finalRms = finalRms;
     result.finalPointCount = finalPointCount;
     return result;

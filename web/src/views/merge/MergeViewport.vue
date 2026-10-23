@@ -222,12 +222,25 @@ function top() {
   camera?.setViewDirection(new pc.Vec3(0, 0, 1), new pc.Vec3(0, 1, 0));
 }
 function fit() { camera?.fit(); top(); }
+function centerModels() {
+  const min = new pc.Vec3(Infinity, Infinity, Infinity);
+  const max = new pc.Vec3(-Infinity, -Infinity, -Infinity);
+  props.samples.forEach((points, index) => {
+    if (props.visibleModels[index] === false) return;
+    for (const point of points) {
+      min.min(new pc.Vec3(point[0], point[1], point[2]));
+      max.max(new pc.Vec3(point[0], point[1], point[2]));
+    }
+  });
+  if (Number.isFinite(min.x)) camera?.frame({ min, max });
+}
+function resetView() { camera?.resetToOrigin(); top(); }
 function perspective() {
   topLocked.value = false;
   camera?.setProjection(false);
   camera?.setViewDirection(new pc.Vec3(1, -1, 1), new pc.Vec3(0, 0, 1));
 }
-defineExpose({ top });
+defineExpose({ top, centerModels, resetView });
 function drawRegions() {
   if (!application) return;
   drawSelectedOrigin();
