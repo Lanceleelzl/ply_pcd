@@ -916,14 +916,15 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
         <template v-else>
           <template v-if="task.versions.length">
-            <label>恢复成果版本设置<select v-model="restoreVersionId"><option value="">选择成果版本</option><option v-for="(version, index) in task.versions" :key="version.version" :value="version.version">成果 {{ index + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</option></select></label>
+            <label>成果版本<select v-model="restoreVersionId"><option value="">全部成果</option><option v-for="(version, index) in task.versions" :key="version.version" :value="version.version">成果 {{ index + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</option></select></label>
             <button type="button" :disabled="taskOperationBusy || !restoreVersionId" @click="restoreVersion(task.versions.find(version => version.version === restoreVersionId)!)">恢复该版编辑设置</button>
             <p>恢复边界、变换、坐标与目标层级，新增一步编辑历史；已有成果保留，不重新处理。</p>
           </template>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_status === 'failed' ? '失败' : task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 <EditorFailureFlag v-if="task.process_error" :reason="task.process_error" /></p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_status === 'failed' ? '失败' : task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> <EditorFailureFlag v-if="task.export_error" :reason="task.export_error" /></p>
           <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_status === 'failed' ? '失败' : task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> <EditorFailureFlag v-if="task.streamed_export_error" :reason="task.streamed_export_error" /></p>
-          <section v-for="(version, versionIndex) in task.versions" :key="version.version">
+          <template v-for="(version, versionIndex) in task.versions" :key="version.version">
+          <section v-if="!restoreVersionId || version.version === restoreVersionId">
             <h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3>
             <p v-for="item in version.levels" :key="item.level">
               LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br>
@@ -945,6 +946,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
               </template>
             </p>
           </section>
+          </template>
           <div v-if="!task.versions.length">
             <p>先处理选中层级，再按层生成单文件 SOG，或将整组层级生成为流式 SOG。</p>
             <button type="button" @click="panel = 'lod'">选择并处理层级</button>
