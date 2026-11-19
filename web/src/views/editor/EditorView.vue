@@ -622,6 +622,15 @@ async function selectDerived(item: EditorTask['derived_lods'][number] | null): P
     decimation: item ? { version: item.version, level: item.source_level,
       target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
+type PlyDestination = { directory: FileSystemDirectoryHandle; stem: string };
+const pendingPlyManifests = new Map<string, PlyDestination>();
+
+async function choosePlyDestination(level: number): Promise<PlyDestination> {
+  const browser = window as Window & { showDirectoryPicker?: (options: { mode: 'readwrite' }) => Promise<FileSystemDirectoryHandle> };
+  if (!browser.showDirectoryPicker) throw new Error('当前浏览器不支持选择保存目录，请使用 Chrome 或 Edge。');
+  const directory = await browser.showDirectoryPicker({ mode: 'readwrite' });
+  return { directory, stem: `lod-${level}-edited` };
+}
 async function saveResult(version: string, level: number, format: ResultFormat): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id || downloadBusy.value) return;
   const taskId = task.value.task_id;
@@ -630,7 +639,7 @@ async function saveResult(version: string, level: number, format: ResultFormat):
   const key = resultKey(version, level, format);
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
     Promise<{ createWritable(): Promise<EditorWritable> }> }).showSaveFilePicker;
-  if (!picker) {
+  if (format !== 'ply' && !picker) {
     feedback.value[key] = { action: generate ? '生成' : '保存', detail: '无法选择保存位置，请使用支持文件保存的 Chrome 或 Edge。' };
     return;
   }
@@ -641,7 +650,10 @@ async function saveResult(version: string, level: number, format: ResultFormat):
   let response: Response | null = null;
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
-    const handle = await picker({ suggestedName: format === 'streamed_sog'
+    const manifestKey = `${taskId}:${key}`;
+    const pending = pendingPlyManifests.get(manifestKey);
+    const destination = format === 'ply' ? pending ?? await choosePlyDestination(level) : null;
+    const handle = destination ? null : await picker!({ suggestedName: format === 'streamed_sog'
       ? `gaussian-editor-${version}-streamed-sog.zip` : `lod-${level}-edited.${suffix}` });
     controller.signal.throwIfAborted();
     if (generate && format !== 'ply') {
@@ -671,28 +683,47 @@ async function saveResult(version: string, level: number, format: ResultFormat):
     }
     stage = 'save';
     feedback.value[key] = { action: '正在保存' };
-    downloadProgress.value = { taskId, loaded: 0, total: null, startedAt: Date.now() };
-    response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
-      : format === 'streamed_sog' ? editorStreamedUrl(taskId, version)
-      : editorExportUrl(taskId, version, level, format), { signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
-    downloadProgress.value.total = downloadLength(response);
-    const writable = await handle.createWritable();
-    await saveEditorResponse(response, writable, controller.signal,
-      loaded => {
-        if (!downloadProgress.value) return;
-        downloadProgress.value.loaded = loaded;
-        const total = downloadProgress.value.total;
-        feedback.value[key].detail = total ? `${Math.round(loaded * 100 / total)}%` : `${(loaded / 1048576).toFixed(1)} MiB`;
-      },
-      () => { downloadClosing.value = true; feedback.value[key].detail = '正在完成文件保存…'; });
-    if (route.params.taskId === taskId) feedback.value[key] = { action: '再次保存', detail: '已保存' };
+    if (!pending) {
+      downloadProgress.value = { taskId, loaded: 0, total: null, startedAt: Date.now() };
+      response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
+        : format === 'streamed_sog' ? editorStreamedUrl(taskId, version)
+        : editorExportUrl(taskId, version, level, format), { signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
+      downloadProgress.value.total = downloadLength(response);
+      const model = handle ?? await destination!.directory.getFileHandle(`${destination!.stem}.ply`, { create: true });
+      const writable = await model.createWritable();
+      await saveEditorResponse(response, writable, controller.signal,
+        loaded => {
+          if (!downloadProgress.value) return;
+          downloadProgress.value.loaded = loaded;
+          const total = downloadProgress.value.total;
+          feedback.value[key].detail = total ? `${Math.round(loaded * 100 / total)}%` : `${(loaded / 1048576).toFixed(1)} MiB`;
+        },
+        () => { downloadClosing.value = true; feedback.value[key].detail = '正在完成文件保存…'; });
+      if (destination) pendingPlyManifests.set(manifestKey, destination);
+    }
+    if (destination) {
+      downloadClosing.value = false;
+      downloadProgress.value = null;
+      controller.signal.throwIfAborted();
+      feedback.value[key].detail = 'PLY 已保存，正在保存坐标说明…';
+      response = await apiFetch(editorManifestUrl(taskId, version, level, 'ply'), { signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const file = await destination.directory.getFileHandle(`${destination.stem}-ply-manifest.json`, { create: true });
+      await saveEditorResponse(response, await file.createWritable(), controller.signal, () => {});
+      pendingPlyManifests.delete(manifestKey);
+    }
+    if (route.params.taskId === taskId) feedback.value[key] = { action: '再次保存', detail: destination ? 'PLY 和坐标说明已保存' : '已保存' };
   } catch (error) {
     if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
     if (route.params.taskId !== taskId) return;
     const cancelled = error instanceof Error && error.name === 'AbortError';
     if (stage === 'pick' && cancelled) return;
     const reason = error instanceof Error ? error.message : String(error);
+    if (format === 'ply' && pendingPlyManifests.has(`${taskId}:${key}`)) {
+      feedback.value[key] = { action: '补存坐标说明', detail: `PLY 已保存，坐标说明保存失败：${reason}` };
+      return;
+    }
     const generationFailed = stage === 'generate';
     feedback.value[key] = {
       action: generationFailed ? '重新生成' : stage === 'pick' && generate ? '生成' : '重新保存',
@@ -894,7 +925,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
             <h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3>
             <p v-for="item in version.levels" :key="item.level">
               LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br>
-              <small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small>
+              <small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；坐标说明随 PLY 保存到同一目录。</small>
               <small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small>
               <br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'">
               <template v-for="format in resultFormats" :key="format">
@@ -905,7 +936,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
                   {{ formats[format] }}{{ format === 'streamed_sog' && version.levels.length > 1 ? '（整组）' : '' }}
                 </button>
                 <small v-if="feedback[resultKey(version.version, item.level, format)]?.detail" role="status">{{ feedback[resultKey(version.version, item.level, format)].detail }}</small>
-                <button v-if="format !== 'streamed_sog' && hasResult(task, version.version, item.level, format)" type="button"
+                <button v-if="(format === 'compressed_ply' || format === 'sog') && hasResult(task, version.version, item.level, format)" type="button"
                   @click="downloadManifest(version.version, item.level, format)">{{ formats[format] }} 坐标说明</button>
               </template>
             </p>

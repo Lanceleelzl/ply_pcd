@@ -1,5 +1,5 @@
 export type EditorWritable = {
-  write(value: Uint8Array): Promise<void>;
+  write(value: Uint8Array<ArrayBuffer>): Promise<void>;
   close(): Promise<void>;
   abort(): Promise<void>;
 };
@@ -12,7 +12,7 @@ export function downloadLength(response: Response): number | null {
 
 export async function saveEditorResponse(response: Response, writable: EditorWritable, signal: AbortSignal,
   progress: (loaded: number) => void, closing: () => void = () => {}): Promise<void> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | undefined;
   const cancel = () => { void reader?.cancel().catch(() => {}); };
   try {
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
