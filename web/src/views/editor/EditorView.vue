@@ -51,7 +51,7 @@ function cancelDownload(): void { downloadController?.abort(); }
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const historyBusy = ref(false);
 const historyRecoveryKey = ref(0);
-const formats = { ply: 'PLY', compressed_ply: 'Compressed PLY', sog: '单个 SOG', streamed_sog: '流式 SOG' } as const;
+const formats = { ply: 'PLY', compressed_ply: 'Compressed PLY', sog: 'SOG', streamed_sog: 'Streamed SOG' } as const;
 type ResultFormat = keyof typeof formats;
 const resultFormats = Object.keys(formats) as ResultFormat[];
 const feedback = ref<Record<string, { action: string; detail?: string; error?: string }>>({});
@@ -931,15 +931,15 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
               <small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small>
               <br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'">
               <template v-for="format in resultFormats" :key="format">
-                <br v-if="format === 'sog'">
                 <button type="button" :disabled="downloadBusy || (!hasResult(task, version.version, item.level, format) && taskOperationBusy)"
+                  :title="`${feedback[resultKey(version.version, item.level, format)]?.action || (hasResult(task, version.version, item.level, format) ? '保存' : '生成')} ${formats[format]}${format === 'streamed_sog' && version.levels.length > 1 ? '（整组）' : ''}`"
                   @click="saveResult(version.version, item.level, format)">
-                  {{ feedback[resultKey(version.version, item.level, format)]?.action || (hasResult(task, version.version, item.level, format) ? '保存' : '生成') }}
-                  {{ formats[format] }}{{ format === 'streamed_sog' && version.levels.length > 1 ? '（整组）' : '' }}
+                  {{ formats[format] }}
                 </button>
                 <EditorFailureFlag v-if="feedback[resultKey(version.version, item.level, format)]?.error"
                   :reason="feedback[resultKey(version.version, item.level, format)].error!" />
                 <small v-if="feedback[resultKey(version.version, item.level, format)]?.detail" role="status">{{ feedback[resultKey(version.version, item.level, format)].detail }}</small>
+                <small v-else-if="feedback[resultKey(version.version, item.level, format)]?.action.startsWith('正在')" role="status">{{ feedback[resultKey(version.version, item.level, format)].action }}…</small>
                 <button v-if="(format === 'compressed_ply' || format === 'sog') && hasResult(task, version.version, item.level, format)" type="button"
                   @click="downloadManifest(version.version, item.level, format)">{{ formats[format] }} 坐标说明</button>
               </template>
