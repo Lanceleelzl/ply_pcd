@@ -56,7 +56,7 @@ API 鉴权默认关闭。生产部署可设置 `REGISTRATION_AUTH_ENABLED=true`�
 
 工作台采用顶部应用栏、左侧模型与业务矩阵、中央三维视口、右侧工具与配准检查器、底部结果区。剖切、原点平面和坐标查询停靠右侧；窄屏按纵向排列，参数和执行操作仍可访问。当前选定的移动模型可平移和旋转，粗配准不提供缩放，文件格式不决定模型角色。默认加载轻量中心点；包含完整 Gaussian 属性的模型可按需加载 Gaussian，Streamed SOG 及由 LCC／LCC2 转换的数据保留流式 LOD，切回中心点时卸载显示资源。
 
-`pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。没有 Visual Studio 2022 时直接使用仓库提供的 Worker；有 Visual Studio 2022 时可执行 `pnpm run build:native` 编译并自动替换它。
+`pnpm install` 自动管理项目内 Python 3.12、锁定的 Python 包和预编译 C++ Worker。部署始终校验并使用仓库提供的 Worker，不自动调用 Visual Studio 或 CMake。交付文件缺失或与源码不匹配时，请更新完整的匹配版本。维护者修改原生源码后，须在 VS 2022 C++ 与 CMake 3.25+ 环境执行 `pnpm run build:native`，验证后将源码、`runtime-bin/win32-x64/registration_worker.exe` 与 `manifest.json` 一起提交。
 
 结果区分别展示业务场景转换矩阵和原始模型坐标转换矩阵，并标明 A→B／B→A 方向。业务使用 `a_to_b` 或 `b_to_a`；原始文件坐标换算使用 `file_a_to_b` 或 `file_b_to_a`，两套矩阵均支持复制。
 

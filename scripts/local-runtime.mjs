@@ -195,6 +195,10 @@ async function buildNative() {
     throw new Error("Visual Studio 2022 C++ Build Tools were not found. Ordinary users can run pnpm run dev with the provided prebuilt worker.");
   }
   console.log("[native] Building registration_worker with Visual Studio 2022...");
+  const cmake = spawnSync("cmake", ["--version"], { encoding: "utf8", windowsHide: true });
+  if (cmake.error || cmake.status !== 0) {
+    throw new Error("CMake is unavailable. Maintainers must install CMake 3.25+ and make cmake available on PATH before running pnpm run build:native. Deployment users should use the complete prebuilt delivery.");
+  }
   run("cmake", ["--preset", "windows-release"]);
   run("cmake", ["--build", "--preset", "windows-release"]);
   const built = join(root, "build", "windows-release", "Release", "registration_worker.exe");
@@ -209,19 +213,12 @@ async function buildNative() {
 async function ensureWorker() {
   const target = prebuiltPaths();
   if (!existsSync(target.binary) || !existsSync(target.manifest)) {
-    if (visualStudioAvailable()) await buildNative();
-    else throw new Error("The prebuilt worker is missing and Visual Studio 2022 is not installed.");
+    throw new Error("Prebuilt delivery is incomplete: registration_worker.exe or manifest.json is missing. Update to a complete matching release. Maintainers: run pnpm run build:native and deliver the worker and manifest together.");
   }
-  let manifest = JSON.parse(await readFile(target.manifest, "utf8"));
+  const manifest = JSON.parse(await readFile(target.manifest, "utf8"));
   const sourceHash = await nativeSourceHash();
   if (manifest.source_sha256 !== sourceHash) {
-    if (visualStudioAvailable()) {
-      console.log("[native] C++ source changed; rebuilding and replacing the prebuilt worker...");
-      await buildNative();
-      manifest = JSON.parse(await readFile(target.manifest, "utf8"));
-    } else {
-      throw new Error("C++ source differs from the provided worker. Install Visual Studio 2022 Build Tools or restore the matching source before running.");
-    }
+    throw new Error("Prebuilt delivery does not match the C++ source. Update to a complete matching release; deployment does not require CMake or Visual Studio. Maintainers: run pnpm run build:native, verify, and deliver the source, worker and manifest together.");
   }
   const workerBytes = await readFile(target.binary);
   const workerHash = createHash("sha256").update(workerBytes).digest("hex");
