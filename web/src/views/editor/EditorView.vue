@@ -25,6 +25,7 @@ const route = useRoute();
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const task = ref<EditorTask | null>(null);
+const newestHistoryFirst = computed(() => (task.value?.history ?? []).map((step, index) => ({ step, index })).reverse());
 const taskLoading = ref(false);
 const taskLoadError = ref('');
 function retryTask(): void { taskLoadError.value = ''; taskLoading.value = true; void refresh(); }
@@ -801,8 +802,10 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         @move-volume-radius="moveVolumeRadius"
         @move-box-size="moveBoxSize" @rotate-box="rotateBox" @notify="message = $event"
         @clear-notify="clearNotify">
-        <template #tools>
+        <template #level-tool>
           <button type="button" @click="panel = panel === 'lod' ? null : 'lod'">层级／抽稀</button>
+        </template>
+        <template #tools>
           <button type="button" @click="panel = panel === 'bounds' ? null : 'bounds'">边界</button>
           <button type="button" @click="panel = panel === 'slice' ? null : 'slice'">剖切</button>
           <button type="button" @click="panel = panel === 'coordinates' ? null : 'coordinates'">坐标</button>
@@ -913,7 +916,13 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" :disabled="coordinateBusy || !lastPoint || !currentState.geography" @click="queryCoordinates">{{ coordinateBusy ? '正在转换…' : '查询取点坐标' }}</button>
           <template v-if="coordinateResult"><p>独立场景坐标：{{ coordinateResult.independent.join('，') }}</p><p>原 EPSG 投影坐标：{{ coordinateResult.projected.join('，') }}</p><p>WGS84：{{ coordinateResult.longitude.toFixed(8) }}°，{{ coordinateResult.latitude.toFixed(8) }}°</p><p>{{ coordinateResult.height_note }}</p></template>
         </template>
-        <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
+        <ol v-else-if="panel === 'history'" class="editor-history">
+          <li v-for="{ step, index } in newestHistoryFirst" :key="index">
+            <button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">
+              {{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small>
+            </button>
+          </li>
+        </ol>
         <template v-else>
           <template v-if="task.versions.length">
             <label>成果版本<select v-model="restoreVersionId"><option value="">全部成果</option><option v-for="(version, index) in task.versions" :key="version.version" :value="version.version">成果 {{ index + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</option></select></label>
@@ -977,6 +986,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 @keyframes editor-wait-spin { to { transform: rotate(360deg); } }
 .editor-panel { position: absolute; z-index: 5; top: var(--editor-toolbar-bottom, 60px); bottom: 58px; left: 12px; box-sizing: border-box; width: min(360px, calc(100% - 24px)); overflow: auto; padding: 14px; border: 1px solid #42617d; border-radius: 9px; background: #102136f2; box-shadow: 0 12px 36px #0008; }
 .editor-panel-history, .editor-panel-results { right: 12px; left: auto; }
+.editor-panel-history { display: flex; flex-direction: column; overflow: hidden; }
+.editor-panel-history header { flex: none; }
+.editor-panel-history .editor-history { overflow-y: auto; margin: 4px 0 0; padding-right: 6px; }
 .editor-panel header { display: flex; justify-content: space-between; align-items: center; }.editor-panel header h2 { margin: 0 0 12px; font-size: 18px; }
 .editor-panel button { margin: 3px; padding: 7px 9px; border: 1px solid #4a6a84; border-radius: 6px; color: #edf5ff; background: #17334c; }
 .editor-panel label { display: block; margin: 10px 0; }.editor-panel :is(input[type=number], select) { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 7px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }

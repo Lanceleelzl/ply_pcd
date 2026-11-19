@@ -69,7 +69,7 @@ let draggingRotation: { axis: XYZ; reference: XYZ; center: XYZ; base: [number, n
 let engine: SingleModelEngine | null = null;
 let aborter: AbortController | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
-let boundaryTimer: ReturnType<typeof setInterval> | null = null;
+let boundaryFrame: pc.EventHandle | undefined;
 let loadingTimer: ReturnType<typeof setInterval> | null = null;
 let lastGaussianError = '';
 let displayGeneration = 0;
@@ -620,9 +620,9 @@ watch(() => props.drawingPolygon, value => {
 
 watch([canvas, () => props.previewUrl], async ([element, url]) => {
   invalidateGaussianLoad();
+  boundaryFrame?.off();
   aborter?.abort(); engine?.destroy(); engine = null; loaded.value = false; previewCount.value = null; sampleCount.value = 0;
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-  if (boundaryTimer) { clearInterval(boundaryTimer); boundaryTimer = null; }
   if (!element || !url) return;
   const request = new AbortController(); aborter = request;
   try {
@@ -667,15 +667,14 @@ watch([canvas, () => props.previewUrl], async ([element, url]) => {
         }
       } else slowFpsSamples = 0;
     }, 500);
-    boundaryTimer = setInterval(updateBoundaryLines, 50);
+    boundaryFrame = engine.application.app.on('postrender', updateBoundaryLines);
   } catch (error) {
     if (!request.signal.aborted) emit('notify', error instanceof Error ? error.message : String(error));
   }
 }, { immediate: true, flush: 'post' });
 watch([() => props.gaussianUrl, () => props.gaussianLod], () => { displayPoints(); });
 watch(() => JSON.stringify(props.transform), () => { engine?.applyTransform(props.transform); applyRules(); });
-onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer);
-  if (boundaryTimer) clearInterval(boundaryTimer); });
+onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); boundaryFrame?.off(); engine?.destroy(); if (statsTimer) clearInterval(statsTimer); });
 </script>
 
 <template>
@@ -721,6 +720,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
       </circle>
     </svg>
     <div ref="toolbar" class="editor-scene-tools">
+      <slot name="level-tool" />
       <button type="button" @click="fit">适配视角</button>
       <button type="button" :class="{ active: topView }" @click="toggleTop">{{ topView ? '返回三维' : '俯视' }}</button>
       <button type="button" :class="{ active: query }" @click="toggleQuery">场景取点</button>

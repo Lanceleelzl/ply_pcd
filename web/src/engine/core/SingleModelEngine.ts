@@ -357,7 +357,7 @@ export class SingleModelEngine {
       }
       this.onSceneAxes?.(labels);
     }
-    if (this.queryPicking && this.capturePointer) {
+    if (this.onCapture && this.queryPicking && this.capturePointer) {
       const camera = this.application.camera;
       const signature = `${camera.getWorldTransform().data.join(',')},${camera.camera!.orthoHeight},${camera.camera!.fov},${camera.camera!.aspectRatio}`;
       if (this.captureDirty || signature !== this.captureCamera) {
