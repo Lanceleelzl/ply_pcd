@@ -29,7 +29,7 @@
   "dependencies": {
     "@playcanvas/splat-transform": "3.4.2",
     "pinia": "3.0.4",
-    "playcanvas": "2.21.3",
+    "playcanvas": "^2.24.2",
     "vue": "3.5.42",
     "vue-router": "4.6.4"
   },

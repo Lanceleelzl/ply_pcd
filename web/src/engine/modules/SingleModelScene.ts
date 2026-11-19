@@ -73,6 +73,8 @@ export class SingleModelScene {
   }
 
   private refreshRulePreview(): number {
+    const mesh = this.points.render?.meshInstances[0]?.mesh;
+    if (!mesh) return 0;
     const source = this.cloud.positions;
     const output = new Float32Array(source.length);
     const matrix = transformParametersMatrix(this.transform);
@@ -84,7 +86,6 @@ export class SingleModelScene {
       output.set(source.subarray(offset, offset + 3), visible * 3);
       visible++;
     }
-    const mesh = this.points.render!.meshInstances[0].mesh;
     mesh.setPositions(output.subarray(0, visible * 3));
     mesh.update(pc.PRIMITIVE_POINTS, false);
     return visible;
