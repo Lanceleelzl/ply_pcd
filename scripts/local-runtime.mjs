@@ -135,6 +135,7 @@ async function ensureUv() {
 async function nativeFiles(directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await nativeFiles(path));
     else if (relative(root, path).replaceAll("\\", "/") !== "cpp/vendor/laszip/docs/Makefile") files.push(path);
