@@ -50,7 +50,18 @@ function cancelDownload(): void { downloadController?.abort(); }
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const historyBusy = ref(false);
 const historyRecoveryKey = ref(0);
-const submittingExport = ref<string | null>(null);
+const formats = { ply: 'PLY', compressed_ply: 'Compressed PLY', sog: '单个 SOG', streamed_sog: '流式 SOG' } as const;
+type ResultFormat = keyof typeof formats;
+const resultFormats = Object.keys(formats) as ResultFormat[];
+const feedback = ref<Record<string, { action: string; detail?: string }>>({});
+function resultKey(version: string, level: number, format: ResultFormat) {
+  return [version, format, format === 'streamed_sog' ? 'group' : level].join(':');
+}
+function hasResult(state: EditorTask, version: string, level: number, format: ResultFormat) {
+  if (format === 'ply') return true;
+  if (format === 'streamed_sog') return state.streamed_exports?.some(entry => entry.version === version);
+  return state.exports?.some(entry => entry.version === version && entry.level === level && entry.format === format);
+}
 const taskOperationBusy = computed(() => historyBusy.value || !!submittingTask.value || [task.value?.process_status,
   task.value?.decimate_status, task.value?.export_status, task.value?.streamed_export_status].some(status => status === 'queued' || status === 'running'));
 const prepareElapsed = computed(() => task.value?.prepare_started_at_unix
@@ -179,7 +190,7 @@ async function refresh(): Promise<void> {
   try {
     if (typeof id === 'string') {
       const loaded = await loadEditorTask(id);
-      if (route.params.taskId !== id || (task.value?.task_id === id
+      if (route.params.taskId !== id || submittingTask.value === 'export' || (task.value?.task_id === id
         && (revision !== editRevision || historyBusy.value))) return;
       task.value = loaded;
       if (geographyTaskId !== id) {
@@ -213,13 +224,15 @@ async function refresh(): Promise<void> {
   }
 }
 watch(() => route.params.taskId, id => {
+  if (!downloadClosing.value) downloadController?.abort();
+  feedback.value = {};
   task.value = null; taskLoading.value = typeof id === 'string'; taskLoadError.value = ''; geographyTaskId = '';
   lastPoint.value = null; coordinateResult.value = null; restoreVersionId.value = '';
   polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false; drawingRectangle.value = false;
   editingVolume.value = null; volumeDraft.value = null; message.value = ''; panel.value = 'lod';
   void refresh();
 }, { immediate: true });
-timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId && !taskLoadError.value) void refresh(); }, 1500);
+timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId && !taskLoadError.value && submittingTask.value !== 'export') void refresh(); }, 1500);
 onMounted(() => window.addEventListener('keydown', historyShortcut));
 onUnmounted(() => { if (timer) clearInterval(timer); window.removeEventListener('keydown', historyShortcut);
   if (!downloadClosing.value) downloadController?.abort(); });
@@ -609,46 +622,55 @@ async function selectDerived(item: EditorTask['derived_lods'][number] | null): P
     decimation: item ? { version: item.version, level: item.source_level,
       target_count: item.target_count, retain_percent: item.retain_percent } : null });
 }
-async function convertExport(version: string, level: number, format: 'compressed_ply' | 'sog'): Promise<void> {
-  if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
-  const taskId = task.value.task_id;
-  submittingTask.value = 'export';
-  submittingExport.value = `${version}:${level}:${format}`;
-  try {
-    const updated = await exportEditorResult(taskId, version, level, format);
-    if (route.params.taskId === taskId && task.value?.task_id === taskId) {
-      task.value = updated; panel.value = 'results';
-    }
-  }
-  catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
-  finally { submittingTask.value = null; submittingExport.value = null; }
-}
-async function convertStreamed(version: string): Promise<void> {
-  if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
-  const taskId = task.value.task_id;
-  submittingTask.value = 'export';
-  submittingExport.value = `${version}:streamed_sog`;
-  try {
-    const updated = await exportEditorStreamed(taskId, version);
-    if (route.params.taskId === taskId && task.value?.task_id === taskId) task.value = updated;
-  } catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
-  finally { submittingTask.value = null; submittingExport.value = null; }
-}
-async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' | 'streamed_sog' = 'ply'): Promise<void> {
+async function saveResult(version: string, level: number, format: ResultFormat): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id || downloadBusy.value) return;
   const taskId = task.value.task_id;
+  const generate = !hasResult(task.value, version, level, format);
+  if (generate && taskOperationBusy.value) return;
+  const key = resultKey(version, level, format);
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
     Promise<{ createWritable(): Promise<EditorWritable> }> }).showSaveFilePicker;
-  if (!picker) { message.value = '当前浏览器不支持大文件流式保存，请使用 Chrome 或 Edge'; return; }
-  downloadBusy.value = true;
-  message.value = '';
+  if (!picker) {
+    feedback.value[key] = { action: generate ? '生成' : '保存', detail: '无法选择保存位置，请使用支持文件保存的 Chrome 或 Edge。' };
+    return;
+  }
   const controller = new AbortController();
   downloadController = controller;
+  downloadBusy.value = true;
+  let stage: 'pick' | 'generate' | 'save' = 'pick';
   let response: Response | null = null;
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
     const handle = await picker({ suggestedName: format === 'streamed_sog'
       ? `gaussian-editor-${version}-streamed-sog.zip` : `lod-${level}-edited.${suffix}` });
+    controller.signal.throwIfAborted();
+    if (generate && format !== 'ply') {
+      stage = 'generate';
+      submittingTask.value = 'export';
+      feedback.value[key] = { action: '正在生成' };
+      let state = format === 'streamed_sog' ? await exportEditorStreamed(taskId, version)
+        : await exportEditorResult(taskId, version, level, format);
+      while (true) {
+        controller.signal.throwIfAborted();
+        task.value = state;
+        if (hasResult(state, version, level, format)) break;
+        const streamed = format === 'streamed_sog';
+        const status = streamed ? state.streamed_export_status : state.export_status;
+        if (status !== 'queued' && status !== 'running') {
+          throw new Error((streamed ? state.streamed_export_error : state.export_error) || '未找到生成的成果');
+        }
+        const percent = streamed ? state.streamed_export_progress : state.export_progress;
+        feedback.value[key] = { action: '正在生成', detail: [
+          streamed ? state.streamed_export_phase : state.export_phase,
+          percent == null ? '' : `${percent}%`,
+        ].filter(Boolean).join(' · ') };
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        controller.signal.throwIfAborted();
+        state = await loadEditorTask(taskId);
+      }
+    }
+    stage = 'save';
+    feedback.value[key] = { action: '正在保存' };
     downloadProgress.value = { taskId, loaded: 0, total: null, startedAt: Date.now() };
     response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
       : format === 'streamed_sog' ? editorStreamedUrl(taskId, version)
@@ -657,15 +679,29 @@ async function download(version: string, level: number, format: 'ply' | 'compres
     downloadProgress.value.total = downloadLength(response);
     const writable = await handle.createWritable();
     await saveEditorResponse(response, writable, controller.signal,
-      loaded => { if (downloadProgress.value) downloadProgress.value.loaded = loaded; },
-      () => { downloadClosing.value = true; });
-    if (route.params.taskId === taskId) message.value = '成果下载完成';
+      loaded => {
+        if (!downloadProgress.value) return;
+        downloadProgress.value.loaded = loaded;
+        const total = downloadProgress.value.total;
+        feedback.value[key].detail = total ? `${Math.round(loaded * 100 / total)}%` : `${(loaded / 1048576).toFixed(1)} MiB`;
+      },
+      () => { downloadClosing.value = true; feedback.value[key].detail = '正在完成文件保存…'; });
+    if (route.params.taskId === taskId) feedback.value[key] = { action: '再次保存', detail: '已保存' };
   } catch (error) {
     if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
-    if (route.params.taskId === taskId) message.value = error instanceof Error && error.name === 'AbortError'
-      ? '已取消成果保存，未提交不完整文件' : error instanceof Error ? error.message : String(error);
+    if (route.params.taskId !== taskId) return;
+    const cancelled = error instanceof Error && error.name === 'AbortError';
+    if (stage === 'pick' && cancelled) return;
+    const reason = error instanceof Error ? error.message : String(error);
+    const generationFailed = stage === 'generate';
+    feedback.value[key] = {
+      action: generationFailed ? '重新生成' : stage === 'pick' && generate ? '生成' : '重新保存',
+      detail: cancelled ? '已取消保存' : `${generationFailed ? '生成失败' : '保存失败'}：${reason}`,
+    };
+  } finally {
+    if (submittingTask.value === 'export') submittingTask.value = null;
+    downloadProgress.value = null; downloadBusy.value = false; downloadClosing.value = false; downloadController = null;
   }
-  finally { downloadProgress.value = null; downloadBusy.value = false; downloadClosing.value = false; downloadController = null; }
 }
 async function downloadManifest(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog'): Promise<void> {
   if (!task.value) return;
@@ -854,9 +890,30 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> {{ task.export_error }}</p>
           <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> {{ task.streamed_export_error }}</p>
-          <section v-for="(version, versionIndex) in task.versions" :key="version.version"><h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
-          <section v-for="(version, versionIndex) in task.versions" :key="`${version.version}-streamed`"><h3>成果 {{ versionIndex + 1 }} · Streamed SOG</h3><p><template v-if="task.streamed_exports?.some(item => item.version === version.version)"><button type="button" :disabled="downloadBusy" @click="download(version.version, -1, 'streamed_sog')">下载整组 Streamed SOG ZIP</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertStreamed(version.version)">{{ submittingExport === `${version.version}:streamed_sog` ? '正在提交流式生成…' : '生成整组 Streamed SOG' }}</button><br><small>仅连续、点数递减的成果层级可生成；新生成的 ZIP 内含各层坐标说明，流式模型本身不保证携带 PLY 地理注释。</small></p></section>
-          <p v-if="!task.versions.length">暂无完整成果</p>
+          <section v-for="(version, versionIndex) in task.versions" :key="version.version">
+            <h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3>
+            <p v-for="item in version.levels" :key="item.level">
+              LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br>
+              <small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small>
+              <small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small>
+              <br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'">
+              <template v-for="format in resultFormats" :key="format">
+                <br v-if="format === 'sog'">
+                <button type="button" :disabled="downloadBusy || (!hasResult(task, version.version, item.level, format) && taskOperationBusy)"
+                  @click="saveResult(version.version, item.level, format)">
+                  {{ feedback[resultKey(version.version, item.level, format)]?.action || (hasResult(task, version.version, item.level, format) ? '保存' : '生成') }}
+                  {{ formats[format] }}{{ format === 'streamed_sog' && version.levels.length > 1 ? '（整组）' : '' }}
+                </button>
+                <small v-if="feedback[resultKey(version.version, item.level, format)]?.detail" role="status">{{ feedback[resultKey(version.version, item.level, format)].detail }}</small>
+                <button v-if="format !== 'streamed_sog' && hasResult(task, version.version, item.level, format)" type="button"
+                  @click="downloadManifest(version.version, item.level, format)">{{ formats[format] }} 坐标说明</button>
+              </template>
+            </p>
+          </section>
+          <div v-if="!task.versions.length">
+            <p>先处理选中层级，再按层生成单文件 SOG，或将整组层级生成为流式 SOG。</p>
+            <button type="button" @click="panel = 'lod'">选择并处理层级</button>
+          </div>
         </template>
       </aside>
       <p v-if="historyBusy" class="editor-edit-status" role="status">正在更新编辑历史…</p>
