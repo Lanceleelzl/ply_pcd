@@ -14,14 +14,20 @@ export function polygonValidationError(points: [number, number][]): string | nul
     || point.some(value => !Number.isFinite(value)))) return '平面边界需要 3～256 个有效顶点';
   const cross = (a: [number, number], b: [number, number], c: [number, number]) =>
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-  if (Math.abs(points.reduce((area, point, index) => area + cross([0, 0], points[index - 1] ?? points.at(-1)!, point), 0)) <= 1e-9)
+  if (new Set(points.map(point => `${point[0]},${point[1]}`)).size !== points.length)
+    return '平面边界不能有重复顶点';
+  if (Math.abs(points.reduce((area, point, index) => area + cross(points[0], points[index - 1] ?? points.at(-1)!, point), 0)) <= 1e-9)
     return '平面边界面积为零';
+  const onSegment = (a: [number, number], b: [number, number], point: [number, number]) =>
+    Math.abs(cross(a, b, point)) <= 1e-9 && point.every((value, axis) =>
+      value >= Math.min(a[axis], b[axis]) - 1e-9 && value <= Math.max(a[axis], b[axis]) + 1e-9);
   for (let first = 0; first < points.length; first++) {
     for (let second = first + 2; second < points.length; second++) {
       if (first === 0 && second === points.length - 1) continue;
       const a = points[first], b = points[(first + 1) % points.length];
       const c = points[second], d = points[(second + 1) % points.length];
-      if (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0)
+      if (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0
+        || onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b))
         return '平面边界不能自相交';
     }
   }
@@ -51,7 +57,8 @@ export function containsEditorRule(rule: EditorRule, [x, y, z]: XYZ): boolean {
   const local: XYZ = [dx + w * tx - qy * tz + qz * ty,
     dy + w * ty - qz * tx + qx * tz,
     dz + w * tz - qx * ty + qy * tx];
-  return local.every((value, axis) => Math.abs(value) <= rule.size[axis] / 2);
+  const tolerance = 16 * Number.EPSILON * Math.max(...rule.size, Math.abs(dx), Math.abs(dy), Math.abs(dz));
+  return local.every((value, axis) => Math.abs(value) <= rule.size[axis] / 2 + tolerance);
 }
 
 export function keepsEditorPoint(rules: EditorRule[], point: XYZ): boolean {

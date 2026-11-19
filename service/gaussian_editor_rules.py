@@ -23,15 +23,23 @@ def validate_rules(rules: list[dict]) -> None:
                 not _vector(point, 2) for point in points
             ):
                 raise ValueError("平面边界至少需要三个有效顶点")
-            if abs(sum(_cross([0, 0], points[index - 1], points[index])
-                       for index in range(len(points)))) <= 1e-9:
+            if len({tuple(point) for point in points}) != len(points):
+                raise ValueError("平面边界不能有重复顶点")
+            if abs(math.fsum(_cross(points[0], points[index - 1], points[index])
+                             for index in range(len(points)))) <= 1e-9:
                 raise ValueError("平面边界面积为零")
             for first in range(len(points)):
                 for second in range(first + 2, len(points)):
                     if first == 0 and second == len(points) - 1:
                         continue
-                    if _proper_cross(points[first], points[(first + 1) % len(points)],
-                                     points[second], points[(second + 1) % len(points)]):
+                    a, b = points[first], points[(first + 1) % len(points)]
+                    c, d = points[second], points[(second + 1) % len(points)]
+                    if _proper_cross(a, b, c, d) or any(
+                        abs(_cross(start, end, point)) <= 1e-9
+                        and all(min(start[axis], end[axis]) - 1e-9 <= point[axis]
+                                <= max(start[axis], end[axis]) + 1e-9 for axis in range(2))
+                        for start, end, point in ((a, b, c), (a, b, d), (c, d, a), (c, d, b))
+                    ):
                         raise ValueError("平面边界不能自相交")
         elif kind == "sphere":
             if not _vector(rule.get("center"), 3) or not _positive(rule.get("radius")):
@@ -69,7 +77,8 @@ def contains(rule: dict, point: tuple[float, float, float]) -> bool:
         return sum(value * value for value in offset) <= rule["radius"] ** 2
     w, qx, qy, qz = rule["rotation"]
     local = rotate_point((w, -qx, -qy, -qz), offset)
-    return all(abs(local[index]) <= rule["size"][index] / 2 for index in range(3))
+    tolerance = 16 * math.ulp(1.0) * max(*rule["size"], *(abs(value) for value in offset))
+    return all(abs(local[index]) <= rule["size"][index] / 2 + tolerance for index in range(3))
 
 
 def keeps_point(rules: list[dict], point: tuple[float, float, float]) -> bool:

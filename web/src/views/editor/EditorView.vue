@@ -16,12 +16,17 @@ import EditorViewport from './EditorViewport.vue';
 import { sliceClipBounds, transformedClipBounds } from './editor-clip-coordinates';
 import { projectedOriginForPoint } from './editor-geography';
 import { polygonValidationError, rectangleFromCorners } from './editor-rule-preview';
+import { downloadLength, saveEditorResponse, type EditorWritable } from './editor-download';
+import { moveLodFile, resultSnapshot } from './editor-workflow';
 import '../../styles/module-entry.css';
 
 const route = useRoute();
 const router = useRouter();
 const workspace = useWorkspaceStore();
 const task = ref<EditorTask | null>(null);
+const taskLoading = ref(false);
+const taskLoadError = ref('');
+function retryTask(): void { taskLoadError.value = ''; taskLoading.value = true; void refresh(); }
 const history = ref<EditorTask[]>([]);
 const kind = ref<EditorInputKind>('single');
 const files = ref<File[]>([]);
@@ -34,8 +39,14 @@ const phase = ref('');
 const uploaded = ref(0);
 const uploadTotal = ref(0);
 const clock = ref(Date.now());
-const downloadProgress = ref<{ taskId: string; loaded: number; total: number | null } | null>(null);
+const uploadStartedAt = ref<number | null>(null);
+const uploadElapsed = computed(() => uploadStartedAt.value === null ? 0
+  : Math.max(0, Math.floor((clock.value - uploadStartedAt.value) / 1000)));
+const downloadProgress = ref<{ taskId: string; loaded: number; total: number | null; startedAt: number } | null>(null);
 const downloadBusy = ref(false);
+const downloadClosing = ref(false);
+let downloadController: AbortController | null = null;
+function cancelDownload(): void { downloadController?.abort(); }
 const submittingTask = ref<'process' | 'decimate' | 'export' | null>(null);
 const historyBusy = ref(false);
 const historyRecoveryKey = ref(0);
@@ -53,6 +64,8 @@ function clearNotify(expected: string): void {
   if (message.value === expected) message.value = '';
 }
 const panel = ref<'lod' | 'bounds' | 'slice' | 'coordinates' | 'transform' | 'history' | 'results' | null>('lod');
+const toolbarBottom = ref(60);
+const restoreVersionId = ref('');
 const identityTransform = (): EditorTransform => ({ translation: [0, 0, 0], rotation_degrees: [0, 0, 0], scale: [1, 1, 1] });
 const transformDraft = ref<EditorTransform>(identityTransform());
 const geographyDraft = ref<EditorGeography>({ reference: [0, 0, 0], projected_origin: [0, 0, 0],
@@ -116,6 +129,14 @@ watch([() => task.value?.task_id, () => JSON.stringify(currentState.value.displa
   clip.value = currentState.value.display_clip ? copyClip(currentState.value.display_clip) : defaultClip();
 }, { immediate: true });
 const currentTransform = computed(() => currentState.value.transform ?? identityTransform());
+const pendingEdit = computed(() => {
+  if (!task.value) return '';
+  if (polygonDraft.value.length || editingPolygon.value !== null || volumeDraft.value) return '边界草稿尚未保存，请先保存或取消编辑';
+  const geography = currentState.value.geography ?? initialGeography(task.value);
+  if (JSON.stringify(geographyDraft.value) !== JSON.stringify(copyGeography(geography))) return '坐标草稿尚未保存，请先保存坐标设置或恢复已保存设置';
+  if (JSON.stringify(transformDraft.value) !== JSON.stringify(currentTransform.value)) return '模型变换草稿尚未保存，请先保存或恢复已保存设置';
+  return '';
+});
 const previewLevel = computed(() => task.value?.input_kind === 'single' ? 0 : task.value?.available_levels.at(-1) ?? 0);
 const selectedLod = computed(() => task.value?.lods.find(item => item.level === workLevel.value));
 const sourceLevelCount = computed(() => selectedLod.value?.count ?? task.value?.level_counts?.[workLevel.value]
@@ -176,17 +197,32 @@ async function refresh(): Promise<void> {
         workLevel.value = loaded.available_levels.at(-1)!;
       }
     } else {
+      const listed = await listEditorTasks(workspace.workspaceId);
+      if (route.params.taskId !== id) return;
       task.value = null;
-      history.value = await listEditorTasks(workspace.workspaceId);
+      history.value = listed;
     }
   } catch (error) {
-    if (route.params.taskId === id) message.value = error instanceof Error ? error.message : String(error);
+    if (route.params.taskId === id) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (typeof id === 'string' && !task.value) taskLoadError.value = text;
+      else message.value = text;
+    }
+  } finally {
+    if (route.params.taskId === id) taskLoading.value = false;
   }
 }
-watch(() => route.params.taskId, () => { void refresh(); }, { immediate: true });
-timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId) void refresh(); }, 1500);
+watch(() => route.params.taskId, id => {
+  task.value = null; taskLoading.value = typeof id === 'string'; taskLoadError.value = ''; geographyTaskId = '';
+  lastPoint.value = null; coordinateResult.value = null; restoreVersionId.value = '';
+  polygonDraft.value = []; editingPolygon.value = null; drawingPolygon.value = false; drawingRectangle.value = false;
+  editingVolume.value = null; volumeDraft.value = null; message.value = ''; panel.value = 'lod';
+  void refresh();
+}, { immediate: true });
+timer = setInterval(() => { clock.value = Date.now(); if (route.params.taskId && !taskLoadError.value) void refresh(); }, 1500);
 onMounted(() => window.addEventListener('keydown', historyShortcut));
-onUnmounted(() => { if (timer) clearInterval(timer); window.removeEventListener('keydown', historyShortcut); });
+onUnmounted(() => { if (timer) clearInterval(timer); window.removeEventListener('keydown', historyShortcut);
+  if (!downloadClosing.value) downloadController?.abort(); });
 
 function selectFiles(event: Event): void {
   const input = event.target as HTMLInputElement;
@@ -194,6 +230,10 @@ function selectFiles(event: Event): void {
   if (kind.value === 'single') coordinateManifest.value = null;
   paths.value = files.value.map(file => (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
   datasetDirectory.value = files.value.some(file => Boolean((file as File & { webkitRelativePath?: string }).webkitRelativePath));
+}
+function reorderFile(index: number, offset: -1 | 1): void {
+  const ordered = moveLodFile(files.value, paths.value, index, offset);
+  files.value = ordered.files; paths.value = ordered.paths;
 }
 async function selectDirectory(): Promise<void> {
   try {
@@ -207,6 +247,7 @@ async function selectDirectory(): Promise<void> {
 }
 async function create(): Promise<void> {
   if (!files.value.length || busy.value) return;
+  uploadStartedAt.value = Date.now();
   busy.value = true; message.value = ''; phase.value = '上传中'; uploaded.value = 0; uploadTotal.value = 0;
   try {
     const created = await createEditorTask({ kind: kind.value, workspaceId: workspace.workspaceId,
@@ -220,7 +261,7 @@ async function create(): Promise<void> {
     phase.value = '服务端预读与生成场景预览';
     await router.push(`/editor/${created.task_id}`);
   } catch (error) { message.value = error instanceof Error ? error.message : String(error); }
-  finally { busy.value = false; }
+  finally { busy.value = false; uploadStartedAt.value = null; }
 }
 async function saveEdit(label: string, state: EditorState): Promise<boolean> {
   if (!task.value || route.params.taskId !== task.value.task_id || historyBusy.value) return false;
@@ -412,8 +453,11 @@ async function saveTransform(): Promise<void> {
   if (![...translation, ...rotation_degrees, scale].every(Number.isFinite) || scale <= 0) {
     message.value = '请输入有效的平移、旋转和正数缩放'; return;
   }
-  await saveEdit('修改模型整体变换', { ...currentState.value,
-    transform: { translation, rotation_degrees, scale: [scale, scale, scale] } });
+  const transform: EditorTransform = { translation, rotation_degrees, scale: [scale, scale, scale] };
+  if (await saveEdit('修改模型整体变换', { ...currentState.value, transform })) {
+    transformDraft.value = transform;
+    lastPoint.value = null; coordinateResult.value = null;
+  }
 }
 async function queryCoordinates(): Promise<void> {
   if (!task.value || !lastPoint.value || !currentState.value.geography) {
@@ -509,13 +553,10 @@ async function toggleLevel(level: number, checked: boolean): Promise<void> {
   const levels = checked ? [...currentState.value.selected_lods, level] : currentState.value.selected_lods.filter(item => item !== level);
   await saveEdit('修改目标层级', { ...currentState.value, selected_lods: [...new Set(levels)].sort((a, b) => a - b) });
 }
-function confirmLocalFrame(checked: boolean): void {
-  void saveEdit(checked ? '确认同一局部坐标框架' : '撤销局部坐标框架确认',
-    { ...currentState.value, same_local_frame_confirmed: checked });
-}
 async function run(): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id
     || !currentState.value.selected_lods.length || taskOperationBusy.value) return;
+  if (pendingEdit.value) { message.value = pendingEdit.value; return; }
   const taskId = task.value.task_id;
   const levels = [...currentState.value.selected_lods];
   submittingTask.value = 'process';
@@ -527,6 +568,18 @@ async function run(): Promise<void> {
   }
   catch (error) { if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error); }
   finally { submittingTask.value = null; }
+}
+async function restoreVersion(version: EditorTask['versions'][number]): Promise<void> {
+  if (!version || taskOperationBusy.value) return;
+  if (pendingEdit.value) { message.value = pendingEdit.value; return; }
+  const snapshot = resultSnapshot(version);
+  if (!snapshot) { message.value = '该旧成果未保存编辑快照，无法安全恢复设置；仍可下载成果'; return; }
+  if (!await saveEdit('恢复成果版本编辑设置', snapshot) || !task.value) return;
+  geographyDraft.value = copyGeography(currentState.value.geography ?? initialGeography(task.value));
+  const transform = currentTransform.value;
+  transformDraft.value = { translation: [...transform.translation], rotation_degrees: [...transform.rotation_degrees], scale: [...transform.scale] };
+  lastPoint.value = null; coordinateResult.value = null;
+  message.value = '已恢复该版编辑设置；已有成果保持不变，可撤销本次恢复';
 }
 async function decimate(): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id || taskOperationBusy.value) return;
@@ -584,35 +637,35 @@ async function convertStreamed(version: string): Promise<void> {
 async function download(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog' | 'streamed_sog' = 'ply'): Promise<void> {
   if (!task.value || route.params.taskId !== task.value.task_id || downloadBusy.value) return;
   const taskId = task.value.task_id;
-  type WritableResult = { write(value: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> };
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
-    Promise<{ createWritable(): Promise<WritableResult> }> }).showSaveFilePicker;
+    Promise<{ createWritable(): Promise<EditorWritable> }> }).showSaveFilePicker;
   if (!picker) { message.value = '当前浏览器不支持大文件流式保存，请使用 Chrome 或 Edge'; return; }
   downloadBusy.value = true;
-  let writable: WritableResult | null = null;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  message.value = '';
+  const controller = new AbortController();
+  downloadController = controller;
+  let response: Response | null = null;
   try {
     const suffix = format === 'compressed_ply' ? 'compressed.ply' : format;
     const handle = await picker({ suggestedName: format === 'streamed_sog'
       ? `gaussian-editor-${version}-streamed-sog.zip` : `lod-${level}-edited.${suffix}` });
-    const response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
+    downloadProgress.value = { taskId, loaded: 0, total: null, startedAt: Date.now() };
+    response = await apiFetch(format === 'ply' ? editorDownloadUrl(taskId, version, level)
       : format === 'streamed_sog' ? editorStreamedUrl(taskId, version)
-      : editorExportUrl(taskId, version, level, format));
+      : editorExportUrl(taskId, version, level, format), { signal: controller.signal });
     if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
-    const contentLength = Number(response.headers.get('Content-Length'));
-    downloadProgress.value = { taskId, loaded: 0,
-      total: Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null };
-    writable = await handle.createWritable();
-    reader = response.body.getReader();
-    while (true) { const { value, done } = await reader.read(); if (done) break; await writable.write(value);
-      downloadProgress.value.loaded += value.byteLength; }
-    await writable.close(); writable = null;
+    downloadProgress.value.total = downloadLength(response);
+    const writable = await handle.createWritable();
+    await saveEditorResponse(response, writable, controller.signal,
+      loaded => { if (downloadProgress.value) downloadProgress.value.loaded = loaded; },
+      () => { downloadClosing.value = true; });
     if (route.params.taskId === taskId) message.value = '成果下载完成';
   } catch (error) {
-    await Promise.allSettled([reader?.cancel(), writable?.abort()]);
-    if (route.params.taskId === taskId) message.value = error instanceof Error ? error.message : String(error);
+    if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
+    if (route.params.taskId === taskId) message.value = error instanceof Error && error.name === 'AbortError'
+      ? '已取消成果保存，未提交不完整文件' : error instanceof Error ? error.message : String(error);
   }
-  finally { downloadProgress.value = null; downloadBusy.value = false; }
+  finally { downloadProgress.value = null; downloadBusy.value = false; downloadClosing.value = false; downloadController = null; }
 }
 async function downloadManifest(version: string, level: number, format: 'ply' | 'compressed_ply' | 'sog'): Promise<void> {
   if (!task.value) return;
@@ -632,7 +685,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 <template>
   <main class="editor-page" :class="{ 'editor-workspace': task }">
     <ModuleTopbar title="高斯编辑" mark="E"><template #actions><RouterLink to="/editor">新建任务</RouterLink></template></ModuleTopbar>
-    <template v-if="!task">
+    <div v-if="taskLoading" class="editor-wait" role="status">正在加载高斯编辑任务…</div>
+    <div v-else-if="taskLoadError" class="editor-wait" role="alert"><p>任务加载失败：{{ taskLoadError }}</p><button type="button" @click="retryTask">重新加载任务</button></div>
+    <template v-else-if="!task">
       <div class="module-entry-content module-entry-single">
         <div class="module-entry-intro"><h1>创建高斯编辑任务</h1><p>导入单个高斯模型或同一模型的 LOD 文件组；大层级可先抽稀后编辑。</p></div>
         <section class="module-entry-card"><h2>新建任务</h2>
@@ -641,11 +696,16 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
             <template v-if="kind === 'single'"><input type="file" accept=".ply,.sog,.spz" @change="selectFiles"><label>坐标说明（可选，仅限本模块导出的 Compressed PLY／SOG）<input type="file" accept=".json" @change="coordinateManifest = ($event.target as HTMLInputElement).files?.[0] ?? null"></label><p v-if="coordinateManifest">已选择坐标说明：{{ coordinateManifest.name }}；系统将校验模型文件后恢复坐标。</p></template>
             <input v-else-if="kind === 'lod_group'" type="file" accept=".ply" multiple @change="selectFiles">
             <template v-else><label>ZIP 文件<input type="file" accept=".zip" @change="selectFiles"></label><button type="button" @click="selectDirectory">选择数据集目录</button><input ref="fallbackDirectoryInput" hidden type="file" webkitdirectory multiple @change="selectFiles"><p>本模块导出的 Streamed SOG ZIP 可自动校验并恢复安全的投影坐标框架。</p></template>
-            <p v-if="kind === 'lod_group'">按精细到粗略顺序选择 LOD；输入文件须属于同一模型。</p>
+            <p v-if="kind === 'lod_group'">按精细到粗略排列同一模型的文件，首项为 LOD 0。上传后自动核对各层坐标头。</p>
+            <ol v-if="kind === 'lod_group'" class="editor-lod-files"><li v-for="(file, index) in files" :key="`${index}-${file.name}`">
+              <span>LOD {{ index }}：{{ file.name }}（{{ (file.size / 1048576).toFixed(1) }} MiB）</span>
+              <button type="button" :disabled="busy || index === 0" :aria-label="`上移 ${file.name}`" @click="reorderFile(index, -1)">上移</button>
+              <button type="button" :disabled="busy || index === files.length - 1" :aria-label="`下移 ${file.name}`" @click="reorderFile(index, 1)">下移</button>
+            </li></ol>
             <p v-if="files.length">已选择 {{ files.length }} 个文件</p>
           </div>
           <button type="button" :disabled="busy || !files.length" @click="create">{{ busy ? '正在创建任务…' : '上传并创建任务' }}</button>
-          <p v-if="busy" role="status">{{ phase }}<template v-if="phase === '上传中' && uploadTotal">：{{ Math.round(uploaded * 100 / uploadTotal) }}%</template></p>
+          <p v-if="busy" role="status">{{ phase }}<template v-if="phase === '上传中' && uploadTotal">：{{ Math.round(uploaded * 100 / uploadTotal) }}%</template> · 已用 {{ uploadElapsed }} 秒</p>
           <progress v-if="busy && phase === '上传中' && uploadTotal" :value="uploaded" :max="uploadTotal"></progress>
         </section>
         <section class="module-entry-card"><h2>历史任务</h2><p v-if="!history.length">暂无任务</p>
@@ -654,7 +714,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </section>
       </div>
     </template>
-    <div v-else class="editor-stage">
+    <div v-else class="editor-stage" :style="{ '--editor-toolbar-bottom': `${toolbarBottom}px` }">
       <EditorViewport v-if="task.status === 'ready' && task.preview_url && task.metadata" :preview-url="task.preview_url"
         :gaussian-url="currentUrl" :filename="currentFilename" :gaussian-lod="task.available_levels.length > 1 && !selectedLod && !useDerived ? workLevel : undefined" :origin="task.metadata.origin"
         :point-count="levelCount" :lod-label="`LOD ${workLevel}`" :preview-lod-label="`LOD ${previewLevel}`"
@@ -666,6 +726,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         :editing-volume-index="editingVolume" @pick-polygon="pickPolygonPoint"
         :large-original-bytes="largeOriginalBytes" :large-original-count="largeOriginalCount" @pick="picked"
         :adaptive-lod-preview="adaptiveStreamPreview"
+        @toolbar-height-changed="toolbarBottom = $event"
         @move-vertex="movePolygonVertex" @insert-vertex="insertPolygonVertex"
         @move-volume-center="moveVolumeCenter" @move-volume-height="moveVolumeHeight"
         @move-volume-radius="moveVolumeRadius"
@@ -689,14 +750,17 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         <template v-if="panel === 'lod'">
           <label>工作 LOD<select v-model.number="workLevel"><option v-for="level in task.available_levels" :key="level" :value="level">LOD {{ level }}</option></select></label>
           <p>点云预览来自 LOD {{ previewLevel }}；显示高斯时加载选定工作层，其他目标层在执行时由服务端处理。</p>
-          <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
-          <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；请选择较低 LOD 或先抽稀，再加载高斯编辑。</p>
+          <p v-if="largeOriginalBytes">原始层 {{ (largeOriginalBytes / 1048576).toFixed(1) }} MiB，当前仅显示点云预览；{{ task.input_kind === 'single' ? '可展开抽稀并生成轻量工作层。' : '可切换到可加载的较粗 LOD。' }}</p>
+          <p v-if="largeOriginalCount">当前原始层约 {{ largeOriginalCount.toLocaleString() }} 个高斯，当前仅显示点云预览；可切换到可加载的较粗 LOD。</p>
           <p v-if="adaptiveStreamPreview">当前工作层约 {{ levelCount?.toLocaleString() }} 个高斯。流式预览按视野和预算显示，远处或预算不足区域会使用较粗层；正式处理仍读取所选原始层。</p>
-          <label>抽稀方式<select v-model="decimationMode"><option value="count">目标高斯数</option><option value="ratio" :disabled="!sourceLevelCount">保留比例</option></select></label>
-          <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
-          <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>
-            <p>原始层 {{ sourceLevelCount?.toLocaleString() ?? '数量未知' }} 高斯，预计保留 {{ ratioTargetCount.toLocaleString() }} 高斯。</p></template>
-          <button type="button" :disabled="taskOperationBusy || task.status !== 'ready'" @click="decimate">{{ submittingTask === 'decimate' ? '正在提交抽稀…' : '生成轻量工作层' }}</button>
+          <details v-if="task.input_kind === 'single'" :key="task.task_id">
+            <summary>抽稀</summary>
+            <label>抽稀方式<select v-model="decimationMode"><option value="count">目标高斯数</option><option value="ratio" :disabled="!sourceLevelCount">保留比例</option></select></label>
+            <label v-if="decimationMode === 'count'">抽稀目标高斯数<input v-model.number="targetCount" type="number" min="1" step="1"></label>
+            <template v-else><label>保留比例（％）<input v-model.number="retainPercent" type="number" min="0" max="100" step="any"></label>
+              <p>原始层 {{ sourceLevelCount?.toLocaleString() ?? '数量未知' }} 高斯，预计保留 {{ ratioTargetCount.toLocaleString() }} 高斯。</p></template>
+            <button type="button" :disabled="taskOperationBusy || task.status !== 'ready'" @click="decimate">{{ submittingTask === 'decimate' ? '正在提交抽稀…' : '生成轻量工作层' }}</button>
+          </details>
           <p v-if="task.decimate_status !== 'not_requested'" role="status">抽稀：{{ task.decimate_phase ?? task.decimate_status }}<template v-if="task.decimate_progress !== null && task.decimate_progress !== undefined"> {{ task.decimate_progress }}%</template><template v-if="operationElapsed(task.decimate_status, task.decimate_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.decimate_status, task.decimate_started_at_unix) }} 秒</template> {{ task.decimate_error }}</p>
           <p v-for="item in task.derived_lods" :key="item.version">派生自 LOD {{ item.source_level }}：{{ item.count.toLocaleString() }} 高斯
             <button v-if="item.source_level === workLevel" type="button" :disabled="selectedDerived?.version === item.version"
@@ -704,12 +768,12 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <p v-if="useDerived">当前选用派生工作层；正式处理仍从所选原始 LOD 读取。
             <button type="button" @click="selectDerived(null)">使用原始工作层</button></p>
           <h3>应用规则到</h3><label v-for="level in task.available_levels" :key="level"><input type="checkbox" :checked="currentState.selected_lods.includes(level)" :disabled="taskOperationBusy" @change="toggleLevel(level, ($event.target as HTMLInputElement).checked)">LOD {{ level }}</label>
-          <label v-if="task.input_kind === 'lod_group'"><input type="checkbox" :checked="currentState.same_local_frame_confirmed ?? false" @change="confirmLocalFrame(($event.target as HTMLInputElement).checked)">确认各层属于同一模型，并使用相同的局部坐标框架</label>
-          <p v-if="task.input_kind === 'lod_group'">坐标头完整且一致时自动核验；缺少 EPSG、offset、shift 或 scale 时，跨层处理需要上述确认。已知字段冲突仍会拒绝处理。</p>
           <button type="button" :disabled="taskOperationBusy || !currentState.selected_lods.length" @click="run">{{ submittingTask === 'process' ? '正在提交处理…' : historyBusy ? '正在更新编辑历史…' : '处理选中层级' }}</button>
+          <p v-if="pendingEdit" role="status">{{ pendingEdit }}</p>
         </template>
         <template v-else-if="panel === 'bounds'">
           <p>多边形逐点绘制；矩形在场景中点击两个对角点即可生成四点草稿。平面边界沿模型全高生效；「场景取点」用于球心或坐标查询。</p>
+          <p>紧贴边界的高斯可能受预览精度影响，请以处理成果为准。</p>
           <p v-if="lastPoint">当前取点：{{ lastPoint.map(value => value.toFixed(3)).join('，') }}</p>
           <label>边界规则<select v-model="boundaryAction"><option value="keep">保留内部</option><option value="remove">剔除内部</option></select></label>
           <button type="button" :disabled="drawingRectangle" @click="drawingPolygon = !drawingPolygon">{{ drawingPolygon ? '结束 2D 绘制' : '开始 2D 绘制' }}</button>
@@ -752,6 +816,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" @click="saveDisplayClip()">保存显示剖切</button>
         </template>
         <template v-else-if="panel === 'transform'">
+          <button type="button" @click="transformDraft = { translation: [...currentTransform.translation], rotation_degrees: [...currentTransform.rotation_degrees], scale: [...currentTransform.scale] }">恢复已保存变换</button>
           <p>变换会预览到工作模型，并在处理选定 LOD 时应用到每个高斯；边界规则使用变换后的场景坐标。</p>
           <h3>平移 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in transformDraft.translation" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="transformDraft.translation[axis]" type="number" step="any"></div>
           <h3>旋转角度 X／Y／Z</h3><div class="editor-clip-row" v-for="(_, axis) in transformDraft.rotation_degrees" :key="axis"><span>{{ ['X','Y','Z'][axis] }}</span><input v-model.number="transformDraft.rotation_degrees[axis]" type="number" step="any"></div>
@@ -759,6 +824,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
           <button type="button" @click="saveTransform">保存模型变换</button>
         </template>
         <template v-else-if="panel === 'coordinates'">
+          <button type="button" @click="geographyDraft = copyGeography(currentState.geography ?? initialGeography(task))">恢复已保存坐标设置</button>
           <p>文件坐标保持原值；设置文件参考点及其对应的投影坐标原点。头文件提示仅作预填，请核对 EPSG、轴向和高程基准。</p>
           <p v-if="task.coordinate_manifest_error" role="status">随包坐标说明未恢复：{{ task.coordinate_manifest_error }}。模型仍可编辑，请手动核对坐标。</p>
           <p v-else-if="task.history[0]?.label === '导入流式模型及坐标说明'" role="status">已校验流式 ZIP 内全部文件及逐层坐标说明，并恢复投影坐标框架；请核对高程基准。</p>
@@ -780,16 +846,21 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
         </template>
         <template v-else-if="panel === 'history'"><ol class="editor-history"><li v-for="(step, index) in task.history" :key="index"><button type="button" :class="{ active: index === task.history_cursor }" @click="jump(index)">{{ index }}．{{ step.label }}<small>{{ formatTaskTime(step.at) }}</small></button></li></ol></template>
         <template v-else>
+          <template v-if="task.versions.length">
+            <label>恢复成果版本设置<select v-model="restoreVersionId"><option value="">选择成果版本</option><option v-for="(version, index) in task.versions" :key="version.version" :value="version.version">成果 {{ index + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</option></select></label>
+            <button type="button" :disabled="taskOperationBusy || !restoreVersionId" @click="restoreVersion(task.versions.find(version => version.version === restoreVersionId)!)">恢复该版编辑设置</button>
+            <p>恢复边界、变换、坐标与目标层级，新增一步编辑历史；已有成果保留，不重新处理。</p>
+          </template>
           <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
           <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> {{ task.export_error }}</p>
           <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> {{ task.streamed_export_error }}</p>
-          <section v-for="version in task.versions" :key="version.version"><h3>成果 {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
-          <section v-for="version in task.versions" :key="`${version.version}-streamed`"><p><template v-if="task.streamed_exports?.some(item => item.version === version.version)"><button type="button" :disabled="downloadBusy" @click="download(version.version, -1, 'streamed_sog')">下载整组 Streamed SOG ZIP</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertStreamed(version.version)">{{ submittingExport === `${version.version}:streamed_sog` ? '正在提交流式生成…' : '生成整组 Streamed SOG' }}</button><br><small>仅连续、点数递减的成果层级可生成；新生成的 ZIP 内含各层坐标说明，流式模型本身不保证携带 PLY 地理注释。</small></p></section>
+          <section v-for="(version, versionIndex) in task.versions" :key="version.version"><h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3><p v-for="item in version.levels" :key="item.level">LOD {{ item.level }}：{{ item.source_count.toLocaleString() }} → {{ item.count.toLocaleString() }} 高斯<br><small v-if="item.coordinate_mode === 'manifest'">PLY 不含地理定位；请同时保存坐标说明。</small><small v-else-if="item.coordinate_mode === 'embedded'">编辑后的 EPSG 与投影原点已写入 PLY 头文件。</small><br v-if="item.coordinate_mode === 'manifest' || item.coordinate_mode === 'embedded'"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level)">下载 PLY</button><button type="button" @click="downloadManifest(version.version, item.level, 'ply')">PLY 坐标说明</button><template v-for="format in ['compressed_ply', 'sog'] as const" :key="format"><template v-if="task.exports?.some(exported => exported.version === version.version && exported.level === item.level && exported.format === format)"><button type="button" :disabled="downloadBusy" @click="download(version.version, item.level, format)">下载 {{ format === 'sog' ? 'SOG' : 'Compressed PLY' }}</button><button type="button" @click="downloadManifest(version.version, item.level, format)">坐标说明</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertExport(version.version, item.level, format)">{{ submittingExport === `${version.version}:${item.level}:${format}` ? '正在提交导出…' : `生成 ${format === 'sog' ? 'SOG' : 'Compressed PLY'}` }}</button></template></p></section>
+          <section v-for="(version, versionIndex) in task.versions" :key="`${version.version}-streamed`"><h3>成果 {{ versionIndex + 1 }} · Streamed SOG</h3><p><template v-if="task.streamed_exports?.some(item => item.version === version.version)"><button type="button" :disabled="downloadBusy" @click="download(version.version, -1, 'streamed_sog')">下载整组 Streamed SOG ZIP</button></template><button v-else type="button" :disabled="taskOperationBusy" @click="convertStreamed(version.version)">{{ submittingExport === `${version.version}:streamed_sog` ? '正在提交流式生成…' : '生成整组 Streamed SOG' }}</button><br><small>仅连续、点数递减的成果层级可生成；新生成的 ZIP 内含各层坐标说明，流式模型本身不保证携带 PLY 地理注释。</small></p></section>
           <p v-if="!task.versions.length">暂无完整成果</p>
         </template>
       </aside>
       <p v-if="historyBusy" class="editor-edit-status" role="status">正在更新编辑历史…</p>
-      <p v-if="downloadProgress && downloadProgress.taskId === task.task_id" class="editor-download-progress" role="status">正在保存成果：{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template></p>
+      <p v-if="downloadProgress && downloadProgress.taskId === task.task_id" class="editor-download-progress" role="status">{{ downloadClosing ? '正在完成文件保存：' : '正在保存成果：' }}{{ (downloadProgress.loaded / 1048576).toFixed(1) }} MiB<template v-if="downloadProgress.total">／{{ (downloadProgress.total / 1048576).toFixed(1) }} MiB（{{ Math.round(downloadProgress.loaded * 100 / downloadProgress.total) }}%）</template> · 已用 {{ Math.max(0, Math.floor((clock - downloadProgress.startedAt) / 1000)) }} 秒 <button type="button" :disabled="downloadClosing" @click="cancelDownload">取消保存</button></p>
       <p v-if="message" class="editor-message" role="status">{{ message }}</p>
     </div>
     <p v-if="message && !task" role="status" class="editor-entry-message">{{ message }}</p>
@@ -810,7 +881,7 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .editor-stage { position: relative; flex: 1; min-height: 0; }.editor-wait { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 100%; }.editor-wait small { color: #a8bbcc; }
 .editor-wait-spinner { width: 28px; height: 28px; border: 3px solid #34506b; border-top-color: #78d6b8; border-radius: 50%; animation: editor-wait-spin .8s linear infinite; }
 @keyframes editor-wait-spin { to { transform: rotate(360deg); } }
-.editor-panel { position: absolute; z-index: 5; top: 60px; bottom: 58px; left: 12px; box-sizing: border-box; width: min(360px, calc(100% - 24px)); overflow: auto; padding: 14px; border: 1px solid #42617d; border-radius: 9px; background: #102136f2; box-shadow: 0 12px 36px #0008; }
+.editor-panel { position: absolute; z-index: 5; top: var(--editor-toolbar-bottom, 60px); bottom: 58px; left: 12px; box-sizing: border-box; width: min(360px, calc(100% - 24px)); overflow: auto; padding: 14px; border: 1px solid #42617d; border-radius: 9px; background: #102136f2; box-shadow: 0 12px 36px #0008; }
 .editor-panel-history, .editor-panel-results { right: 12px; left: auto; }
 .editor-panel header { display: flex; justify-content: space-between; align-items: center; }.editor-panel header h2 { margin: 0 0 12px; font-size: 18px; }
 .editor-panel button { margin: 3px; padding: 7px 9px; border: 1px solid #4a6a84; border-radius: 6px; color: #edf5ff; background: #17334c; }
@@ -821,8 +892,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
 .editor-clip-row { display: grid; grid-template-columns: 20px 1fr 1fr; gap: 6px; margin: 6px 0; }.editor-clip-row input { min-width: 0; padding: 6px; border: 1px solid #42617d; border-radius: 5px; background: #091828; color: #edf5ff; }
 .editor-vertex-row { grid-template-columns: 20px 1fr 1fr auto; }
 .editor-history { padding-left: 0; list-style: none; }.editor-history button { display: block; width: 100%; text-align: left; }.editor-history button.active { border-color: #78d6b8; color: #78d6b8; }.editor-history small { display: block; color: #a8bbcc; }
-.editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; }
-.editor-edit-status { position: absolute; z-index: 6; left: 12px; bottom: 98px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; }
+.editor-message { position: absolute; z-index: 6; left: 12px; bottom: 56px; max-width: min(600px, calc(100% - 24px)); padding: 9px 12px; border: 1px solid #78d6b8; border-radius: 6px; background: #12382f; pointer-events: none; }
+.editor-edit-status { position: absolute; z-index: 6; left: 12px; bottom: 98px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; pointer-events: none; }
 .editor-download-progress { position: absolute; z-index: 6; right: 12px; bottom: 44px; margin: 0; padding: 7px 10px; border-radius: 6px; background: #102136e8; }
 .editor-entry-message { margin: 0 auto; width: min(1040px, calc(100% - 40px)); }
 </style>

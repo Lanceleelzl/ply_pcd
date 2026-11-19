@@ -2,10 +2,12 @@ import tempfile
 import unittest
 import json
 import asyncio
+import io
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
 
 
@@ -93,12 +95,13 @@ class PlyCoordinateTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 422)
         self.assertNotIn("process_status", status)
 
-    def test_editor_unknown_lod_frames_need_explicit_confirmation(self):
+    def test_editor_rejects_unknown_lod_frames_even_with_legacy_confirmation(self):
         from service.routes.gaussian_editor import ProcessRequest, create_editor_router
 
         status = {"status": "ready", "input_kind": "lod_group", "lods": [
             {"level": 0, "path": "input/lod-0.ply"}, {"level": 1, "path": "input/lod-1.ply"}],
-            "history": [{"state": {"rules": [], "selected_lods": [0, 1]}}], "history_cursor": 0}
+            "history": [{"state": {"rules": [], "selected_lods": [0, 1],
+                                   "same_local_frame_confirmed": True}}], "history_cursor": 0}
         tasks = SimpleNamespace(read=lambda _task_id: (Path("unused"), status), running={},
                                 levels=lambda _status, _directory: [0, 1])
         process = next(route.endpoint for route in create_editor_router(tasks).routes
@@ -109,13 +112,35 @@ class PlyCoordinateTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 asyncio.run(process("task", ProcessRequest(levels=[0, 1])))
         self.assertEqual(caught.exception.status_code, 422)
-        self.assertIn("确认", caught.exception.detail)
+        self.assertIn("坐标头不完整", caught.exception.detail)
         self.assertNotIn("process_status", status)
 
-        status["history"][0]["state"]["same_local_frame_confirmed"] = True
-        tasks.start_process = lambda *_args: None
-        tasks.present = lambda value: value
-        with patch("service.routes.gaussian_editor.read_ply_coordinates", return_value=unknown), \
-             patch("service.routes.gaussian_editor.write_status"):
-            result = asyncio.run(process("task", ProcessRequest(levels=[0, 1])))
-        self.assertEqual(result["process_status"], "queued")
+    def test_editor_checks_lod_headers_before_starting_prepare(self):
+        from service.routes.gaussian_editor import create_editor_router
+
+        data = Path(__file__).with_name("gaussian-small-binary.ply").read_bytes()
+        frame = b"comment epsg 32651\n" + b"".join(
+            f"comment {field}{axis} {value}\n".encode()
+            for field, value in (("offset", 2), ("shift", 0), ("scale", 1)) for axis in "xyz")
+
+        def upload(name, comments):
+            header, payload = data.split(b"end_header", 1)
+            return UploadFile(filename=name, file=io.BytesIO(header + comments + b"end_header" + payload))
+
+        with tempfile.TemporaryDirectory() as directory:
+            started = []
+            tasks = SimpleNamespace(directory=lambda task_id: Path(directory) / task_id, retention_hours=24,
+                                    start=lambda *args: started.append(args), present=lambda status: status)
+            create = next(route.endpoint for route in create_editor_router(tasks).routes if "POST" in route.methods)
+            for comments, expected in ((b"", "坐标头不完整"), (frame.replace(b"32651", b"32650"), "不一致")):
+                with self.assertRaises(HTTPException) as caught:
+                    asyncio.run(create("lod_group", str(uuid.uuid4()), files=[
+                        upload("fine.ply", frame), upload("coarse.ply", comments)]))
+                self.assertEqual(caught.exception.status_code, 422)
+                self.assertIn("LOD 1", caught.exception.detail)
+                self.assertIn(expected, caught.exception.detail)
+                self.assertFalse(started)
+            result = asyncio.run(create("lod_group", str(uuid.uuid4()), files=[
+                upload("fine.ply", frame), upload("coarse.ply", frame + b"comment source coarse\n")]))
+            self.assertEqual(result["status"], "queued")
+            self.assertEqual(started, [(result["task_id"], "prepare")])

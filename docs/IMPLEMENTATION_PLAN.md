@@ -1,6 +1,22 @@
 > 2026-09-09 实施变更：用户确认移除 v1 API 和旧版手工配准页面。当前使用 v2 会话创建与配准入口，任务状态、SSE、取消、结果和下载统一为 `/api/v2/registrations`。保留历史矩阵档案；本文后续 v1 兼容描述仅作为历史设计记录，不再执行。
 
+### 2026-10-25 Windows 任务状态读取的临时占用
+
+用户已确认在共用 `service/storage.py` 修复状态读取偶发 `PermissionError` 导致轮询 500：仅读取权限异常按现有写入策略最多尝试 5 次，等待间隔为 20／40／60／80 毫秒；持续失败继续抛出原异常，状态不存在和 JSON 损坏保持原有错误语义。验证短暂占用后的恢复、持续占用的有界失败、不重试损坏数据与不存在的状态，并用独立高斯编辑任务完成 HTTP 读取及并发状态保存验收。
+
 ## 阶段 14：高斯工具箱与独立流式处理
+
+### 2026-10-28 桌面视口 WebXR 保留链修复（已实现并验证）
+
+用户在方案说明后要求继续后续所有工作，本轮按下述共用桌面应用创建层方案实施，先更新桌面视口约定，再补回归和开发版／生产版验证。
+
+复现：高斯编辑反复退出重进十次，开发版强制 GC 后 `SingleModelEngine`、`Application`、画布各多保留十个；生产构建画布也多十个，排除仅由 Vite 热更新导致。清空控制台不能消除。排除 WeakMap 条件引用后，最旧场景的强引用路径为 `Navigator → XRSystem → devicechange listener → XrManager.app → Application → renderer/device → canvas → Vue component → SingleModelEngine`。
+
+锁定的 PlayCanvas 2.21.3 源码在 `framework/xr/xr-manager.js` 第 72 行注册匿名 `devicechange` 监听，`destroy()` 第 101 行仅销毁 XR bridge，未移除该全局监听。项目没有 XR 功能调用，但共用 `RegistrationApplication` 的 `pc.Application` 默认初始化 XR。
+
+实现：新增 `DesktopApplication` 继承 `pc.Application`，重写公开 `init(AppOptions)`，在调用父类前移除未使用的 `xr` manager 构造选项。共用 `RegistrationApplication` 只替换应用类，其余相机、组件系统、资源处理器、WebGL2 与输入初始化保留。复用 SDK 对可选 XR 的 AppOptions 入口，不改 SDK 文件、浏览器配置或依赖版本。影响配准、流式、合并及编辑视口；这些桌面视口不再自动创建未使用的 WebXR 管理器，未来增加 XR 时须重新设计生命周期。
+
+验证：选项传递回归先在旧行为下失败，修复后通过；相关引擎及编辑专项共 40 项、类型检查和生产构建通过。开发版和生产版均重复十次双层加载／退出重进，画布增量由十个变为零，数据缓冲区也不再增长；开发版引擎、应用、设备、场景及导航控制器增量也为零。生产版 Navigator.XRSystem 的 devicechange 监听数量为零。编辑与流式的高斯、剖切、坐标面板，以及合并与配准的双模型高斯显示、相机／剖切控件均完成基础验证；不把该基础回归扩展为全部业务算法重验。对照汇总见忽略的 `output/xr-fix-comparison.json`。
 
 ### 2026-09-29 地理定位操作简化
 

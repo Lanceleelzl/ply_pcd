@@ -20,6 +20,7 @@ export type MergeTask = {
 };
 export type MergeOrigin = { epsg: string; projected: number[] | null; wgs84: number[] | null };
 export type MergeUploadProgress = { phase: 'upload'; loaded: number; total: number | null } | { phase: 'processing' };
+export type MergeDownloadProgress = { phase: 'downloading' | 'saving'; received: number; total: number | null };
 
 export async function previewMergeCoordinates(epsg: string, offset: string[]): Promise<number[]> {
   const query = new URLSearchParams({ epsg, x: offset[0], y: offset[1], z: offset[2] });
@@ -132,7 +133,7 @@ export async function cancelMerge(id: string): Promise<MergeTask> {
   }));
 }
 
-export async function downloadMerge(id: string, kind: 'ply' | 'streamed', onProgress: (bytes: number) => void,
+export async function downloadMerge(id: string, kind: 'ply' | 'streamed', onProgress: (progress: MergeDownloadProgress) => void,
   level?: number): Promise<void> {
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{
     createWritable(): Promise<{ write(value: Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> }>;
@@ -141,17 +142,22 @@ export async function downloadMerge(id: string, kind: 'ply' | 'streamed', onProg
   const handle = await picker({ suggestedName: level === undefined ? `gaussian-merge-${kind}.zip` : `gaussian-merge-lod-${level}.ply` });
   const response = await apiFetch(`/api/v2/gaussian-merges/${encodeURIComponent(id)}/download/${kind}${level === undefined ? '' : `/${level}`}`);
   if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
+  const contentLength = Number(response.headers.get('Content-Length'));
+  const total = !response.headers.get('Content-Encoding') && Number.isSafeInteger(contentLength) && contentLength > 0
+    ? contentLength : null;
   const writer = await handle.createWritable();
   const reader = response.body.getReader();
   let received = 0;
   try {
+    onProgress({ phase: 'downloading', received, total });
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       await writer.write(value);
       received += value.byteLength;
-      onProgress(received);
+      onProgress({ phase: 'downloading', received, total });
     }
+    onProgress({ phase: 'saving', received, total });
     await writer.close();
   } catch (error) {
     await reader.cancel().catch(() => {});

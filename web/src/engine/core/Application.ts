@@ -1,5 +1,6 @@
 import * as pc from 'playcanvas';
 import { ResourceScope } from '../../shared/resource-scope';
+import { DesktopApplication } from './DesktopApplication';
 
 interface RegistrationApplicationOptions {
   canvas: HTMLCanvasElement;
@@ -21,7 +22,7 @@ export class RegistrationApplication {
       this.resources.add(() => mouse.detach());
       const touch = new pc.TouchDevice(options.canvas);
       this.resources.add(() => touch.detach());
-      this.app = new pc.Application(options.canvas, { mouse, touch, keyboard });
+      this.app = new DesktopApplication(options.canvas, { mouse, touch, keyboard });
       this.resources.add(() => this.app.destroy());
       this.app.setCanvasFillMode(pc.FILLMODE_NONE, options.viewport.clientWidth, options.viewport.clientHeight);
       this.app.setCanvasResolution(pc.RESOLUTION_AUTO);

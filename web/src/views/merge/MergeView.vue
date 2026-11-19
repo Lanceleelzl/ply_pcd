@@ -104,7 +104,39 @@ const createStatus = computed(() => {
   if (createPhase.value === 'loading') return '任务已创建，正在加载三维场景…';
   return '';
 });
-const received = ref(0);
+type DownloadState = { key: string; phase: 'preparing' | 'downloading' | 'saving' | 'complete' | 'error';
+  received: number; total: number | null; error?: string };
+const downloadState = ref<DownloadState | null>(null);
+const submittingOperation = ref<'merge' | 'generate' | null>(null);
+const mergeActive = computed(() => submittingOperation.value === 'merge' ||
+  !!task.value && ['queued', 'running', 'cancelling'].includes(task.value.merge_status));
+const mergePercent = computed(() => {
+  if (!task.value || !['running', 'cancelling', 'ready'].includes(task.value.merge_status)) return null;
+  const levels = task.value.selected_levels ?? selectedLevels.value;
+  if (!levels.length) return null;
+  let processed = 0, total = 0;
+  for (const level of levels) {
+    const count = task.value.models.reduce((sum, model) => sum + (model.lods[level]?.count ?? 0), 0);
+    if (!count) return null;
+    const progress = task.value.level_progress?.[level];
+    total += count;
+    processed += progress?.status === 'ready' || task.value.merge_status === 'ready' ? count
+      : Math.min(count, Math.max(0, progress?.processed ?? 0));
+  }
+  return total ? Math.min(100, Math.floor(processed / total * 100)) : null;
+});
+const downloadKey = (kind: 'ply' | 'streamed', level?: number) => `${kind}:${level ?? 'zip'}`;
+function downloadPercent(state: DownloadState): number | null {
+  return state.total ? Math.min(100, Math.floor(state.received / state.total * 100)) : null;
+}
+function downloadText(state: DownloadState): string {
+  if (state.phase === 'preparing') return '请选择保存位置…';
+  if (state.phase === 'saving') return '数据已接收，正在保存文件…';
+  if (state.phase === 'complete') return `下载完成：${uploadSize(state.received)}`;
+  if (state.phase === 'error') return state.error || '下载失败';
+  const percent = downloadPercent(state);
+  return `已下载 ${uploadSize(state.received)}${state.total ? `／${uploadSize(state.total)}（${percent}%）` : '（总大小未知）'}`;
+}
 const mergedPreview = ref(false);
 const mergedSource = ref<'ply' | 'streamed'>('ply');
 const mergedDisplay = ref<'points' | 'gaussian'>('points');
@@ -573,6 +605,7 @@ async function refresh() {
     if (previousCacheStatus && previousCacheStatus !== 'failed' && task.value.cache_status === 'failed')
       message.value = task.value.cache_error || '流式生成失败';
     if (previous !== id) {
+      downloadState.value = null;
       persistedRegions.value = task.value.regions.map(region => cloneRegion(normalizeRegion(region, task.value!.models.length)));
       regions.value = persistedRegions.value.map(cloneRegion);
       targetModel.value = task.value.target_model ?? 0;
@@ -659,7 +692,7 @@ async function run(operation: 'merge' | 'generate') {
   if (!task.value) return;
   if (operation === 'merge' && task.value.merge_path &&
       !window.confirm('此任务已有合并记录。再次执行会创建新一轮成果；若模型位置与边界未变化，结果也不会变化。中途终止时，设置一致的旧成果可恢复下载。确定继续吗？')) return;
-  busy.value = true; message.value = '';
+  busy.value = true; message.value = ''; submittingOperation.value = operation;
   try { task.value = await saveMergeRegions(task.value.task_id, operation === 'merge' ? regions.value : persistedRegions.value, corrections.value, rotations.value,
     modelSettings.value[targetModel.value].axes, unitsConfirmed.value, targetModel.value, modelSettings.value,
     registrationMatrices.value);
@@ -670,7 +703,7 @@ async function run(operation: 'merge' | 'generate') {
     task.value = await startMerge(task.value.task_id, operation,
       operation === 'merge' ? selectedLevels.value : undefined); }
   catch (error) { message.value = String(error); }
-  finally { busy.value = false; }
+  finally { busy.value = false; submittingOperation.value = null; }
 }
 async function stopMerge() {
   if (!task.value || !window.confirm('确定终止当前合并任务吗？已完成的成果文件会保留。')) return;
@@ -682,11 +715,22 @@ async function stopMerge() {
   finally { busy.value = false; }
 }
 async function download(kind: 'ply' | 'streamed', level?: number) {
-  if (!task.value) return;
-  busy.value = true; received.value = 0; message.value = '';
-  try { await downloadMerge(task.value.task_id, kind, value => { received.value = value; }, level);
+  if (!task.value || busy.value) return;
+  const taskId = task.value.task_id;
+  const key = downloadKey(kind, level);
+  busy.value = true; message.value = '';
+  downloadState.value = { key, phase: 'preparing', received: 0, total: null };
+  try { await downloadMerge(taskId, kind, progress => {
+    if (task.value?.task_id === taskId) downloadState.value = { key, ...progress };
+  }, level);
+    if (task.value?.task_id === taskId && downloadState.value?.key === key)
+      downloadState.value = { ...downloadState.value, phase: 'complete' };
     message.value = level === undefined ? '下载完成' : `LOD ${level} 下载完成`; }
-  catch (error) { message.value = String(error); }
+  catch (error) {
+    message.value = String(error);
+    if (task.value?.task_id === taskId) downloadState.value = { key, phase: 'error', received: downloadState.value?.received ?? 0,
+      total: downloadState.value?.total ?? null, error: String(error) };
+  }
   finally { busy.value = false; }
 }
 async function showPreview(merged: boolean, source: 'ply' | 'streamed' = 'ply') {
@@ -828,20 +872,41 @@ onUnmounted(() => { window.removeEventListener('keydown', onDrawingKey); if (tim
                 type="button" :disabled="busy || (task.merge_status !== 'ready' && !task.partial_lod_downloads)"
                 :title="task.merge_status !== 'ready' && !task.partial_lod_downloads ? '当前服务待合并任务结束后更新，避免中断处理' : ''"
                 @click="download('ply', level)">{{ task.merge_status !== 'ready' && !task.partial_lod_downloads ? '下载 PLY（待服务更新）' : '下载 PLY' }}</button></div>
+            <div v-if="downloadState?.key === downloadKey('ply', level)" class="merge-action-progress" role="status" aria-live="polite">
+              <span>{{ downloadText(downloadState) }}</span>
+              <progress v-if="downloadState.phase !== 'complete' && downloadState.phase !== 'error'"
+                :value="downloadState.phase === 'downloading' && downloadPercent(downloadState) !== null ? downloadState.received : undefined"
+                :max="downloadState.total ?? undefined"></progress>
+            </div>
             <progress v-if="task.level_progress?.[level]?.status === 'running'" :value="task.level_progress[level].processed" :max="task.level_progress[level].total || 1"></progress>
             <span v-if="task.merged_lods?.some(item => item.level === level)">{{ task.merged_lods.find(item => item.level === level)?.count.toLocaleString() }} 个高斯</span>
           </div>
-          <button type="button" class="merge-workflow-action" :disabled="busy || ['queued', 'running', 'cancelling'].includes(task.merge_status) || !selectedLevels.length || !unitsConfirmed" @click="run('merge')">合并选中层级</button>
+          <button type="button" class="merge-workflow-action" :disabled="busy || ['queued', 'running', 'cancelling'].includes(task.merge_status) || !selectedLevels.length || !unitsConfirmed" @click="run('merge')">{{ mergeActive ? mergePercent === null ? '正在准备合并…' : `合并中 ${mergePercent}%` : '合并选中层级' }}</button>
+          <div v-if="mergeActive" class="merge-action-progress" role="status" aria-live="polite">
+            <span>{{ mergePercent === null ? '正在提交或等待合并任务…' : `选中层级已处理 ${mergePercent}%` }}</span>
+            <progress :value="mergePercent ?? undefined" max="100"></progress>
+          </div>
           <button v-if="['queued', 'running', 'cancelling'].includes(task.merge_status)" type="button" class="merge-workflow-action" :disabled="busy || task.merge_status === 'cancelling'" @click="stopMerge">{{ task.merge_status === 'cancelling' ? '正在终止…' : '终止任务' }}</button>
           <p>PLY 合并：{{ statusLabel(task.merge_status) }}</p>
         </div>
         <button type="button" class="merge-workflow-action" :disabled="busy || task.merge_status !== 'ready'" @click="download('ply')">下载合并成果集（zip）</button>
+        <div v-if="downloadState?.key === downloadKey('ply')" class="merge-action-progress" role="status" aria-live="polite">
+          <span>{{ downloadText(downloadState) }}</span>
+          <progress v-if="downloadState.phase !== 'complete' && downloadState.phase !== 'error'"
+            :value="downloadState.phase === 'downloading' && downloadPercent(downloadState) !== null ? downloadState.received : undefined"
+            :max="downloadState.total ?? undefined"></progress>
+        </div>
         <p v-if="task.merge_status === 'ready' && task.cache_status === 'not_requested'">PLY 已合并。流式数据不会自动生成，需要时请手动确认。</p>
         <button type="button" class="merge-workflow-action" :disabled="busy || !canGenerate || task.cache_status === 'running'" @click="run('generate')">生成LOD流式数据缓存</button>
         <p v-if="task.merge_status === 'ready' && !canGenerate">所选成果层级不连续，需合并连续层级后才能生成流式数据。</p>
         <p>流式生成：{{ statusLabel(task.cache_status) }}</p>
         <button type="button" class="merge-workflow-action" :disabled="busy || task.cache_status !== 'ready'" @click="download('streamed')">下载LOD流式数据缓存</button>
-        <p v-if="received">已接收 {{ (received / 1024 / 1024).toFixed(1) }} MB</p>
+        <div v-if="downloadState?.key === downloadKey('streamed')" class="merge-action-progress" role="status" aria-live="polite">
+          <span>{{ downloadText(downloadState) }}</span>
+          <progress v-if="downloadState.phase !== 'complete' && downloadState.phase !== 'error'"
+            :value="downloadState.phase === 'downloading' && downloadPercent(downloadState) !== null ? downloadState.received : undefined"
+            :max="downloadState.total ?? undefined"></progress>
+        </div>
       </section>
       <section class="merge-panel scene">
         <MergeViewport ref="sceneViewport" :samples="sceneSamples" :regions="mergedPreview ? [] : regions" :drawing="drawing" :selected="mergedPreview ? -1 : selectedModel"
@@ -1041,6 +1106,8 @@ a { color: #78d6b8; } .merge-workspace { display: grid; grid-template-columns: m
 .merge-task-page .merge-workflow-action { display: block; box-sizing: border-box; width: calc(100% - 10px); margin: 8px 5px; text-align: center; }
 .merge-level { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid #385574; }
 .merge-level progress { width: 100%; }
+.merge-action-progress { display: grid; gap: 5px; margin: 4px 5px 10px; color: #b9d9e6; font-size: 12px; }
+.merge-action-progress progress { width: 100%; accent-color: #65d9b4; }
 .merge-level-status { display: flex; align-items: center; gap: 8px; }
 .merge-level-status button { margin: 0; padding: 3px 8px; font-size: 13px; }
 .model-input label { display: inline-block; margin-right: 8px; } .model-input input[type=number] { width: 90px; appearance: textfield; -moz-appearance: textfield; }

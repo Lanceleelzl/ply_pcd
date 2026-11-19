@@ -67,4 +67,10 @@ def read_status(directory: Path) -> dict[str, Any]:
     path = status_path(directory)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Job not found")
-    return json.loads(path.read_text(encoding="utf-8"))
+    for attempt in range(5):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.02 * (attempt + 1))

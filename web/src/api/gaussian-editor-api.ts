@@ -44,7 +44,7 @@ export interface EditorTask {
   streamed_export_status?: string; streamed_export_phase?: string; streamed_export_progress?: number | null;
   streamed_export_started_at_unix?: number; streamed_export_error?: string; streamed_export_version?: string;
   streamed_exports?: Array<{ version: string; path: string; levels: number[] }>;
-  versions: Array<{ version: string; created_at_unix: number; history_cursor: number; levels: EditorResult[] }>;
+  versions: Array<{ version: string; created_at_unix: number; history_cursor: number; state?: EditorState; levels: EditorResult[] }>;
   created_at_unix: number; updated_at_unix?: number;
 }
 

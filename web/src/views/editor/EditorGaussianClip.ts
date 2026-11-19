@@ -41,7 +41,10 @@ bool editorContains(int kind, int first, int count, vec3 point) {
     vec3 q = -rotation.yzw;
     vec3 t = 2.0 * cross(q, offset);
     vec3 local = offset + rotation.x * t + cross(q, t);
-    return all(lessThanEqual(abs(local), size * 0.5));
+    float extent = max(size.x, max(size.y, size.z));
+    float magnitude = max(abs(offset.x), max(abs(offset.y), abs(offset.z)));
+    float tolerance = 16.0 * 0.00000011920928955078125 * max(extent, magnitude);
+    return all(lessThanEqual(abs(local), size * 0.5 + vec3(tolerance)));
 }
 
 bool editorKeeps(vec3 point) {
@@ -101,7 +104,10 @@ fn editorContains(kind: i32, first: i32, count: i32, point: vec3f) -> bool {
     let q = -rotation.yzw;
     let t = 2.0 * cross(q, offset);
     let local = offset + rotation.x * t + cross(q, t);
-    return all(abs(local) <= size * 0.5);
+    let extent = max(size.x, max(size.y, size.z));
+    let magnitude = max(abs(offset.x), max(abs(offset.y), abs(offset.z)));
+    let tolerance = 16.0 * 0.00000011920928955078125 * max(extent, magnitude);
+    return all(abs(local) <= size * 0.5 + vec3f(tolerance));
 }
 
 fn editorKeeps(point: vec3f) -> bool {

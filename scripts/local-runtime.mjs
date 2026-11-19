@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
 
 const root = resolve(import.meta.dirname, "..");
 const toolsDirectory = join(root, ".tools");
@@ -239,6 +240,33 @@ async function setup() {
   console.log("[setup] Local runtime is ready.");
 }
 
+async function openDevelopmentPage(url, shutdown) {
+  const signal = AbortSignal.any([shutdown, AbortSignal.timeout(30000)]);
+  try {
+    while (true) {
+      // Vite proxies /health to the API, so a successful check covers both servers.
+      const ready = await fetch(new URL("/health", url), {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]),
+      }).then(async (response) => response.ok && (await response.json()).status === "ok").catch(() => false);
+      signal.throwIfAborted();
+      if (ready) break;
+      await delay(250, undefined, { signal });
+    }
+  } catch {
+    if (!shutdown.aborted) console.warn(`[local] Browser launch skipped: services did not become ready. Open ${url} manually.`);
+    return;
+  }
+
+  const [command, ...args] = platform() === "win32"
+    ? ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Process", url]
+    : [platform() === "darwin" ? "open" : "xdg-open", url];
+  const browser = spawn(command, args, { stdio: "ignore", windowsHide: true });
+  const warn = () => console.warn(`[local] Could not open the default browser. Open ${url} manually.`);
+  browser.once("error", warn);
+  browser.once("exit", (code) => { if (code !== 0) warn(); });
+}
+
 async function serve(development) {
   await setup();
   const { port, web_port: webPort, source_retention_hours: sourceRetentionHours } = await readLocalConfig();
@@ -263,17 +291,22 @@ async function serve(development) {
   const children = [api];
   if (development) {
     console.log(`[local] Starting web development server at http://localhost:${webPort}`);
-    children.push(spawn(process.execPath, [join(root, "node_modules", "vite", "bin", "vite.js"), "--config", "web/vite.config.ts"], {
+    children.push(spawn(process.execPath, [join(root, "node_modules", "vite", "bin", "vite.js"), "--config", "web/vite.config.ts", "--strictPort"], {
       cwd: root,
       env: environment,
       stdio: "inherit",
       shell: false,
     }));
   }
-  const stopChildren = (signal) => children.forEach((child) => {
-    if (!child.killed) child.kill(signal);
-  });
+  const shutdown = new AbortController();
+  const stopChildren = (signal) => {
+    shutdown.abort();
+    children.forEach((child) => {
+      if (!child.killed) child.kill(signal);
+    });
+  };
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stopChildren(signal));
+  if (development) void openDevelopmentPage(`http://127.0.0.1:${webPort}/`, shutdown.signal);
   const code = await new Promise((resolveExit) => {
     children.forEach((child) => child.on("exit", resolveExit));
   });

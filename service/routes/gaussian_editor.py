@@ -110,7 +110,21 @@ def lod_frames_conflict(first: tuple, second: tuple) -> bool:
 
 
 def lod_frame_complete(frame: tuple) -> bool:
-    return bool(frame[0]) and all(value is not None for values in frame[1:] for value in values)
+    return bool(frame[0]) and all(value is not None and math.isfinite(value)
+                                  for values in frame[1:] for value in values)
+
+
+def validate_lod_frames(sources: dict[int, Path]) -> None:
+    reference = None
+    reference_level = None
+    for level, source in sources.items():
+        frame = lod_coordinate_frame(read_ply_coordinates(source))
+        if not lod_frame_complete(frame):
+            raise HTTPException(status_code=422, detail=f"LOD {level} 坐标头不完整或无效，无法核验。请检查 EPSG、offset、shift 和 scale。")
+        if reference is not None and frame != reference:
+            raise HTTPException(status_code=422, detail=f"LOD {level} 与 LOD {reference_level} 的 EPSG、offset、shift 或 scale 不一致。")
+        reference = frame
+        reference_level = level
 
 
 def output_coordinate_comments(source: Path, geography: dict[str, Any] | None,
@@ -746,6 +760,7 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
                                  "sha256": digest, "format": probe.format,
                                  "count": _ply_vertex_count(path)})
                 status.update(lods=lods, format="lod_group", filename=lods[0]["name"])
+                await asyncio.to_thread(validate_lod_frames, {item["level"]: directory / item["path"] for item in lods})
             else:
                 suffix = Path(file.filename or "").suffix.lower() if file else ".zip"
                 if suffix not in {".ply", ".sog", ".spz", ".zip"}:
@@ -896,13 +911,8 @@ def create_editor_router(tasks: EditorTasks) -> APIRouter:
             raise HTTPException(status_code=422, detail="Selected LOD does not exist")
         state = status["history"][status["history_cursor"]]["state"]
         if status["input_kind"] == "lod_group" and len(levels) > 1:
-            sources = {item["level"]: directory / item["path"] for item in status["lods"]}
-            frames = [lod_coordinate_frame(read_ply_coordinates(sources[level])) for level in levels]
-            if any(lod_frames_conflict(frame, other) for index, frame in enumerate(frames)
-                   for other in frames[index + 1:]):
-                raise HTTPException(status_code=422, detail="所选 LOD 的 EPSG、投影原点、shift 或 scale 不一致，不能批量应用规则")
-            if not all(lod_frame_complete(frame) for frame in frames) and not state.get("same_local_frame_confirmed", False):
-                raise HTTPException(status_code=422, detail="所选 LOD 坐标头不完整，请先确认各层使用同一局部坐标框架")
+            await asyncio.to_thread(validate_lod_frames, {item["level"]: directory / item["path"]
+                                                         for item in status["lods"] if item["level"] in levels})
         validate_rules(state["rules"])
         version = str(uuid.uuid4())
         status.update(process_status="queued", process_phase="等待处理", process_progress=None, process_level=None,

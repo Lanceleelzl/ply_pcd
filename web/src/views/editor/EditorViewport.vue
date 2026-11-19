@@ -7,6 +7,7 @@ import { loadPreview } from '../../point-cloud';
 import { SingleModelEngine } from '../../engine/core/SingleModelEngine';
 import { keepsEditorPoint } from './editor-rule-preview';
 import { clipToLocal, clipToScene } from './editor-clip-coordinates';
+import { clipSegmentToNearPlane, projectedSegmentPoint, projectVisiblePoint } from './editor-boundary-projection';
 
 const props = defineProps<{ previewUrl: string; gaussianUrl?: string | null; filename: string; gaussianLod?: number;
   adaptiveLodPreview?: boolean;
@@ -23,8 +24,16 @@ const emit = defineEmits<{ pick: [point: XYZ]; pickPolygon: [point: [number, num
   moveVolumeCenter: [point: [number, number]]; moveVolumeHeight: [height: number];
   moveVolumeRadius: [radius: number]; moveBoxSize: [axis: number, size: number];
   rotateBox: [rotation: [number, number, number, number]];
-  clipValuesChanged: [values: { min: XYZ; max: XYZ; center: XYZ; size: XYZ }] }>();
+  clipValuesChanged: [values: { min: XYZ; max: XYZ; center: XYZ; size: XYZ }];
+  toolbarHeightChanged: [height: number] }>();
 const canvas = ref<HTMLCanvasElement | null>(null);
+const toolbar = ref<HTMLElement | null>(null);
+watch(toolbar, (element, _previous, onCleanup) => {
+  if (!element) return;
+  const observer = new ResizeObserver(() => emit('toolbarHeightChanged', Math.ceil(element.getBoundingClientRect().height) + 24));
+  observer.observe(element);
+  onCleanup(() => observer.disconnect());
+}, { flush: 'post' });
 const loading = ref(false);
 const loadingStage = ref('');
 const loadingSeconds = ref(0);
@@ -67,29 +76,6 @@ let displayGeneration = 0;
 let lastPointer: [number, number] | null = null;
 let polygonPointerDown: [number, number] | null = null;
 
-function projectedSegmentPoint(a: [number, number], b: [number, number], pointer: [number, number],
-  project: (point: [number, number]) => [number, number], maxDistance: number) {
-  const sa = project(a), sb = project(b);
-  const dx = sb[0] - sa[0], dy = sb[1] - sa[1], length = dx * dx + dy * dy;
-  if (!length) return null;
-  const u = Math.max(0, Math.min(1, ((pointer[0] - sa[0]) * dx + (pointer[1] - sa[1]) * dy) / length));
-  if (Math.hypot(pointer[0] - sa[0] - u * dx, pointer[1] - sa[1] - u * dy) >= maxDistance) return null;
-  const axis = Math.abs(dx) >= Math.abs(dy) ? 0 : 1;
-  const target = sa[axis] + u * (sb[axis] - sa[axis]);
-  let low = 0, high = 1;
-  for (let step = 0; step < 12; step++) {
-    const middle = (low + high) / 2;
-    const candidate: [number, number] = [a[0] + middle * (b[0] - a[0]), a[1] + middle * (b[1] - a[1])];
-    const projected = project(candidate)[axis];
-    if ((projected < target) === (sb[axis] > sa[axis])) low = middle;
-    else high = middle;
-  }
-  const t = (low + high) / 2;
-  const point: [number, number] = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-  const screen = project(point);
-  return { point, screen, distance: Math.hypot(pointer[0] - screen[0], pointer[1] - screen[1]) };
-}
-
 function hitDraftSegment(pointer: [number, number]) {
   if (props.editingPolygonIndex == null || props.polygonDraft.length < 3 || !engine) return null;
   const camera = engine.application.camera.camera;
@@ -100,13 +86,17 @@ function hitDraftSegment(pointer: [number, number]) {
     const screen = camera.worldToScreen(new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z));
     return [screen.x, screen.y];
   };
+  const depth = (point: [number, number]) => camera.entity.forward.dot(
+    new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z).sub(camera.entity.getPosition()));
   let best = 8;
   let hit: { index: number; point: [number, number]; x: number; y: number } | null = null;
   for (let index = 0; index < props.polygonDraft.length; index++) {
     const a = props.polygonDraft[index], b = props.polygonDraft[(index + 1) % props.polygonDraft.length];
-    if (Math.hypot(...project(a).map((value, axis) => pointer[axis] - value)) < 10
-      || Math.hypot(...project(b).map((value, axis) => pointer[axis] - value)) < 10) continue;
-    const candidate = projectedSegmentPoint(a, b, pointer, project, best);
+    if (depth(a) >= camera.nearClip && Math.hypot(...project(a).map((value, axis) => pointer[axis] - value)) < 10
+      || depth(b) >= camera.nearClip && Math.hypot(...project(b).map((value, axis) => pointer[axis] - value)) < 10) continue;
+    const segment = clipSegmentToNearPlane([a[0], a[1], 0], [b[0], b[1], 0], depth(a), depth(b), camera.nearClip);
+    if (!segment) continue;
+    const candidate = projectedSegmentPoint([segment[0][0], segment[0][1]], [segment[1][0], segment[1][1]], pointer, project, best);
     if (candidate && candidate.distance < best) {
       best = candidate.distance;
       hit = { index: index + 1, point: candidate.point, x: candidate.screen[0], y: candidate.screen[1] };
@@ -126,6 +116,8 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
     const screen = camera.worldToScreen(new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z));
     return [screen.x, screen.y] as [number, number];
   };
+  const depth = (point: [number, number]) => camera.entity.forward.dot(
+    new pc.Vec3(point[0] - origin[0], point[1] - origin[1], z).sub(camera.entity.getPosition()));
   const polygons = props.rules.flatMap((rule, index) => rule.type === 'polygon' && index !== props.editingPolygonIndex
     ? [rule.points] : []);
   let best = 12;
@@ -135,12 +127,18 @@ function snapPolygon(screenPoint: [number, number]): { point: [number, number]; 
       const a = polygon[index], b = polygon[(index + 1) % polygon.length];
       const sa = project(a), sb = project(b);
       let point: [number, number], screen: [number, number];
-      if (kind === 'vertex') { point = a; screen = sa; }
+      if (kind === 'vertex') {
+        if (depth(a) < camera.nearClip) continue;
+        point = a; screen = sa;
+      }
       else if (kind === 'midpoint') {
         point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (depth(point) < camera.nearClip) continue;
         screen = project(point);
       } else {
-        const candidate = projectedSegmentPoint(a, b, screenPoint, project, best);
+        const segment = clipSegmentToNearPlane([a[0], a[1], 0], [b[0], b[1], 0], depth(a), depth(b), camera.nearClip);
+        if (!segment) continue;
+        const candidate = projectedSegmentPoint([segment[0][0], segment[0][1]], [segment[1][0], segment[1][1]], screenPoint, project, best);
         if (!candidate) continue;
         point = candidate.point; screen = candidate.screen;
       }
@@ -209,16 +207,30 @@ function updateBoundaryLines(): void {
   const bounds = engine.scene.bounds();
   const z = (bounds.min.z + bounds.max.z) / 2;
   const origin = engine.scene.displayOrigin;
-  const project3d = (vertices: XYZ[], closed = false) => (closed ? [...vertices, vertices[0]] : vertices).map(([x, y, height]) => {
+  const depth = (point: XYZ) => component.entity.forward.dot(
+    new pc.Vec3(...point.map((value, axis) => value - origin[axis])).sub(component.entity.getPosition()));
+  const projectPoint = ([x, y, height]: XYZ) => {
     const screen = component.worldToScreen(new pc.Vec3(x - origin[0], y - origin[1], height - origin[2]));
     return `${screen.x.toFixed(1)},${screen.y.toFixed(1)}`;
-  }).join(' ');
+  };
+  const project3d = (vertices: XYZ[], closed = false): string[] => {
+    const points = closed ? [...vertices, vertices[0]] : vertices;
+    if (points.every(point => depth(point) >= component.nearClip)) return [points.map(projectPoint).join(' ')];
+    const segments: string[] = [];
+    for (let index = 1; index < points.length; index++) {
+      const segment = clipSegmentToNearPlane(points[index - 1], points[index],
+        depth(points[index - 1]), depth(points[index]), component.nearClip);
+      if (segment) segments.push(segment.map(projectPoint).join(' '));
+    }
+    return segments;
+  };
   const project2d = (vertices: [number, number][], closed = false) =>
     project3d(vertices.map(([x, y]) => [x, y, z + origin[2]]), closed);
   const lines: typeof boundaryLines.value = [];
   props.rules.forEach((rule, index) => {
     if (rule.type === 'polygon') {
-      lines.push({ key: `rule-${index}`, points: project2d(rule.points, true), action: rule.action, draft: false, volume: false });
+      project2d(rule.points, true).forEach((points, segment) => lines.push({ key: `rule-${index}-${segment}`,
+        points, action: rule.action, draft: false, volume: false }));
     } else if (rule.type === 'sphere') {
       for (let plane = 0; plane < 3; plane++) {
         const points: XYZ[] = Array.from({ length: 32 }, (_, step) => {
@@ -228,8 +240,8 @@ function updateBoundaryLines(): void {
           point[(plane + 2) % 3] += Math.sin(angle) * rule.radius;
           return point;
         });
-        lines.push({ key: `rule-${index}-circle-${plane}`, points: project3d(points, true),
-          action: rule.action, draft: false, volume: true });
+        project3d(points, true).forEach((points, segment) => lines.push({ key: `rule-${index}-circle-${plane}-${segment}`,
+          points, action: rule.action, draft: false, volume: true }));
       }
     } else {
       const corners: XYZ[] = Array.from({ length: 8 }, (_, corner) => {
@@ -239,16 +251,18 @@ function updateBoundaryLines(): void {
       });
       for (let corner = 0; corner < 8; corner++) for (let axis = 0; axis < 3; axis++) {
         if (corner & (1 << axis)) continue;
-        lines.push({ key: `rule-${index}-edge-${corner}-${axis}`,
-          points: project3d([corners[corner], corners[corner | (1 << axis)]]),
-          action: rule.action, draft: false, volume: true });
+        project3d([corners[corner], corners[corner | (1 << axis)]]).forEach((points, segment) =>
+          lines.push({ key: `rule-${index}-edge-${corner}-${axis}-${segment}`,
+            points, action: rule.action, draft: false, volume: true }));
       }
     }
   });
-  if (props.polygonDraft.length) lines.push({ key: 'draft', points: project2d(props.polygonDraft), action: 'keep', draft: true, volume: false });
-  const handles = props.polygonDraft.map(([x, y], index) => {
+  if (props.polygonDraft.length) project2d(props.polygonDraft).forEach((points, segment) =>
+    lines.push({ key: `draft-${segment}`, points, action: 'keep', draft: true, volume: false }));
+  const handles = props.polygonDraft.flatMap(([x, y], index) => {
+    if (depth([x, y, z + origin[2]]) < component.nearClip) return [];
     const screen = component.worldToScreen(new pc.Vec3(x - origin[0], y - origin[1], z));
-    return { index, x: screen.x, y: screen.y };
+    return [{ index, x: screen.x, y: screen.y }];
   });
   const width = canvas.value.clientWidth, height = canvas.value.clientHeight;
   if (width !== sceneSize.value.width || height !== sceneSize.value.height) sceneSize.value = { width, height };
@@ -256,53 +270,47 @@ function updateBoundaryLines(): void {
   if (JSON.stringify(handles) !== JSON.stringify(vertexHandles.value)) vertexHandles.value = handles;
   const selected = props.editingVolumeIndex === null || props.editingVolumeIndex === undefined
     ? null : props.rules[props.editingVolumeIndex];
+  const projectHandle = (point: XYZ) => projectVisiblePoint(point, depth(point), component.nearClip,
+    value => component.worldToScreen(new pc.Vec3(...value.map((coordinate, axis) => coordinate - origin[axis]))));
   if (selected && selected.type !== 'polygon') {
-    const screen = component.worldToScreen(new pc.Vec3(...selected.center.map((value, axis) => value - origin[axis])));
-    if (volumeCenterHandle.value?.x !== screen.x || volumeCenterHandle.value?.y !== screen.y)
-      volumeCenterHandle.value = { x: screen.x, y: screen.y };
+    const screen = projectHandle(selected.center);
+    if (JSON.stringify(volumeCenterHandle.value) !== JSON.stringify(screen)) volumeCenterHandle.value = screen;
     const heightOffset = selected.type === 'sphere' ? selected.radius * 0.7 : Math.max(...selected.size) * 1.1;
-    const heightScreen = component.worldToScreen(new pc.Vec3(selected.center[0] - origin[0],
-      selected.center[1] - origin[1], selected.center[2] + heightOffset - origin[2]));
-    if (volumeHeightHandle.value?.x !== heightScreen.x || volumeHeightHandle.value?.y !== heightScreen.y)
-      volumeHeightHandle.value = { x: heightScreen.x, y: heightScreen.y };
+    const heightScreen = projectHandle([selected.center[0], selected.center[1], selected.center[2] + heightOffset]);
+    if (JSON.stringify(volumeHeightHandle.value) !== JSON.stringify(heightScreen)) volumeHeightHandle.value = heightScreen;
   } else {
     if (volumeCenterHandle.value) volumeCenterHandle.value = null;
     if (volumeHeightHandle.value) volumeHeightHandle.value = null;
   }
   if (selected?.type === 'sphere') {
-    const screen = component.worldToScreen(new pc.Vec3(selected.center[0] + selected.radius - origin[0],
-      selected.center[1] - origin[1], selected.center[2] - origin[2]));
-    if (volumeRadiusHandle.value?.x !== screen.x || volumeRadiusHandle.value?.y !== screen.y)
-      volumeRadiusHandle.value = { x: screen.x, y: screen.y };
-    const depthScreen = component.worldToScreen(new pc.Vec3(selected.center[0] - origin[0],
-      selected.center[1] - origin[1], selected.center[2] - selected.radius - origin[2]));
-    const center = volumeCenterHandle.value!;
-    const height = volumeHeightHandle.value!;
-    const depthHandle = (draggingDepthRadius || Math.hypot(depthScreen.x - center.x, depthScreen.y - center.y) >= 20
-      && Math.hypot(depthScreen.x - height.x, depthScreen.y - height.y) >= 20)
-      ? { x: depthScreen.x, y: depthScreen.y } : null;
+    const screen = projectHandle([selected.center[0] + selected.radius, selected.center[1], selected.center[2]]);
+    if (JSON.stringify(volumeRadiusHandle.value) !== JSON.stringify(screen)) volumeRadiusHandle.value = screen;
+    const depthScreen = projectHandle([selected.center[0], selected.center[1], selected.center[2] - selected.radius]);
+    const center = volumeCenterHandle.value;
+    const height = volumeHeightHandle.value;
+    const depthHandle = depthScreen && (draggingDepthRadius
+      || (!center || Math.hypot(depthScreen.x - center.x, depthScreen.y - center.y) >= 20)
+      && (!height || Math.hypot(depthScreen.x - height.x, depthScreen.y - height.y) >= 20)) ? depthScreen : null;
     if (JSON.stringify(depthHandle) !== JSON.stringify(volumeDepthRadiusHandle.value))
       volumeDepthRadiusHandle.value = depthHandle;
   } else {
     if (volumeRadiusHandle.value) volumeRadiusHandle.value = null;
     if (volumeDepthRadiusHandle.value) volumeDepthRadiusHandle.value = null;
   }
-  const boxHandles = selected?.type === 'box' ? ([0, 1, 2] as const).map(axis => {
+  const boxHandles = selected?.type === 'box' ? ([0, 1, 2] as const).flatMap(axis => {
     const local: XYZ = [0, 0, 0];
     local[axis] = selected.size[axis] / 2;
     const rotated = rotateBoxVector(local, selected.rotation);
-    const screen = component.worldToScreen(new pc.Vec3(...rotated.map((value, index) =>
-      value + selected.center[index] - origin[index])));
-    return { axis, x: screen.x, y: screen.y };
+    const screen = projectHandle(rotated.map((value, index) => value + selected.center[index]) as XYZ);
+    return screen ? [{ axis, x: screen.x, y: screen.y }] : [];
   }) : [];
   if (JSON.stringify(boxHandles) !== JSON.stringify(boxSizeHandles.value)) boxSizeHandles.value = boxHandles;
-  const rotationHandles = selected?.type === 'box' ? ([0, 1, 2] as const).map(axis => {
+  const rotationHandles = selected?.type === 'box' ? ([0, 1, 2] as const).flatMap(axis => {
     const local: XYZ = [0, 0, 0];
     local[(axis + 1) % 3] = Math.max(...selected.size) * 0.7;
     const rotated = rotateBoxVector(local, selected.rotation);
-    const screen = component.worldToScreen(new pc.Vec3(...rotated.map((value, index) =>
-      value + selected.center[index] - origin[index])));
-    return { axis, x: screen.x, y: screen.y };
+    const screen = projectHandle(rotated.map((value, index) => value + selected.center[index]) as XYZ);
+    return screen ? [{ axis, x: screen.x, y: screen.y }] : [];
   }) : [];
   if (JSON.stringify(rotationHandles) !== JSON.stringify(boxRotationHandles.value)) boxRotationHandles.value = rotationHandles;
 }
@@ -583,7 +591,7 @@ function applyClip(): void {
   engine.setBoxClip(props.clip.mode === 'box', clipToLocal(props.clip.center, origin), props.clip.size);
   for (const plane of ['xoy', 'xoz', 'yoz'] as const) {
     const value = props.clip.planes[plane];
-    engine.setOriginPlane(plane, value.visible, value.side);
+    engine.setOriginPlane(plane, value.visible, value.visible ? value.side : 0);
   }
 }
 function applyRules(): void {
@@ -712,7 +720,7 @@ onUnmounted(() => { invalidateGaussianLoad(); aborter?.abort(); engine?.destroy(
         <title>绕局部{{ ['X', 'Y', 'Z'][handle.axis] }}轴旋转</title>
       </circle>
     </svg>
-    <div class="editor-scene-tools">
+    <div ref="toolbar" class="editor-scene-tools">
       <button type="button" @click="fit">适配视角</button>
       <button type="button" :class="{ active: topView }" @click="toggleTop">{{ topView ? '返回三维' : '俯视' }}</button>
       <button type="button" :class="{ active: query }" @click="toggleQuery">场景取点</button>
