@@ -12,6 +12,7 @@ import { useWorkspaceStore } from '../../stores/workspace-store';
 import { formatTaskTime } from '../../shared/task-time';
 import { pickDirectory } from '../../shared/directory-selection';
 import type { XYZ } from '../../coordinate-math';
+import EditorFailureFlag from './EditorFailureFlag.vue';
 import EditorViewport from './EditorViewport.vue';
 import { sliceClipBounds, transformedClipBounds } from './editor-clip-coordinates';
 import { projectedOriginForPoint } from './editor-geography';
@@ -53,7 +54,7 @@ const historyRecoveryKey = ref(0);
 const formats = { ply: 'PLY', compressed_ply: 'Compressed PLY', sog: '单个 SOG', streamed_sog: '流式 SOG' } as const;
 type ResultFormat = keyof typeof formats;
 const resultFormats = Object.keys(formats) as ResultFormat[];
-const feedback = ref<Record<string, { action: string; detail?: string }>>({});
+const feedback = ref<Record<string, { action: string; detail?: string; error?: string }>>({});
 function resultKey(version: string, level: number, format: ResultFormat) {
   return [version, format, format === 'streamed_sog' ? 'group' : level].join(':');
 }
@@ -640,7 +641,7 @@ async function saveResult(version: string, level: number, format: ResultFormat):
   const picker = (window as typeof window & { showSaveFilePicker?: (options: { suggestedName: string }) =>
     Promise<{ createWritable(): Promise<EditorWritable> }> }).showSaveFilePicker;
   if (format !== 'ply' && !picker) {
-    feedback.value[key] = { action: generate ? '生成' : '保存', detail: '无法选择保存位置，请使用支持文件保存的 Chrome 或 Edge。' };
+    feedback.value[key] = { action: generate ? '生成' : '保存', error: '无法选择保存位置，请使用支持文件保存的 Chrome 或 Edge。' };
     return;
   }
   const controller = new AbortController();
@@ -721,13 +722,14 @@ async function saveResult(version: string, level: number, format: ResultFormat):
     if (stage === 'pick' && cancelled) return;
     const reason = error instanceof Error ? error.message : String(error);
     if (format === 'ply' && pendingPlyManifests.has(`${taskId}:${key}`)) {
-      feedback.value[key] = { action: '补存坐标说明', detail: `PLY 已保存，坐标说明保存失败：${reason}` };
+      feedback.value[key] = { action: '补存坐标说明', error: `PLY 已保存，坐标说明保存失败：${reason}` };
       return;
     }
     const generationFailed = stage === 'generate';
     feedback.value[key] = {
       action: generationFailed ? '重新生成' : stage === 'pick' && generate ? '生成' : '重新保存',
-      detail: cancelled ? '已取消保存' : `${generationFailed ? '生成失败' : '保存失败'}：${reason}`,
+      detail: cancelled ? '已取消保存' : undefined,
+      error: cancelled ? undefined : `${generationFailed ? '生成失败' : '保存失败'}：${reason}`,
     };
   } finally {
     if (submittingTask.value === 'export') submittingTask.value = null;
@@ -918,9 +920,9 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
             <button type="button" :disabled="taskOperationBusy || !restoreVersionId" @click="restoreVersion(task.versions.find(version => version.version === restoreVersionId)!)">恢复该版编辑设置</button>
             <p>恢复边界、变换、坐标与目标层级，新增一步编辑历史；已有成果保留，不重新处理。</p>
           </template>
-          <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 {{ task.process_error }}</p>
-          <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> {{ task.export_error }}</p>
-          <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> {{ task.streamed_export_error }}</p>
+          <p v-if="task.process_status !== 'not_requested'" role="status">{{ task.process_status === 'failed' ? '失败' : task.process_phase ?? task.process_status }}<template v-if="task.process_level !== null && task.process_level !== undefined"> · LOD {{ task.process_level }}</template><template v-if="task.process_progress !== null && task.process_progress !== undefined"> · {{ task.process_progress }}%</template><template v-if="operationElapsed(task.process_status, task.process_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.process_status, task.process_started_at_unix) }} 秒</template><br>已完成 {{ task.process_completed ?? 0 }}／{{ task.process_total ?? 0 }} 层 <EditorFailureFlag v-if="task.process_error" :reason="task.process_error" /></p>
+          <p v-if="task.export_status && task.export_status !== 'not_requested'" role="status">格式导出：{{ task.export_status === 'failed' ? '失败' : task.export_phase ?? task.export_status }}<template v-if="task.export_progress !== null && task.export_progress !== undefined"> {{ task.export_progress }}%</template><template v-if="operationElapsed(task.export_status, task.export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.export_status, task.export_started_at_unix) }} 秒</template> <EditorFailureFlag v-if="task.export_error" :reason="task.export_error" /></p>
+          <p v-if="task.streamed_export_status && task.streamed_export_status !== 'not_requested'" role="status">Streamed SOG：{{ task.streamed_export_status === 'failed' ? '失败' : task.streamed_export_phase ?? task.streamed_export_status }}<template v-if="task.streamed_export_progress !== null && task.streamed_export_progress !== undefined"> {{ task.streamed_export_progress }}%</template><template v-if="operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) !== null"> · 已用 {{ operationElapsed(task.streamed_export_status, task.streamed_export_started_at_unix) }} 秒</template> <EditorFailureFlag v-if="task.streamed_export_error" :reason="task.streamed_export_error" /></p>
           <section v-for="(version, versionIndex) in task.versions" :key="version.version">
             <h3>成果 {{ versionIndex + 1 }} · {{ formatTaskTime(version.created_at_unix) }}</h3>
             <p v-for="item in version.levels" :key="item.level">
@@ -935,6 +937,8 @@ async function downloadManifest(version: string, level: number, format: 'ply' | 
                   {{ feedback[resultKey(version.version, item.level, format)]?.action || (hasResult(task, version.version, item.level, format) ? '保存' : '生成') }}
                   {{ formats[format] }}{{ format === 'streamed_sog' && version.levels.length > 1 ? '（整组）' : '' }}
                 </button>
+                <EditorFailureFlag v-if="feedback[resultKey(version.version, item.level, format)]?.error"
+                  :reason="feedback[resultKey(version.version, item.level, format)].error!" />
                 <small v-if="feedback[resultKey(version.version, item.level, format)]?.detail" role="status">{{ feedback[resultKey(version.version, item.level, format)].detail }}</small>
                 <button v-if="(format === 'compressed_ply' || format === 'sog') && hasResult(task, version.version, item.level, format)" type="button"
                   @click="downloadManifest(version.version, item.level, format)">{{ formats[format] }} 坐标说明</button>
