@@ -166,7 +166,7 @@ export class SingleModelEngine {
           }
           return handled;
         },
-        navigationBlocked: event => event.button === 2 || this.gizmoTransforming
+        navigationBlocked: event => this.gizmoTransforming
           || this.queryDragging || (event.button === 0 && this.queryHovered)
           || (event.button === 0 && this.clipGizmoInput.hovered),
         dragBlocked: () => this.clippingHandles.dragging || this.gizmoTransforming || this.queryDragging,
@@ -174,9 +174,9 @@ export class SingleModelEngine {
       if (navigationMode === 'fly') {
         this.flyNavigation = new SceneNavigationController({ canvas,
           camera: { move: (forward, right, up) => this.camera.moveByLocal(forward, right, up),
-            look: (dx, dy) => this.camera.lookByPixels(dx, dy),
+            look: (dx, dy) => this.camera.orbitByPixels(dx, dy),
             pan: (dx, dy) => this.camera.panByPixels(dx, dy),
-            dolly: delta => this.camera.dolly(delta) },
+            dolly: delta => this.camera.zoom(delta) },
           speed: () => Math.max(this.scene.baseDiagonal * 0.25, 0.1),
           blocked: () => this.tools.isActive('coordinate-query') && this.queryPicking
             || this.clippingHandles.dragging || this.gizmoTransforming || this.queryDragging,

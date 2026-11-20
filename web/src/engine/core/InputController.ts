@@ -8,7 +8,7 @@ export class InputController {
     private readonly camera: ViewportCameraController,
     delegate: ViewportInputDelegate,
   ) {
-    let navigation: 'orbit' | 'look' | 'pan' | null = null;
+    let navigation: 'orbit' | 'pan' | null = null;
     let lastX = 0;
     let lastY = 0;
     const { signal } = this.events;
@@ -27,9 +27,8 @@ export class InputController {
         return;
       }
       if (delegate.navigationBlocked?.(event)) return;
-      if (event.button === 0) navigation = delegate.orbitEnabled?.() === false ? 'pan' :
-        delegate.navigationMode?.() === 'fly' ? 'look' : 'orbit';
-      else if (event.button === 1) navigation = 'pan';
+      if (event.button === 0) navigation = delegate.orbitEnabled?.() === false ? 'pan' : 'orbit';
+      else if (event.button === 1 || event.button === 2) navigation = 'pan';
       else return;
       lastX = event.clientX;
       lastY = event.clientY;
@@ -46,14 +45,12 @@ export class InputController {
       lastX = event.clientX;
       lastY = event.clientY;
       if (navigation === 'orbit') camera.orbitByPixels(dx, dy);
-      else if (navigation === 'look') camera.lookByPixels(dx, dy);
       else camera.panByPixels(dx, dy);
     }, { signal });
     canvas.addEventListener('wheel', event => {
       event.preventDefault();
       delegate.wheel?.(event);
-      if (delegate.navigationMode?.() === 'fly') camera.dolly(event.deltaY);
-      else camera.zoom(event.deltaY);
+      if (!delegate.dragBlocked?.()) camera.zoom(event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1));
     }, { passive: false, signal });
   }
 

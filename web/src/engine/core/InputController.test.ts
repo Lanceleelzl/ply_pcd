@@ -6,7 +6,7 @@ import type { ViewportCameraController } from './ViewportCameraController';
 const windowEvents = new EventTarget();
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 Object.defineProperty(globalThis, 'window', { configurable: true, value: windowEvents });
-const canvas = Object.assign(new EventTarget(), { style: { cursor: '' } });
+const canvas = Object.assign(new EventTarget(), { style: { cursor: '' }, focus() {} });
 const orbit: number[][] = [];
 const pan: number[][] = [];
 const zoom: number[] = [];
@@ -14,12 +14,14 @@ let consume = false;
 let blockNavigation = false;
 let blockDrag = false;
 let releases = 0;
+let mode: 'fly' | 'orbit' = 'orbit';
 const controller = new InputController(canvas as unknown as HTMLCanvasElement, {
   orbitByPixels: (x: number, y: number) => orbit.push([x, y]),
   panByPixels: (x: number, y: number) => pan.push([x, y]),
   zoom: (delta: number) => zoom.push(delta),
 } as unknown as ViewportCameraController, {
   pointerDown: () => consume,
+  navigationMode: () => mode,
   navigationBlocked: () => blockNavigation,
   dragBlocked: () => blockDrag,
   pointerUp: () => { releases++; },
@@ -66,16 +68,27 @@ try {
   assert.equal(send(canvas, 'wheel', { deltaY: 120 }).defaultPrevented, true);
   assert.deepEqual(zoom, [120]);
   assert.equal(releases, 4);
+  mode = 'fly';
+  send(canvas, 'pointerdown');
+  send(windowEvents, 'pointermove', { clientX: 13, clientY: 22 });
+  send(windowEvents, 'pointerup');
+  send(canvas, 'pointerdown', { button: 2 });
+  send(windowEvents, 'pointermove', { clientX: 18, clientY: 24 });
+  send(windowEvents, 'pointerup');
+  send(canvas, 'wheel', { deltaMode: 1, deltaY: 2 });
+  assert.deepEqual(orbit, [[5, 3], [3, 2]]);
+  assert.deepEqual(pan, [[7, 9], [8, 4]]);
+  assert.deepEqual(zoom, [120, 32]);
 
   controller.destroy();
   send(canvas, 'pointerdown');
   send(windowEvents, 'pointermove', { clientX: 50, clientY: 60 });
   send(windowEvents, 'pointerup');
   send(canvas, 'wheel', { deltaY: 240 });
-  assert.equal(orbit.length, 1);
-  assert.equal(pan.length, 1);
-  assert.equal(releases, 4);
-  assert.deepEqual(zoom, [120], 'destroy removes input listeners');
+  assert.equal(orbit.length, 2);
+  assert.equal(pan.length, 2);
+  assert.equal(releases, 6);
+  assert.deepEqual(zoom, [120, 32], 'destroy removes input listeners');
 } finally {
   controller.destroy();
   if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);

@@ -82,10 +82,15 @@ export class ViewportCameraController {
     this.orbit(dx * 180 / Math.max(1, this.canvas.clientWidth), dy * 180 / Math.max(1, this.canvas.clientHeight));
   }
 
-  lookByPixels(dx: number, dy: number): void {
-    const position = this.camera.getPosition().clone();
-    this.orbitByPixels(dx, dy);
-    this.target.copy(position).sub(this.direction.clone().mulScalar(this.distance));
+  orbit(horizontalDegrees: number, verticalDegrees: number): void {
+    const d = this.direction;
+    const horizontal = Math.hypot(d.x, d.y);
+    // At a pole the screen's up vector determines the starting meridian.
+    const yaw = horizontal > 1e-6 ? Math.atan2(d.x, d.y)
+      : Math.atan2(-Math.sign(d.z) * this.up.x, -Math.sign(d.z) * this.up.y);
+    const pitch = Math.atan2(d.z, horizontal) * 180 / Math.PI + verticalDegrees;
+    this.setDirectionFromAngles(yaw * 180 / Math.PI + horizontalDegrees, Math.max(-89.9, Math.min(89.9, pitch)));
+    this.up.copy(this.zUp);
     this.update();
   }
 
@@ -93,15 +98,6 @@ export class ViewportCameraController {
     const rightAxis = new pc.Vec3().cross(this.up, this.direction).normalize();
     this.target.add(this.direction.clone().mulScalar(-forward))
       .add(rightAxis.mulScalar(right)).add(this.zUp.clone().mulScalar(vertical));
-    this.update();
-  }
-
-  dolly(deltaY: number): void {
-    if (this.camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC) {
-      this.zoom(deltaY);
-      return;
-    }
-    this.target.add(this.direction.clone().mulScalar(deltaY * this.baseDiagonal * 0.002));
     this.update();
   }
 
@@ -148,16 +144,6 @@ export class ViewportCameraController {
     direction.normalize();
     this.direction.copy(direction);
     this.up.copy(up ?? (Math.abs(direction.z) > 0.999 ? pc.Vec3.UP : this.zUp));
-    this.update();
-  }
-
-  orbit(horizontalDegrees: number, verticalDegrees: number): void {
-    const yaw = new pc.Quat().setFromAxisAngle(this.up, -horizontalDegrees);
-    yaw.transformVector(this.direction, this.direction).normalize();
-    const right = new pc.Vec3().cross(this.up, this.direction).normalize();
-    const pitch = new pc.Quat().setFromAxisAngle(right, -verticalDegrees);
-    pitch.transformVector(this.direction, this.direction).normalize();
-    pitch.transformVector(this.up, this.up).normalize();
     this.update();
   }
 }

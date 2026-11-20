@@ -12,6 +12,7 @@ export interface SceneNavigationOptions {
   speed: () => number;
   blocked?: () => boolean;
   keyboardOnly?: boolean;
+  rightButtonPan?: boolean;
   frame?: (callback: FrameRequestCallback) => number;
   cancelFrame?: (handle: number) => void;
 }
@@ -52,9 +53,9 @@ export class SceneNavigationController {
     canvas.addEventListener('blur', () => this.clear(), { signal });
     window.addEventListener('blur', () => this.clear(), { signal });
     if (!options.keyboardOnly) canvas.addEventListener('pointerdown', event => {
-      if (this.blocked() || (event.button !== 0 && event.button !== 1)) return;
+      if (this.blocked() || (event.button !== 0 && event.button !== 1 && !(options.rightButtonPan && event.button === 2))) return;
       canvas.focus();
-      this.dragging = event.button === 1 ? 'pan' : 'look';
+      this.dragging = event.button === 0 ? 'look' : 'pan';
       this.pointer = { x: event.clientX, y: event.clientY };
       if (event.button === 1) event.preventDefault();
     }, { signal });

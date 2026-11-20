@@ -41,5 +41,13 @@ test('camera direction, orbit and projection work without view controls or DOM q
   assert.equal(camera.camera!.projection, pc.PROJECTION_PERSPECTIVE);
   controller.zoom(100);
   assert.ok(camera.getPosition().distance(position) > 0.1);
+  const radius = camera.getPosition().length();
+  for (const [yaw, pitch] of [[35, 20], [70, 130], [-50, -220]]) {
+    controller.orbit(yaw, pitch);
+    assert.ok(Math.abs(camera.getPosition().length() - radius) < 1e-5);
+    assert.ok(camera.forward.dot(camera.getPosition().clone().normalize()) < -0.99999);
+    assert.ok(Math.abs(camera.right.z) < 1e-5);
+    assert.ok(camera.up.z > 0);
+  }
   camera.destroy();
 });

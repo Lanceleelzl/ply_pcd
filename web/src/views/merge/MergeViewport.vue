@@ -525,7 +525,7 @@ onMounted(() => {
         }
         drawingPress = false;
       },
-      navigationBlocked: event => event.button === 2 || dragging || (event.button === 0 && Boolean(gizmoInput?.hovered)),
+      navigationBlocked: event => dragging || (event.button === 0 && Boolean(gizmoInput?.hovered)),
       dragBlocked: () => dragging,
     });
     window.addEventListener('pointermove', onVertexPointerMove);

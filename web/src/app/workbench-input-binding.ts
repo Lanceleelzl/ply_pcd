@@ -51,7 +51,7 @@ export function createWorkbenchInputDelegate(options: WorkbenchInputOptions): Vi
       if (query?.active && (query.hovered || query.dragging) && event.button === 0) return true;
       const gizmoHovered = options.clippingInteractionActive()
         ? options.clippingGizmoHovered() : options.movingGizmoHovered();
-      return event.button === 2 || options.gizmoTransforming() || (event.button === 0 && gizmoHovered);
+      return options.gizmoTransforming() || (event.button === 0 && gizmoHovered);
     },
     dragBlocked: () => options.gizmoTransforming() || Boolean(options.query()?.dragging),
   };
