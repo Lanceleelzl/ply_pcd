@@ -1,9 +1,18 @@
 import * as pc from 'playcanvas';
+import { paintService, type Provider, type RasterLayer } from './map-service';
 import { sceneToGeographic, sceneOffset, type GeoOrigin } from './viewer-origin';
 
 export interface MapOptions {
   key: string; imagery: boolean; labels: boolean; dem: boolean;
+  endpoint: string; keyParameter: string;
+  elevationEndpoint?: string; elevationKey?: string; elevationParameter?: string;
   heightOffset: number;
+  provider: Provider;
+  imageLayer?: RasterLayer;
+  labelLayer?: RasterLayer;
+  demUrl: string;
+  elevationLayer?: RasterLayer;
+  encoding?: 'terrarium' | 'terrain-rgb';
 }
 
 function surface(size: number, height = size) {
@@ -34,11 +43,18 @@ function tileUrl(layer: 'img' | 'cia', z: number, x: number, y: number, key: str
   return 'https://t0.tianditu.gov.cn/' + layer + '_w/wmts?' + query;
 }
 
-// A coarse world image stays behind the local, georeferenced terrain while detail streams.
-export async function worldBackdrop(app: pc.Application, base: GeoOrigin, key: string, signal: AbortSignal) {
+async function paintLayer(options: MapOptions, kind: 'img' | 'cia', z: number, x: number, y: number, ctx: CanvasRenderingContext2D, dx: number, dy: number, signal: AbortSignal) {
+  if (options.provider === 'tianditu') return paint(tileUrl(kind,z,x,y,options.key),ctx,dx,dy,signal,'天地图');
+  const layer = kind === 'img' ? options.imageLayer : options.labelLayer;
+  if (!layer) throw Error('请选择地图图层');
+  const tile = surface(256);
+  await paintService(layer,z,x,y,tile,0,0,signal,{endpoint:options.endpoint,key:options.key,parameter:options.keyParameter});
+  ctx.drawImage(tile.canvas,dx,dy);
+}
+
+export async function worldBackdrop(app: pc.Application, base: GeoOrigin, options: MapOptions, signal: AbortSignal) {
   const atlas = surface(512);
-  await Promise.all([0,1,2,3].map(i => paint(tileUrl('img',1,i%2,i>>1,key), atlas,
-    (i%2)*256,(i>>1)*256,signal,'天地图远景影像')));
+  await Promise.all([0,1,2,3].map(i => paintLayer(options,'img',1,i%2,i>>1,atlas,(i%2)*256,(i>>1)*256,signal)));
   signal.throwIfAborted();
   function mercator(x: number, y: number) {
     const [lon, lat] = sceneToGeographic(base,x,y);
@@ -103,15 +119,29 @@ export function mapWindow(base: GeoOrigin, view: {x:number; y:number; span:numbe
 }
 export async function buildProjectMap(app: pc.Application, base: GeoOrigin, config: MapOptions, signal: AbortSignal, window: ReturnType<typeof mapWindow>) {
   const { z, left, top, cols, rows } = window, n = 2 ** z;
+  const bounds=config.imagery && config.imageLayer?.bounds;
+  const latitudeAt=(row:number)=>Math.atan(Math.sinh(Math.PI*(1-2*row/n)))*180/Math.PI;
+  if (bounds && (bounds[0]>(left+cols)/n*360-180 || bounds[2]<left/n*360-180 ||
+    bounds[1]>latitudeAt(top) || bounds[3]<latitudeAt(top+rows))) throw Error('当前视口在影像服务覆盖范围之外');
   const imagery = surface(256*cols,256*rows), labels = surface(256*cols,256*rows), dem = surface(256*cols,256*rows);
   for (let j = 0; j < rows; j++) {
     await Promise.all(Array.from({length:cols}, async (_,i) => {
       const x = left + i, y = top + j;
-      if (config.imagery) await paint(tileUrl('img', z, x, y, config.key), imagery, i*256, j*256, signal, '天地图影像');
-      if (config.labels) await paint(tileUrl('cia', z, x, y, config.key), labels, i*256, j*256, signal, '天地图注记');
+      if (config.imagery) await paintLayer(config,'img',z,x,y,imagery,i*256,j*256,signal);
+      if (config.labels) await paintLayer(config,'cia',z,x,y,labels,i*256,j*256,signal);
       const dz = Math.min(15,z), factor = 2 ** (z-dz);
-      if (config.dem) await paint(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${dz}/${Math.floor(x/factor)}/${Math.floor(y/factor)}.png`,
-        dem, i*256, j*256, signal, 'DEM', factor, x%factor, y%factor);
+      const terrainTemplate = config.demUrl || 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+      if (config.dem) {
+        dem.imageSmoothingEnabled=false;
+        if (config.elevationLayer) {
+          const tile=surface(256);
+          tile.imageSmoothingEnabled=false;
+          await paintService(config.elevationLayer,z,x,y,tile,0,0,signal,
+            {endpoint:config.elevationEndpoint || '',key:config.elevationKey || '',parameter:config.elevationParameter || 'key'});
+          dem.drawImage(tile.canvas,i*256,j*256);
+        } else await paint(terrainTemplate.replace('{z}',String(dz)).replace('{x}',String(Math.floor(x/factor))).replace('{y}',String(Math.floor(y/factor))),
+          dem, i*256, j*256, signal, 'DEM', factor, x%factor, y%factor);
+      }
     }));
   }
   signal.throwIfAborted();
@@ -123,7 +153,10 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
     const lng = (left + u*cols) / n * 360 - 180;
     const latitude = Math.atan(Math.sinh(Math.PI * (1 - 2*(top + v*rows)/n))) * 180 / Math.PI;
     const p = (Math.min(rows*256-1,Math.floor(v*rows*256))*cols*256 + Math.min(cols*256-1,Math.floor(u*cols*256)))*4;
-    const height = pixels ? pixels[p]*256 + pixels[p+1] + pixels[p+2]/256 - 32768 : base.offset[2];
+    let height=base.offset[2];
+    if (pixels && pixels[p+3]) height=config.encoding==='terrain-rgb'
+      ? -10000 + (pixels[p]*65536 + pixels[p+1]*256 + pixels[p+2])*0.1
+      : pixels[p]*256 + pixels[p+1] + pixels[p+2]/256 - 32768;
     positions.push(...sceneOffset({ epsg: 4326, offset: [lng, latitude, height + config.heightOffset] }, base));
     uv.push(u, 1-v);
     if (i < steps && j < steps) {
@@ -166,7 +199,7 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
       const vertices = [triangle.v0, triangle.v1, triangle.v2];
       let nearest: pc.Vec3 | null = null, best = Infinity;
       for (let i = 0; i < indices.length; i += 3) {
-        for (let j = 0; j < rows; j++) {
+        for (let j = 0; j < 3; j++) {
           const k = indices[i + j] * 3;
           vertices[j].set(positions[k], positions[k + 1], positions[k + 2]);
         }

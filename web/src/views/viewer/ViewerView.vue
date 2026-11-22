@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ViewportCube from '../../components/ViewportCube.vue';
+import { providers, readMapService, type Provider, type RasterLayer } from './map-service';
+import type { MapOptions } from './project-map';
 import ViewerIcon from './ViewerIcon.vue';
 import TransformEditor from '../../components/home/TransformEditor.vue';
 import type { TransformParameters } from '../../coordinate-math';
@@ -69,44 +71,114 @@ function readProfile() {
   try { return JSON.parse(localStorage.getItem(profileKey) || 'null'); } catch { return null; }
 }
 const profile = readProfile();
-const savedKey = typeof profile?.key === 'string' ? profile.key.trim() : '';
-const needsImageryKey = profile?.provider === 'osm' && !savedKey;
-const mapOptions = reactive({ key: savedKey,
-  imagery: !needsImageryKey && profile?.imagery !== false,
-  labels: !needsImageryKey && profile?.labels === true, dem: profile?.dem === true, heightOffset: 0 });
-const configured = ref(!!profile), expanded = ref(true), parentVisible = ref(true);
-if (configured.value) layersOpen.value = true;
-const mapLayers = [
-  {key:'imagery', name:'影像'},
-  {key:'labels', name:'注记'}, {key:'dem', name:'地形'},
-] as const;
-function saveProfile() {
-  if (!mapOptions.key.trim() && (mapOptions.imagery || mapOptions.labels)) {
-    mapStatus.value = '请输入天地图浏览器端 Key'; return;
-  }
+interface SourceProfile extends MapOptions {
+  endpoint: string; protocol: 'WMS' | 'WMTS'; terrain: 'default' | 'local' | 'WMS' | 'WMTS';
+}
+function defaults(provider: Provider): SourceProfile {
+  return { provider, key:'', keyParameter:'key', elevationParameter:'key', imagery:true, labels:false, dem:false, heightOffset:0, endpoint:'',
+    protocol:provider==='wms'?'WMS':'WMTS', demUrl:'', encoding:'terrarium',terrain:'default' };
+}
+const profiles: Partial<Record<Provider,SourceProfile>> = Object.fromEntries(
+  Object.entries(profile?.sources || {}).filter(([id])=>Object.hasOwn(providers,id)),
+);
+if (profile && !profile.sources) {
+  profiles.tianditu = { ...defaults('tianditu'), key:String(profile.key || ''), imagery:profile.imagery!==false && !(profile.provider==='osm' && !profile.key),
+    labels:!!profile.labels && !!profile.key, dem:!!profile.dem, heightOffset:Number(profile.heightOffset)||0 };
+}
+const initial = profiles[profile?.active as Provider] || profiles.tianditu || defaults('tianditu');
+const mapOptions = reactive<SourceProfile>({...initial});
+const draft = ref<SourceProfile>({...initial});
+function syncMeterValue(event: Event) {
+  const input = event.currentTarget as HTMLInputElement;
+  queueMicrotask(() => { input.nextElementSibling?.setAttribute('data-value', input.value); });
+}
+const catalog = ref<RasterLayer[]>([]);
+const elevations = ref<RasterLayer[]>(initial.elevationLayer?[initial.elevationLayer]:[]);
+const reading = ref(false), switching = ref(false);
+let discovery: AbortController | undefined;
+let selectionRevision = 0;
+function resetCatalog(terrain=false) {
+  discovery?.abort(); reading.value=false;
+  if (terrain) { elevations.value=[]; draft.value.elevationLayer=undefined; return; }
+  catalog.value=[]; draft.value.imageLayer=undefined; draft.value.labelLayer=undefined;
+}
+async function discover(terrain=false) {
+  resetCatalog(terrain);
+  const request = discovery = new AbortController();
+  reading.value=true; mapStatus.value='';
   try {
-    localStorage.setItem(profileKey, JSON.stringify({ ...mapOptions, provider: 'tianditu', key: mapOptions.key.trim() }));
-  } catch { mapStatus.value = '浏览器未允许保存地图配置'; return; }
-  configured.value = layersOpen.value = true;
-  mapStatus.value = '配置已保存在本机浏览器';
-  if (base || [lng.value, lat.value, altitude.value].every(Number.isFinite)) void applyMap();
+    const endpoint=terrain ? draft.value.elevationEndpoint || '' : draft.value.endpoint;
+    const available = await readMapService(endpoint,
+      terrain ? draft.value.terrain==='WMS'?'WMS':'WMTS' : draft.value.protocol,request.signal,
+      {endpoint,key:terrain?draft.value.elevationKey || '':draft.value.key,parameter:terrain?draft.value.elevationParameter || 'key':draft.value.keyParameter});
+    if (request.signal.aborted) return;
+    if (terrain) {
+      elevations.value=available.filter(l=>l.format==='image/png');
+      if (!elevations.value.length) throw Error('高程服务须提供无损 PNG 高程瓦片');
+      draft.value.elevationLayer=elevations.value[0]; return;
+    }
+    catalog.value=available; draft.value.imageLayer=available[0]; draft.value.labels=false;
+  } catch (error) { if (!request.signal.aborted) mapStatus.value=String(error); }
+  finally { if (!request.signal.aborted) reading.value=false; }
+}
+function changeSource(provider: Provider) {
+  ++selectionRevision;
+  if (switching.value) { ++mapRevision; viewer?.cancelMapChange(); mapBusy.value=false; }
+  discovery?.abort(); reading.value=false; switching.value=false;
+  draft.value={...(profiles[provider] || defaults(provider))};
+  elevations.value=draft.value.elevationLayer?[draft.value.elevationLayer]:[];
+  catalog.value=[draft.value.imageLayer,draft.value.labelLayer].filter((v): v is RasterLayer=>!!v);
+  mapStatus.value='';
+  if (profiles[provider]) void saveProfile();
+}
+catalog.value=[initial.imageLayer,initial.labelLayer].filter((v): v is RasterLayer=>!!v);
+const configured = ref(!!profiles[initial.provider]), expanded = ref(true), parentVisible = ref(true);
+if (configured.value) layersOpen.value = true;
+const mapLayers = computed(()=> ([
+  {key:'imagery', name:'影像'}, {key:'labels', name:'注记'}, {key:'dem', name:'地形'},
+] as const).filter(l=>l.key!=='labels'||mapOptions.provider==='tianditu'||!!mapOptions.labelLayer));
+async function saveProfile() {
+  const next={...draft.value,key:draft.value.key.trim()};
+  if (next.provider==='tianditu' && !next.key && (next.imagery||next.labels)) { mapStatus.value='请输入天地图浏览器端 Key'; return; }
+  if (next.provider!=='tianditu' && next.imagery && !next.imageLayer) { mapStatus.value='请读取地图服务并选择影像图层'; return; }
+  next.labels=next.labels && (next.provider==='tianditu'||!!next.labelLayer);
+  if (next.terrain==='default') next.demUrl='';
+  if (next.terrain==='default') next.encoding='terrarium';
+  if (next.terrain!=='WMS' && next.terrain!=='WMTS') next.elevationLayer=undefined;
+  else if (next.dem && !next.elevationLayer) { mapStatus.value='请读取高程服务并选择图层'; return; }
+  if (next.terrain==='local' && !['{z}','{x}','{y}'].every(token=>next.demUrl.includes(token))) { mapStatus.value='地形地址须包含 {z}、{x}、{y}'; return; }
+  const revision=++selectionRevision;
+  switching.value=true;
+  try {
+    if (!await applyMap(next) || revision!==selectionRevision) return;
+    Object.assign(mapOptions,{imageLayer:undefined,labelLayer:undefined,elevationLayer:undefined},next);
+    configured.value=layersOpen.value=true;
+    profiles[next.provider]=next;
+    try { localStorage.setItem(profileKey,JSON.stringify({active:next.provider,sources:profiles})); }
+    catch { mapStatus.value='地图已切换，浏览器未允许保存配置'; }
+  } finally { if(revision===selectionRevision) switching.value=false; }
 }
 let mapRevision = 0;
 let mapWasVisible = false;
-watch(() => [parentVisible.value, mapOptions.imagery, mapOptions.labels, mapOptions.dem], () => {
+watch(parentVisible, () => {
   if (configured.value) void applyMap();
 });
+function toggleMapLayer(kind: 'imagery'|'labels'|'dem') {
+  mapOptions[kind]=!mapOptions[kind];
+  if (draft.value.provider===mapOptions.provider) draft.value[kind]=mapOptions[kind];
+  void applyMap();
+}
 function rememberBase(origin: GeoOrigin) {
   const point = geographicPosition(origin);
   base = origin; hasBase.value = true;
   [lng.value, lat.value] = point; altitude.value = origin.offset[2];
   if (configured.value) void applyMap();
 }
-async function applyMap() {
+async function applyMap(settings: SourceProfile = mapOptions) {
   if (!viewer) return;
   mapStatus.value = '';
-  if (parentVisible.value && (mapOptions.imagery || mapOptions.labels) && !mapOptions.key.trim()) { mapStatus.value = '影像和注记需要天地图浏览器端 Key'; return; }
-  if (![lng.value, lat.value, altitude.value, mapOptions.heightOffset].every(Number.isFinite)) {
+  if (settings.provider === 'tianditu' && parentVisible.value && (settings.imagery || settings.labels) && !settings.key.trim()) { mapStatus.value = '影像和注记需要天地图浏览器端 Key'; return; }
+  if (![lng.value, lat.value, altitude.value, settings.heightOffset].every(Number.isFinite)) {
     mapStatus.value = '请填写场景原点的经纬度、高程和高度修正'; return;
   }
   const revision = ++mapRevision;
@@ -115,7 +187,7 @@ async function applyMap() {
     await pending;
     if (revision !== mapRevision || lifetime.signal.aborted) return;
     const origin = base ?? { epsg: 4326, offset: [lng.value!, lat.value!, altitude.value!] as [number,number,number] };
-    const options = { ...mapOptions, key: mapOptions.key.trim() };
+    const options = { ...settings };
     if (!parentVisible.value) options.imagery = options.labels = options.dem = false;
     await viewer.loadMap(origin, options, value => { if (revision === mapRevision) mapStatus.value = value; });
     if (revision !== mapRevision) return;
@@ -123,8 +195,9 @@ async function applyMap() {
     if (visible && !mapWasVisible) showGrid.value = false;
     mapWasVisible = visible;
     mapLoaded.value = layersOpen.value = true;
-    attribution.value = [(options.imagery || options.labels) && '天地图',
-      options.dem && 'DEM：Mapzen Terrain Tiles'].filter(Boolean).join(' · ');
+    attribution.value = [(options.imagery || options.labels) && providers[options.provider],
+      options.dem && (options.terrain!=='default' ? '自定义 DEM' : 'DEM：Mapzen Terrain Tiles')].filter(Boolean).join(' · ');
+    return true;
   } catch (error) { if (revision === mapRevision) mapStatus.value = String(error); }
   finally { if (revision === mapRevision) mapBusy.value = false; }
 }
@@ -387,6 +460,7 @@ function select(event: Event, directory: boolean) {
   void open(files, directory);
 }
 onUnmounted(() => {
+  discovery?.abort();
   clearTimeout(limitTimer);
   lifetime.abort();
   controls?.destroy();
@@ -426,7 +500,7 @@ onUnmounted(() => {
             <div v-if="expanded" class="map-children" role="group" aria-label="地图子图层">
               <div v-for="layer in mapLayers" :key="layer.key" class="layer-row">
                 <span class="map-child-name">{{ layer.name }}</span>
-                <button :aria-label="'显示' + layer.name" :aria-pressed="mapOptions[layer.key]" :title="mapOptions[layer.key] ? '隐藏' : '显示'" :disabled="!parentVisible" @click="mapOptions[layer.key] = !mapOptions[layer.key]"><ViewerIcon :name="mapOptions[layer.key] ? 'eye' : 'hidden'" /></button>
+                <button :aria-label="'显示' + layer.name" :aria-pressed="mapOptions[layer.key]" :title="mapOptions[layer.key] ? '隐藏' : '显示'" :disabled="!parentVisible" @click="toggleMapLayer(layer.key)"><ViewerIcon :name="mapOptions[layer.key] ? 'eye' : 'hidden'" /></button>
               </div>
             </div>
           </div>
@@ -443,21 +517,45 @@ onUnmounted(() => {
           </div>
         </div>
       </section>
-      <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'项目地图'}[panel]">
-        <header><h2>{{ {properties:'模型属性',clip:'剖切',settings:'显示设置',map:'项目地图'}[panel] }}</h2>
+      <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图'}[panel]">
+        <header><h2>{{ {properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图'}[panel] }}</h2>
           <button aria-label="关闭面板" @click="panel = undefined"><ViewerIcon name="close" /></button></header>
         <div class="panel-body">
           <form v-if="panel === 'map'" class="map-form" @submit.prevent="saveProfile">
-            <label class="toggle">影像<input v-model="mapOptions.imagery" type="checkbox"></label>
-            <label class="field">服务 Key<input v-model="mapOptions.key" type="password" autocomplete="off"></label>
-            <label class="toggle">注记<input v-model="mapOptions.labels" type="checkbox"></label>
-            <label class="toggle">地形<input v-model="mapOptions.dem" type="checkbox"></label>
-            <small>{{ hasBase ? '已使用模型地理基准' : '临时地图位置（WGS84），默认北京；加载带坐标的模型后自动定位' }}</small>
+            <label class="field">地图源<select aria-label="地图源" :value="draft.provider" @change="changeSource(($event.target as HTMLSelectElement).value as Provider)">
+              <option v-for="(name,id) in providers" :key="id" :value="id">{{ name }}</option>
+            </select></label>
+            <label v-if="draft.provider==='tianditu'" class="field">服务 Key<input v-model="draft.key" type="password" autocomplete="off"></label>
+            <template v-else>
+              <label class="field">服务地址<input v-model.trim="draft.endpoint" placeholder="https://…/服务地址" @input="resetCatalog()"></label>
+              <label class="field">服务 Key<input v-model="draft.key" type="password" autocomplete="off" placeholder="匿名服务可留空"></label>
+              <label v-if="draft.key" class="field">Key 参数名<input v-model.trim="draft.keyParameter" required></label>
+              <button type="button" :disabled="reading || !draft.endpoint" @click="discover()">{{ reading ? '正在读取…' : '读取服务图层' }}</button>
+              <template v-if="catalog.length">
+                <label class="field">影像图层<select aria-label="影像图层" v-model="draft.imageLayer"><option v-for="l in catalog" :key="l.id" :value="l">{{ l.title }}</option></select></label>
+                <label class="field">注记图层<select aria-label="注记图层" v-model="draft.labelLayer"><option :value="undefined">无</option><option v-for="l in catalog" :key="l.id" :value="l">{{ l.title }}</option></select></label>
+              </template>
+            </template>
+            <label class="toggle">影像<input v-model="draft.imagery" type="checkbox"></label>
+            <label v-if="draft.provider==='tianditu'||draft.labelLayer" class="toggle">注记<input v-model="draft.labels" type="checkbox"></label>
+            <label class="toggle">地形<input v-model="draft.dem" type="checkbox"></label>
+            <template v-if="draft.dem">
+              <label class="field">高程来源<select aria-label="高程来源" v-model="draft.terrain" @change="resetCatalog(true)"><option value="default">Mapzen Terrain Tiles</option><option value="local">本地 XYZ</option><option>WMS</option><option>WMTS</option></select></label>
+              <label v-if="draft.terrain==='local'" class="field">地形地址<input v-model.trim="draft.demUrl" placeholder="/dem/{z}/{x}/{y}.png"></label>
+              <template v-if="draft.terrain==='WMS'||draft.terrain==='WMTS'">
+                <label class="field">高程服务<input v-model.trim="draft.elevationEndpoint" @input="resetCatalog(true)"></label>
+                <label class="field">高程 Key<input v-model="draft.elevationKey" type="password" autocomplete="off" placeholder="匿名服务可留空"></label>
+                <label v-if="draft.elevationKey" class="field">Key 参数名<input v-model.trim="draft.elevationParameter" required></label>
+                <button type="button" :disabled="reading || !draft.elevationEndpoint" @click="discover(true)">读取高程图层</button>
+                <label v-if="elevations.length" class="field">高程图层<select aria-label="高程图层" v-model="draft.elevationLayer"><option v-for="l in elevations" :key="l.id" :value="l">{{ l.title }}</option></select></label>
+              </template>
+              <label v-if="draft.terrain!=='default'" class="field">高程编码<select aria-label="高程编码" v-model="draft.encoding"><option value="terrarium">Terrarium</option><option value="terrain-rgb">Terrain-RGB</option></select></label>
+            </template>
             <label class="field">经度<input v-model.number="lng" :disabled="hasBase" required type="number" step="any" min="-180" max="180"></label>
             <label class="field">纬度<input v-model.number="lat" :disabled="hasBase" required type="number" step="any" min="-85" max="85"></label>
-            <label class="field">原点高程（米）<input v-model.number="altitude" :disabled="hasBase" required type="number" step="any"></label>
-            <label class="field">高程修正（米）<input v-model.number="mapOptions.heightOffset" required type="number" step="any"></label>
-            <button type="button" @click="saveProfile" :disabled="mapBusy">{{ mapBusy ? '正在读取瓦片…' : '保存地图配置' }}</button>
+            <label class="field">原点高程<span class="meter-field"><input v-model.number="altitude" @input="syncMeterValue" :disabled="hasBase" required type="number" step="any" aria-label="原点高程，单位米"><span aria-hidden="true" :data-value="altitude">m</span></span></label>
+            <label class="field">高程修正<span class="meter-field"><input v-model.number="draft.heightOffset" @input="syncMeterValue" required type="number" step="any" aria-label="高程修正，单位米"><span aria-hidden="true" :data-value="draft.heightOffset">m</span></span></label>
+            <button type="button" @click="saveProfile" :disabled="mapBusy || reading || switching">{{ mapBusy ? '正在读取瓦片…' : '保存地图配置' }}</button>
             <small role="status">{{ mapStatus }}</small>
           </form>
           <template v-if="panel === 'properties' && selected">

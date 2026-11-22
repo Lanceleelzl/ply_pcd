@@ -95,6 +95,11 @@ h2 small { font-weight: normal; color: var(--muted); margin-left: 4px; }
 .panel-body { display: grid; gap: 10px; padding: 12px; }
 .field { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); }
 .field > :last-child { color: #e2ecf7; overflow-wrap: anywhere; }
+.meter-field { position: relative; display: grid; align-items: center; }
+.meter-field input { font: inherit; }
+.meter-field > span { position: absolute; left: 7px; right: 26px; white-space: pre; overflow: hidden; color: var(--muted); pointer-events: none; }
+.meter-field > span::before { content: attr(data-value); visibility: hidden; margin-right: 4px; }
+.meter-field:has(input:invalid) > span { visibility: hidden; }
 .panel-body select, .panel-body input:not([type=checkbox]), .panel-body :deep(input[type=text]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 4px 6px; color: inherit; background: #101620; border: 1px solid #405065; border-radius: 3px; }
 .toggle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
 .toggle input { accent-color: var(--active); width: 16px; height: 16px; }

@@ -32,58 +32,64 @@ export class GaussianViewer {
   private backdropRequest?: AbortController;
   private releaseBackdrop?: () => void;
   private mapViewKey = '';
+  private pendingMap?: AbortController;
+  cancelMapChange() { this.pendingMap?.abort(); }
   async loadMap(base: GeoOrigin, options: MapOptions, report: (value: string) => void) {
+    this.pendingMap?.abort();
     this.mapRequest?.abort();
-    const previous = this.mapConfig?.base;
-    if (previous && (previous.epsg !== base.epsg || previous.offset.some((v, i) => v !== base.offset[i]))) {
-      this.map?.destroy();
-      this.map = undefined;
-    }
-    if (!this.mapConfig || !previous || previous.epsg !== base.epsg ||
-        previous.offset.some((v,i)=>v!==base.offset[i]) || options.key !== this.mapConfig.options.key ||
-        options.imagery !== this.mapConfig.options.imagery || (options.imagery && !this.backdropRequest)) {
-      this.backdropRequest?.abort();
-      this.releaseBackdrop?.();
-      this.releaseBackdrop = undefined;
-      this.backdropRequest = undefined;
-      if (options.imagery) {
-        const request = this.backdropRequest = new AbortController();
-        void worldBackdrop(this.scene.app, base, options.key, request.signal).then(release => {
-          if (request.signal.aborted) release(); else this.releaseBackdrop = release;
-        }).catch(error => { if (!request.signal.aborted) { this.backdropRequest = undefined; report(String(error)); } });
+    const request = this.pendingMap = new AbortController();
+    const previous = this.mapConfig;
+    const config = {base, options, report};
+    const visible = options.imagery || options.labels || options.dem;
+    try {
+      if (visible) await this.refreshMap(config, request);
+      request.signal.throwIfAborted();
+      this.mapConfig = config;
+      if (this.map) this.map.entity.enabled = visible;
+      if (!visible) { this.mapViewKey = ''; report('地图图层已隐藏'); }
+      const sameBackdrop = previous && previous.base.epsg === base.epsg &&
+        previous.base.offset.every((v,i)=>v===base.offset[i]) && previous.options.provider===options.provider &&
+        previous.options.key===options.key && JSON.stringify(previous.options.imageLayer)===JSON.stringify(options.imageLayer);
+      if (!options.imagery || !sameBackdrop || !this.backdropRequest) {
+        this.backdropRequest?.abort();
+        this.backdropRequest = undefined;
+        this.releaseBackdrop?.();
+        this.releaseBackdrop = undefined;
+        if (options.imagery && (options.provider==='tianditu' || options.imageLayer?.global)) {
+          const backdrop = this.backdropRequest = new AbortController();
+          void worldBackdrop(this.scene.app,base,options,backdrop.signal).then(release=>{
+            if (backdrop.signal.aborted) release(); else this.releaseBackdrop=release;
+          }).catch(()=>{ if (!backdrop.signal.aborted) this.backdropRequest=undefined; });
+        }
       }
-    }
-    this.mapConfig = {base, options, report};
-    this.mapViewKey = '';
-    this.map?.visibility(options);
-    if (this.map) this.map.entity.enabled = options.imagery || options.labels || options.dem;
-    await this.refreshMap();
+    } finally { request.abort(); if (this.pendingMap===request) this.pendingMap=undefined; }
   }
-  private async refreshMap() {
-    if (!this.mapConfig || !this.camera) return;
-    const { base, options, report } = this.mapConfig;
-    if (!(options.imagery || options.labels || options.dem)) { report('地图图层已隐藏'); return; }
+  private async refreshMap(config=this.mapConfig, pending?: AbortController) {
+    if (!config || !this.camera || (this.pendingMap && !pending)) return;
+    const {base,options,report}=config;
+    if (!(options.imagery || options.labels || options.dem)) return;
     const view = this.camera.mapFootprint();
     this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, view.span * 4);
     if (!this.map && !this.framedModel) view.span = 2000;
     const window = mapWindow(base, view, this.camera.mapGroundCorners(options.heightOffset));
     const key = [window.left, window.top, window.z, window.cols, window.rows].join('/');
-    if (this.mapViewKey === key) return;
-    this.mapViewKey = key;
+    if (!pending && this.mapViewKey === key) return;
+    if (!pending) this.mapViewKey = key;
     this.mapRequest?.abort();
-    const request = this.mapRequest = new AbortController();
+    const request = this.mapRequest = pending || new AbortController();
     try {
       const next = await buildProjectMap(this.scene.app, base, options, request.signal, window);
       if (request.signal.aborted) { next.destroy(); return; }
       const first = !this.map;
       this.map?.destroy();
       this.map = next;
+      this.mapViewKey = key;
       if (first && !this.framedModel) this.fit();
       else this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, next.radius * 4);
       report('当前瓦片层级 ' + window.z);
     } catch (error) {
       if (!request.signal.aborted) { report(String(error)); throw error; }
-    } finally { request.abort(); }
+    } finally { if (!pending) request.abort(); }
   }
   private axis = '';
   private cut = 0;
