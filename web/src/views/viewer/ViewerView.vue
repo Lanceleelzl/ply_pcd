@@ -422,23 +422,23 @@ onUnmounted(() => {
         <div class="layer-list">
           <div v-if="configured" class="map-group">
             <div class="layer-row"><button class="layer-name" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '▾' : '▸' }} 地图</button>
-              <button aria-label="显示地图" :aria-pressed="parentVisible" @click="parentVisible = !parentVisible"><ViewerIcon :name="parentVisible ? 'eye' : 'hidden'" /></button></div>
+              <button aria-label="显示地图" :title="parentVisible ? '隐藏' : '显示'" :aria-pressed="parentVisible" @click="parentVisible = !parentVisible"><ViewerIcon :name="parentVisible ? 'eye' : 'hidden'" /></button></div>
             <div v-if="expanded" class="map-children" role="group" aria-label="地图子图层">
               <div v-for="layer in mapLayers" :key="layer.key" class="layer-row">
                 <span class="map-child-name">{{ layer.name }}</span>
-                <button :aria-label="'显示' + layer.name" :aria-pressed="mapOptions[layer.key]" :disabled="!parentVisible" @click="mapOptions[layer.key] = !mapOptions[layer.key]"><ViewerIcon :name="mapOptions[layer.key] ? 'eye' : 'hidden'" /></button>
+                <button :aria-label="'显示' + layer.name" :aria-pressed="mapOptions[layer.key]" :title="mapOptions[layer.key] ? '隐藏' : '显示'" :disabled="!parentVisible" @click="mapOptions[layer.key] = !mapOptions[layer.key]"><ViewerIcon :name="mapOptions[layer.key] ? 'eye' : 'hidden'" /></button>
               </div>
             </div>
           </div>
           <p v-if="!layers.length && !configured" class="empty">尚未加载图层</p>
-          <div v-for="layer in layers" :key="layer.id" class="layer-row" :aria-busy="layer.loading" :class="{ current: selectedId === layer.id }">
+          <div v-for="layer in layers" :key="layer.id" class="layer-row" :aria-busy="layer.loading">
             <button class="layer-name" :aria-pressed="selectedId === layer.id" :title="layer.name" @click="selectLayer(layer.id)">
               <strong>{{ layer.name }}</strong><small v-if="layer.status">{{ layer.status }}</small>
             </button>
-            <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" :title="'卸载 ' + layer.name" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
+            <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" title="卸载" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
             <button type="button" :disabled="layer.loading || !viewer?.loaded(layer.id)" :aria-label="'定位到 ' + layer.name"
-              :title="'定位到 ' + layer.name" @click="viewer?.focusLayer(layer.id)"><ViewerIcon name="locate" /></button>
-            <button class="visibility" :aria-pressed="layer.visible" :aria-label="'显示 ' + layer.name" :title="layer.visible ? '隐藏图层' : '显示图层'"
+              title="定位" @click="viewer?.focusLayer(layer.id)"><ViewerIcon name="locate" /></button>
+            <button class="visibility" :aria-pressed="layer.visible" :aria-label="'显示 ' + layer.name" :title="layer.visible ? '隐藏' : '显示'"
               @click="layer.visible = !layer.visible; viewer?.visible(layer.id, layer.visible)"><ViewerIcon :name="layer.visible ? 'eye' : 'hidden'" /></button>
           </div>
         </div>
@@ -473,7 +473,7 @@ onUnmounted(() => {
                   <span>{{ (selected.projected ? ['X', 'Y', '高程'] : ['经度', '纬度', '高程'])[i] }}</span>
                   <span>{{ Number(v.toFixed(selected.projected || i === 2 ? 4 : 8)) }}{{ !selected.projected && i < 2 ? '°' : ' m' }}</span>
                 </div>
-                <button type="button" @click="editCoordinates">修改坐标</button>
+                <button type="button" class="apply-origin" @click="editCoordinates">修改坐标</button>
               </div>
               <small v-else-if="!selected.origin">{{ selected.geo }}</small>
             <form v-if="selected.originDraft" :key="selected.id" class="map-form" @submit.prevent="applyLayerOrigin(selected)">
@@ -484,7 +484,7 @@ onUnmounted(() => {
               </label>
               <label class="field">PLY 读取<input type="file" accept=".ply" @change="readPlyFields($event, selected)" /></label>
               <button type="submit" class="apply-origin">应用坐标</button>
-              <button v-if="selected.origin" type="button" @click="selected.originDraft = undefined">取消修改</button>
+              <button v-if="selected.origin" type="button" class="cancel-origin" @click="selected.originDraft = undefined">取消修改</button>
               <small v-if="selected.originDraft.message" role="status">{{ selected.originDraft.message }}</small>
             </form>
             </details>
