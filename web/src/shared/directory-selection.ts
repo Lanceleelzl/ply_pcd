@@ -10,7 +10,7 @@ export interface PickedDirectoryHandle {
   values(): AsyncIterableIterator<PickedFileHandle | PickedDirectoryHandle>;
 }
 
-async function collectDirectoryFiles(
+export async function collectDirectoryFiles(
   directory: PickedDirectoryHandle,
   prefix: string,
   files: File[],
@@ -41,7 +41,7 @@ export async function pickDirectory(fallback: () => void): Promise<{
     return null;
   }
   try {
-    const directory = await picker();
+    const directory = await picker.call(window);
     const files: File[] = [];
     const paths: string[] = [];
     await collectDirectoryFiles(directory, directory.name, files, paths);

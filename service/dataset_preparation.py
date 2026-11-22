@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from service.dataset_formats import DatasetFormatError, DatasetProbe
+from service.ply_coordinates import read_model_coordinates, write_streamed_origin
 from service.dataset_formats import MAX_DATASET_FILES, MAX_DATASET_UNCOMPRESSED_BYTES, MAX_ZIP_COMPRESSION_RATIO
 
 
@@ -69,9 +70,10 @@ def _convert_to_ply(entrypoint: Path, destination: Path, converter: list[str], r
         raise DatasetFormatError("Dataset XYZ conversion produced no PLY file")
 
 
-def _convert_to_streamed_sog(entrypoint: Path, destination: Path, converter: list[str], run: RunCommand) -> str | None:
+def _convert_to_streamed_sog(entrypoint: Path, destination: Path, converter: list[str], run: RunCommand,
+                            input_options: list[str] | None = None) -> str | None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    result = run([*converter, "--overwrite", "--gpu", "cpu", str(entrypoint), str(destination)], capture_output=True,
+    result = run([*converter, "--overwrite", "--gpu", "cpu", str(entrypoint), *(input_options or []), str(destination)], capture_output=True,
                  text=True, encoding="utf-8", errors="replace", timeout=1800, check=False)
     if result.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
         return result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
@@ -269,6 +271,7 @@ def prepare_gaussian_cache(
         dataset.update(gaussian_cache_status="failed", gaussian_cache_error=error)
     else:
         relative = str(destination.relative_to(session_directory)).replace("\\", "/")
+        write_streamed_origin(destination, [read_model_coordinates(entrypoint)])
         dataset.update(
             gaussian_cache_status="ready",
             gaussian_cache_progress=100,

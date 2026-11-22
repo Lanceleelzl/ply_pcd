@@ -4,6 +4,24 @@ from math import isfinite
 from pathlib import Path
 
 
+def write_streamed_origin(destination: Path, origins: list[dict]) -> None:
+    """Add a common geographic origin only when it can be represented without a transform."""
+    common = None
+    for hints in origins:
+        if (not hints["epsg"] or None in hints["offset"]
+                or any(v is not None and float(v) != 0 for v in hints["shift"])
+                or any(v is not None and float(v) != 1 for v in hints["scale"])):
+            return
+        origin = (int(hints["epsg"]), list(map(float, hints["offset"])))
+        if common is not None and origin != common:
+            return
+        common = origin
+    if common is not None:
+        metadata = json.loads(destination.read_text(encoding="utf-8-sig"))
+        metadata["epsg"], metadata["offset"] = common
+        destination.write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
+
+
 def read_ply_coordinates(path: Path) -> dict:
     result = {"source": "", "epsg": "", "offset": [None, None, None],
               "shift": [None, None, None], "scale": [None, None, None]}

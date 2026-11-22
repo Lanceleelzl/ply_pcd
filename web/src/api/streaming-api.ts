@@ -1,4 +1,4 @@
-import { apiFetch } from './api-auth';
+import { apiFetch, authenticateRequest } from './api-auth';
 import type { TransformParameters, XYZ } from '../coordinate-math';
 
 export type StreamingInputKind = 'single' | 'dataset' | 'lod_group';
@@ -26,6 +26,7 @@ export interface StreamingTask {
   cache_progress: number | null;
   cache_error?: string | null;
   error?: string;
+  prepare_phase?: string;
   business_transform: TransformParameters;
   metadata?: { format: string; source_point_count: number; preview_point_count: number;
     origin: XYZ; bounds: { min: XYZ; max: XYZ } };
@@ -52,9 +53,14 @@ export async function createStreamingTask(input: {
   file?: File;
   files?: File[];
   paths?: string[];
+  viewer?: boolean;
+  onUpload?: (loaded: number, total: number) => void;
+  onUploaded?: () => void;
+  signal?: AbortSignal;
   transform: TransformParameters;
 }): Promise<StreamingTask> {
   const form = new FormData();
+  if (input.viewer) form.set('viewer', 'true');
   form.set('input_kind', input.kind);
   form.set('workspace_id', input.workspaceId);
   form.set('business_transform', JSON.stringify(input.transform));
@@ -63,7 +69,29 @@ export async function createStreamingTask(input: {
     const path = input.paths?.[index];
     form.append('files', file, path ?? file.name);
   });
-  return jsonResponse<StreamingTask>(await apiFetch('/api/v2/streaming-tasks', { method: 'POST', body: form }));
+  const url = '/api/v2/streaming-tasks';
+  if (input.onUpload) {
+    return new Promise((resolve, reject) => {
+      input.signal?.throwIfAborted();
+      const request = new XMLHttpRequest();
+      const abort = () => request.abort();
+      input.signal?.addEventListener('abort', abort, { once: true });
+      request.open('POST', url);
+      authenticateRequest(request);
+      request.responseType = 'json';
+      request.upload.onprogress = event => input.onUpload?.(event.loaded, event.lengthComputable ? event.total : 0);
+      request.upload.onload = () => input.onUploaded?.();
+      request.onload = () => {
+        if (request.status >= 200 && request.status < 300 && request.response?.task_id) resolve(request.response);
+        else reject(new Error(request.response?.detail ?? `HTTP ${request.status}`));
+      };
+      request.onerror = () => reject(new Error('模型上传连接中断'));
+      request.onabort = () => reject(new DOMException('上传已取消', 'AbortError'));
+      request.onloadend = () => input.signal?.removeEventListener('abort', abort);
+      request.send(form);
+    });
+  }
+  return jsonResponse<StreamingTask>(await apiFetch(url, { method: 'POST', body: form, signal: input.signal }));
 }
 
 export async function listStreamingTasks(workspaceId: string): Promise<StreamingTask[]> {

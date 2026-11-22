@@ -13,6 +13,11 @@ const workspace = useWorkspaceStore();
         <p>解决一切高斯问题。</p>
       </div>
       <div class="toolkit-grid">
+        <RouterLink class="toolkit-card" to="/viewer">
+          <h2>高斯浏览</h2>
+          <p>打开高斯模型，随视角移动自动加载不同精度的流式分块。</p>
+          <strong>进入工具 <span aria-hidden="true">→</span></strong>
+        </RouterLink>
         <RouterLink class="toolkit-card" to="/registration">
           <h2>视界转换</h2>
           <p>支持两个具有点云性质的数据世界，通过粗配准→ICP 精配准建立矩阵转换关系，获取双向矩阵或同一位置的对应坐标。</p>

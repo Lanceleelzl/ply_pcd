@@ -5,6 +5,7 @@ export function mountClippingLabels(viewport: HTMLElement): ClippingLabelsView &
   for (const kind of ['axis', 'box']) for (const axis of ['x', 'y', 'z']) for (const side of ['min', 'max']) {
     const label = document.createElement('span');
     label.className = `clip-handle-label axis-${axis}`;
+    label.dataset.kind = kind;
     label.textContent = `${side === 'min' ? '−' : '+'}${axis.toUpperCase()}`;
     label.hidden = true;
     viewport.appendChild(label);
@@ -15,6 +16,10 @@ export function mountClippingLabels(viewport: HTMLElement): ClippingLabelsView &
       const label = labels.get(`${kind}-${axis}-${side}`)!;
       label.hidden = !position?.visible;
       if (position) {
+        if (kind === 'box') {
+          label.dataset.endOn = String(position.normalAngle === undefined);
+          label.style.setProperty('--normal-angle', (position.normalAngle ?? 0) + 'rad');
+        }
         label.style.left = `${position.x}px`;
         label.style.top = `${position.y}px`;
       }

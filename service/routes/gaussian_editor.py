@@ -29,7 +29,7 @@ from service.dataset_preparation import _convert_to_ply, _ply_vertex_count
 from service.gaussian_editor_rules import clip_ply, convert_ascii_gaussian_ply, validate_rules
 from service.geographic_query import GeographicOrigin, GeographicQuery, project_origin, query_coordinates
 from service.gaussian_merge import read_layout
-from service.ply_coordinates import read_model_coordinates, read_ply_coordinates
+from service.ply_coordinates import read_model_coordinates, read_ply_coordinates, write_streamed_origin
 from service.routes.streaming import StreamingTasks
 from service.schemas import TransformParameters
 from service.storage import read_status, workspace_id as parse_workspace_id, write_status
@@ -679,6 +679,9 @@ class EditorTasks(StreamingTasks):
                 if counts != tuple(item["count"] for item in levels):
                     raise ValueError("流式成果各层高斯数量与 PLY 成果不一致")
                 coordinate_manifest = streamed_editor_coordinate_manifest(directory, group, levels)
+                write_streamed_origin(destination, [
+                    level["result_ply_coordinate_hints"] for level in coordinate_manifest["levels"]
+                ])
                 (destination.parent / "coordinate-manifest.json").write_text(
                     json.dumps(coordinate_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
                 exports = [item for item in status.get("streamed_exports", []) if item["version"] != version]

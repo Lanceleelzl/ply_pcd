@@ -158,14 +158,14 @@
 .integrated-editor .coordinate-panel small { margin-top: 8px; }
 .integrated-editor .coordinate-message:empty { display: none; }
 
-.integrated-editor .view-gizmo { width: 124px; padding: 8px; border-radius: 10px; background: #111c2bf0; box-shadow: 0 4px 16px #0003; }
-.integrated-editor .view-cube-scene { height: 96px; perspective: 320px; }
-.integrated-editor .view-cube .cube-face { padding: 0; font: 600 16px/1 system-ui, sans-serif; backface-visibility: hidden; border-radius: 2px; border: 1px solid #8ca0b8; box-shadow: inset 0 0 0 3px #111c2b30; }
-.integrated-editor .view-cube :is(.face-x, .face-nx) { color: #ffb2ac; background: linear-gradient(135deg, #63434c, #3d303b); }
-.integrated-editor .view-cube :is(.face-y, .face-ny) { color: #a3e3bf; background: linear-gradient(135deg, #35554f, #253e3a); }
-.integrated-editor .view-cube :is(.face-z, .face-nz) { color: #b0d2ff; background: linear-gradient(135deg, #3e5877, #283c56); }
-.integrated-editor .view-cube .cube-face:hover { background: #446887; border-color: #d6e9ff; color: #fff; }
-.integrated-editor .view-cube .cube-corner { border: 0; }
+:is(.integrated-editor, .viewer) .view-gizmo { width: 124px; padding: 8px; border-radius: 10px; background: #111c2bf0; box-shadow: 0 4px 16px #0003; }
+:is(.integrated-editor, .viewer) .view-cube-scene { height: 96px; perspective: 320px; }
+:is(.integrated-editor, .viewer) .view-cube .cube-face { padding: 0; font: 600 16px/1 system-ui, sans-serif; backface-visibility: hidden; border-radius: 2px; border: 1px solid #8ca0b8; box-shadow: inset 0 0 0 3px #111c2b30; }
+:is(.integrated-editor, .viewer) .view-cube :is(.face-x, .face-nx) { color: #ffb2ac; background: linear-gradient(135deg, #63434c, #3d303b); }
+:is(.integrated-editor, .viewer) .view-cube :is(.face-y, .face-ny) { color: #a3e3bf; background: linear-gradient(135deg, #35554f, #253e3a); }
+:is(.integrated-editor, .viewer) .view-cube :is(.face-z, .face-nz) { color: #b0d2ff; background: linear-gradient(135deg, #3e5877, #283c56); }
+:is(.integrated-editor, .viewer) .view-cube .cube-face:hover { background: #446887; border-color: #d6e9ff; color: #fff; }
+:is(.integrated-editor, .viewer) .view-cube .cube-corner { border: 0; }
 .integrated-editor .projection-switch { gap: 4px; }
 .integrated-editor .projection-switch button { min-height: 30px; padding: 4px 6px; font-size: 12px; }
 

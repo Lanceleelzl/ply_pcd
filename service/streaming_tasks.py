@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from service.dataset_formats import DatasetFormatError, probe_dataset, validate_streamed_sog_directory
 from service.dataset_preparation import _convert_to_ply, _convert_to_streamed_sog, _generate_streamed_sog, _safe_extract
-from service.ply_coordinates import read_model_coordinates
+from service.ply_coordinates import read_model_coordinates, write_streamed_origin
 
 
 GAUSSIAN_FORMATS = {"gaussian_ply", "compressed_ply", "spz", "sog", "streamed_sog", "lcc", "lcc2"}
@@ -51,6 +51,28 @@ def prepare_streaming_task(directory: Path, status: dict[str, Any], converter: l
         status["dataset_entrypoint"] = entrypoint.relative_to(directory).as_posix()
     if not entrypoint.is_file():
         raise DatasetFormatError("Gaussian dataset entrypoint is missing")
+
+    if status.get("viewer"):
+        if format_name == "lcc":
+            if stage:
+                stage("转换 LCC 流式层级")
+            destination = directory / "datasets" / "viewer-cache" / "lod-meta.json"
+            error = _convert_to_streamed_sog(entrypoint, destination, converter, subprocess.run,
+                                             input_options=["--filter-nan"])
+            if error:
+                raise DatasetFormatError(error)
+            validate_streamed_sog_directory(destination)
+            write_streamed_origin(destination, [read_model_coordinates(entrypoint)])
+            entrypoint = destination
+        elif format_name == "spz":
+            if stage:
+                stage("解码 SPZ")
+            destination = directory / "datasets" / "viewer-cache" / "model.ply"
+            _convert_to_ply(entrypoint, destination, converter, subprocess.run)
+            entrypoint = destination
+        status.update(gaussian_path=entrypoint.relative_to(directory).as_posix(),
+                      gaussian_filename=entrypoint.name, status="ready")
+        return status
 
     preview_input = entrypoint
     if stage:
@@ -126,4 +148,8 @@ def generate_streaming_cache(directory: Path, status: dict[str, Any], converter:
         if error:
             raise DatasetFormatError(error)
     validate_streamed_sog_directory(destination)
+    sources = ([directory / item["path"] for item in status["lods"]]
+               if entrypoint is None else [entrypoint])
+    origins = [read_model_coordinates(path) for path in sources]
+    write_streamed_origin(destination, origins)
     return destination.relative_to(directory).as_posix()

@@ -34,6 +34,25 @@ export class ViewportCameraController {
   private readonly baseDiagonal: number;
   private readonly getBounds: () => ViewportBounds;
   private readonly target = new pc.Vec3();
+  mapFootprint() {
+    const camera = this.camera.camera!;
+    const halfHeight = camera.projection === pc.PROJECTION_ORTHOGRAPHIC
+      ? this.orthoHeight : this.distance * Math.tan(camera.fov * Math.PI / 360);
+    return { x: this.target.x, y: this.target.y,
+      span: 2 * halfHeight * Math.max(1.5, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)) };
+  }
+  mapGroundCorners(height: number) {
+    const r = this.canvas.getBoundingClientRect();
+    const result: pc.Vec3[] = [];
+    const plane = new pc.Plane(this.zUp, -height);
+    for (const x of [r.left,r.right]) for (const y of [r.top,r.bottom]) {
+      const point = new pc.Vec3();
+      const ray = this.pointerRay(x,y);
+      if (plane.intersectsRay(ray,point) && point.distance(ray.origin) < this.camera.camera!.farClip)
+        result.push(point);
+    }
+    return result;
+  }
   private readonly direction = new pc.Vec3();
   private readonly up = new pc.Vec3(0, 0, 1);
   private readonly zUp = new pc.Vec3(0, 0, 1);
@@ -110,14 +129,40 @@ export class ViewportCameraController {
     this.update();
   }
 
-  zoom(deltaY: number): void {
-    if (this.camera.camera!.projection === pc.PROJECTION_ORTHOGRAPHIC) {
-      this.orthoHeight = Math.max(this.baseDiagonal * 0.001, this.orthoHeight * Math.exp(deltaY * 0.001));
-      this.camera.camera!.orthoHeight = this.orthoHeight;
-      return;
-    }
-    this.distance = Math.max(this.baseDiagonal * 0.001, this.distance * Math.exp(deltaY * 0.001));
-    this.update();
+  pointerRay(clientX: number, clientY: number): pc.Ray {
+    const rect = this.canvas.getBoundingClientRect();
+    const camera = this.camera.camera!;
+    const pointAt = (depth: number) => camera.screenToWorld(clientX - rect.left, clientY - rect.top,
+      depth, new pc.Vec3(), rect.width, rect.height);
+    const start = pointAt(0);
+    return new pc.Ray(start, pointAt(Math.max(this.distance, 1)).sub(start).normalize());
+  }
+
+  anchoredPan(start: pc.Ray, hit: pc.Vec3 | null, ground: boolean) {
+    const normal = ground ? this.zUp : this.direction;
+    const anchor = new pc.Vec3();
+    const plane = new pc.Plane().setFromPointNormal(hit ?? this.target, normal);
+    plane.intersectsRay(start, anchor);
+    return (x: number, y: number) => {
+      const ray = this.pointerRay(x, y);
+      const point = new pc.Vec3();
+      if (Math.abs(ray.direction.dot(plane.normal)) < 1e-4 || !plane.intersectsRay(ray, point)) return;
+      this.target.add(anchor.clone().sub(point));
+      this.update();
+    };
+  }
+
+  zoom(deltaY: number, maxWidth = Infinity): boolean {
+    const camera = this.camera.camera!;
+    const ortho = camera.projection === pc.PROJECTION_ORTHOGRAPHIC;
+    const aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
+    const widthFactor = 2 * (ortho ? aspect : Math.tan(camera.fov * Math.PI / 360) * (camera.horizontalFov ? 1 : aspect));
+    const limit = maxWidth / Math.max(widthFactor, 1e-6);
+    const requested = Math.max(this.baseDiagonal * 0.001, (ortho ? this.orthoHeight : this.distance) * Math.exp(deltaY * 0.001));
+    const next = Math.min(requested, limit);
+    if (ortho) camera.orthoHeight = this.orthoHeight = next;
+    else { this.distance = next; this.update(); }
+    return deltaY > 0 && requested >= limit;
   }
 
   setProjection(orthographic: boolean): void {

@@ -31,6 +31,7 @@ def create_web_router(
         return {"status": "ok"}
 
     @router.get("/")
+    @router.get("/viewer")
     async def index() -> Response:
         return web_index()
 

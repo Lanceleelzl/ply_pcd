@@ -2,8 +2,8 @@
 import { nextTick, ref, watch } from 'vue';
 import { transformParametersMatrix, type TransformParameters } from '../../coordinate-math';
 import { decomposeMatrix, parseMatrix } from '../../home-matrix';
-const props = defineProps<{ model: 'a' | 'b'; modelValue: TransformParameters; externalFeedback?: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [value: TransformParameters]; notify: [message: string] }>();
+const props = defineProps<{ heading?: string; collapsibleMatrix?: boolean; model: string; modelValue: TransformParameters; resetValue?: TransformParameters; externalFeedback?: boolean }>();
+const emit = defineEmits<{ 'update:modelValue': [value: TransformParameters]; notify: [message: string]; expanded: [open: boolean] }>();
 const axes = ['X', 'Y', 'Z'];
 const rows = [{ key: 'translation' as const, label: '平移／m' }, { key: 'rotation_degrees' as const, label: '旋转／°' }, { key: 'scale' as const, label: '缩放' }];
 const fields = ref({ translation: [] as string[], rotation_degrees: [] as string[], scale: [] as string[] });
@@ -66,10 +66,10 @@ async function copy() {
 }
 </script>
 <template>
-  <details ref="root" class="transform-disclosure" @invalid.capture="($event.currentTarget as HTMLDetailsElement).open = true" @focusin="($event.target as HTMLElement).tagName === 'INPUT' && selectValue($event)" @pointerdown="($event.target as HTMLElement).tagName === 'INPUT' && focusValue($event)">
-    <summary>业务场景矩阵</summary>
-    <header class="transform-heading"><span /><button type="button" @click="publish({ translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] })">重置</button></header>
-    <p>模型初始加载进场景中有进行位移、旋转、放缩等初始转换时，需填入对应矩阵；否则默认即可。</p>
+  <details ref="root" class="transform-disclosure" @toggle.self="emit('expanded', ($event.currentTarget as HTMLDetailsElement).open)" @invalid.capture="($event.currentTarget as HTMLDetailsElement).open = true" @focusin="($event.target as HTMLElement).tagName === 'INPUT' && selectValue($event)" @pointerdown="($event.target as HTMLElement).tagName === 'INPUT' && focusValue($event)">
+    <summary>{{ props.heading ?? '业务场景矩阵' }}</summary>
+    <header class="transform-heading"><span /><button type="button" @click="publish(resetValue ?? { translation: [0,0,0], rotation_degrees: [0,0,0], scale: [1,1,1] })">重置</button></header>
+    <slot><p v-if="!collapsibleMatrix">模型初始加载进场景中有进行位移、旋转、放缩等初始转换时，需填入对应矩阵；否则默认即可。</p></slot>
     <div v-for="row in rows" :key="row.key" class="transform-field-row">
       <span>{{ row.label }}</span>
       <label v-for="(axis, index) in axes" :key="axis" class="axis-field">
@@ -77,12 +77,13 @@ async function copy() {
         <span>{{ axis }}</span>
       </label>
     </div>
-    <div class="matrix-preview" @paste="onPaste">
-      <header class="transform-heading"><strong>转换矩阵 4×4</strong><div><button type="button" @click="paste">粘贴</button><button type="button" @click="copy">复制</button></div></header>
+    <component :is="collapsibleMatrix ? 'details' : 'div'" class="matrix-preview" @paste="onPaste">
+      <summary v-if="collapsibleMatrix">转换矩阵 4×4</summary>
+      <header class="transform-heading"><strong v-if="!collapsibleMatrix">转换矩阵 4×4</strong><span v-else /><div><button type="button" @click="paste">粘贴</button><button type="button" @click="copy">复制</button></div></header>
       <div class="matrix-input-grid">
         <template v-for="(row, r) in cells" :key="r"><input v-for="(_, c) in row" :key="c" v-model="cells[r][c]" type="text" inputmode="decimal" :readonly="r === 3" :aria-label="`模型 ${model.toUpperCase()} 矩阵 ${r + 1}行 ${c + 1}列`" :title="cells[r][c]" @blur="commitMatrix" @keydown.enter.prevent="commitMatrix"></template>
       </div>
-    </div>
-    <p class="transform-feedback" :class="{ 'error-text': invalid && !externalFeedback }" :role="externalFeedback ? undefined : 'status'">{{ externalFeedback ? '编辑完成后同步参数与矩阵，支持整块粘贴' : message || '编辑完成后同步参数与矩阵，支持整块粘贴' }}</p>
+    </component>
+    <p v-if="!collapsibleMatrix || message" class="transform-feedback" :class="{ 'error-text': invalid && !externalFeedback }" :role="externalFeedback ? undefined : 'status'">{{ externalFeedback ? '编辑完成后同步参数与矩阵，支持整块粘贴' : message || '编辑完成后同步参数与矩阵，支持整块粘贴' }}</p>
   </details>
 </template>

@@ -118,7 +118,8 @@ class StreamingTasks:
                                                        self.converter, self.worker, report_stage)
                     current = read_status(directory)
                     current.update({key: prepared[key] for key in (
-                        "metadata", "preview_url", "gaussian_path", "gaussian_filename", "status", "coordinate_metadata")})
+                        "metadata", "preview_url", "gaussian_path", "gaussian_filename", "status", "coordinate_metadata")
+                        if key in prepared})
                     current["prepare_phase"] = "完成"
                     if prepared.get("dataset_entrypoint"):
                         current["dataset_entrypoint"] = prepared["dataset_entrypoint"]
@@ -235,6 +236,7 @@ def create_streaming_router(tasks: StreamingTasks) -> APIRouter:
         file: Annotated[UploadFile | None, File()] = None,
         files: Annotated[list[UploadFile] | None, File()] = None,
         business_transform: Annotated[str, Form()] = "",
+        viewer: Annotated[bool, Form()] = False,
     ) -> dict[str, Any]:
         if input_kind not in {"single", "dataset", "lod_group"}:
             raise HTTPException(status_code=400, detail="input_kind must be single, dataset, or lod_group")
@@ -260,7 +262,7 @@ def create_streaming_router(tasks: StreamingTasks) -> APIRouter:
         now = time.time()
         status: dict[str, Any] = {
             "task_id": task_id, "workspace_id": workspace, "owner_id": current_principal().key_id,
-            "resource_token": secrets.token_urlsafe(32), "input_kind": input_kind,
+            "resource_token": secrets.token_urlsafe(32), "input_kind": input_kind, "viewer": viewer,
             "business_transform": transform.model_dump(), "status": "queued",
             "cache_status": "not_requested", "cache_progress": None,
             "created_at_unix": now, "source_available": True,
@@ -327,7 +329,7 @@ def create_streaming_router(tasks: StreamingTasks) -> APIRouter:
                 authorize_resource(status)
             except (OSError, HTTPException, ValueError, json.JSONDecodeError):
                 continue
-            if status.get("workspace_id") == workspace:
+            if status.get("workspace_id") == workspace and not status.get("viewer"):
                 result.append(tasks.present(status))
         return sorted(result, key=lambda item: item.get("created_at_unix", 0), reverse=True)
 

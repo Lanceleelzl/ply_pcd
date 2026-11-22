@@ -18,6 +18,7 @@ export const router = createRouter({
     { path: '/merge', name: 'merge', component: MergeView },
     { path: '/merge/:taskId', name: 'merge-task', component: MergeView },
     { path: '/editor', name: 'editor', component: EditorView },
+    { path: '/viewer', name: 'viewer', component: () => import('../views/viewer/ViewerView.vue') },
     { path: '/editor/:taskId', name: 'editor-task', component: EditorView },
     {
       path: '/registration/:sessionId',

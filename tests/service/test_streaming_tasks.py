@@ -54,6 +54,16 @@ class StreamingTaskRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata["offset"][1:], [None, None])
         self.assertNotIn(result["task_id"], self.tasks.readers)
 
+    async def test_viewer_serves_source_without_point_preview_or_streaming_history(self):
+        upload = UploadFile(filename="scene.ply", file=io.BytesIO(FIXTURE.read_bytes()))
+        result = await self.routes["create_task"]("single", self.workspace, upload, viewer=True)
+        await self.tasks._run(result["task_id"], "prepare")
+        directory, status = self.tasks.read(result["task_id"])
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual((directory / status["gaussian_path"]).read_bytes(), FIXTURE.read_bytes())
+        self.assertFalse((directory / "preview").exists())
+        self.assertEqual(await self.routes["list_tasks"](self.workspace), [])
+
     async def test_ordered_lod_group_is_independent_of_registration_session(self):
         detailed = FIXTURE.read_bytes()
         head, body = detailed.split(b"end_header\n", 1)

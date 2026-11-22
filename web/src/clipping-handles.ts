@@ -4,7 +4,7 @@ export type ClipAxis = 'x' | 'y' | 'z';
 export type ClipSide = 'min' | 'max';
 
 export interface ClippingLabelsView {
-  set(kind: 'axis' | 'box', axis: ClipAxis, side: ClipSide, position: { x: number; y: number; visible: boolean } | null): void;
+  set(kind: 'axis' | 'box', axis: ClipAxis, side: ClipSide, position: { x: number; y: number; visible: boolean; normalAngle?: number } | null): void;
 }
 
 export interface AxisClipState {
@@ -48,6 +48,7 @@ export class ClippingHandles {
     x: new pc.Color(1, 0.24, 0.24), y: new pc.Color(0.18, 0.95, 0.42), z: new pc.Color(0.28, 0.42, 1),
   };
   private hoveredHandle: Handle | null = null;
+  private hoveredFace: Handle | null = null;
   private drag: DragState | null = null;
   private readonly handleSize: number;
   private readonly axisPlanes: Record<ClipAxis, pc.Entity>;
@@ -125,7 +126,16 @@ export class ClippingHandles {
       }
       handle.entity.setPosition(handle.worldPosition);
       const hovered = handle === this.hoveredHandle || this.drag?.handle === handle;
-      const scale = hovered ? 1.12 : 1;
+      const scale = hovered ? 1.3 : 1;
+      if ((hovered || (!this.drag && !this.hoveredHandle && handle === this.hoveredFace)) && handle.kind === 'box') {
+        const [a, b] = axes.filter(axis => axis !== handle.axis);
+        const corners = [[-1,-1],[1,-1],[1,1],[-1,1]].map(([u,v]) => {
+          const local = axisVector(handle.axis).mulScalar(handle.side === 'min' ? -0.5 : 0.5);
+          local[a] = u * 0.5; local[b] = v * 0.5;
+          return boxTransform.transformPoint(local);
+        });
+        for (let i = 0; i < 4; i++) this.app.drawLine(corners[i], corners[(i + 1) % 4], this.colors[handle.axis], false);
+      }
       const direction = axisVector(handle.axis).mulScalar(handle.side === 'min' ? -1 : 1);
       if (handle.kind === 'box') {
         const boxScale = clipBox.getLocalScale();
@@ -140,10 +150,18 @@ export class ClippingHandles {
       }
       const opacity = handle.kind === 'box' ? (hovered ? 1 : 0.55) : (hovered ? 1 : 0.9);
       if (handle.material.opacity !== opacity) { handle.material.opacity = opacity; handle.material.update(); }
-      const screen = this.camera.camera!.worldToScreen(handle.worldPosition); const rect = this.canvas.getBoundingClientRect();
+      const screen = this.camera.camera!.worldToScreen(handle.worldPosition);
+      let normalAngle: number | undefined;
+      if (handle.kind === 'box') {
+        const tip = handle.entity.getWorldTransform().transformPoint(new pc.Vec3(0, 0.86, 0));
+        const end = this.camera.camera!.worldToScreen(tip);
+        const dx = end.x - screen.x, dy = end.y - screen.y;
+        if (Math.hypot(dx, dy) > 0.01) normalAngle = Math.atan2(dy, dx);
+      }
       this.labels.set(handle.kind, handle.axis, handle.side, {
-        x: screen.x * rect.width / this.app.graphicsDevice.width,
-        y: screen.y * rect.height / this.app.graphicsDevice.height,
+        normalAngle,
+        x: screen.x,
+        y: screen.y,
         visible: handle.kind !== 'box' || hovered,
       });
     }
@@ -182,6 +200,7 @@ export class ClippingHandles {
     }
     this.hoveredHandle = this.pick(point.x, point.y);
     if (mode === 'box') {
+      this.hoveredFace = this.hoveredHandle ? null : this.pickFace(point.x, point.y);
       this.hovered = Boolean(this.hoveredHandle);
       return this.hovered;
     }
@@ -192,22 +211,42 @@ export class ClippingHandles {
 
   pointerLeave(): void {
     if (this.drag) return;
+    this.hoveredFace = null;
     this.revealedHandle = null; this.hoveredHandle = null; this.hovered = false;
   }
 
-  pointerDown(event: PointerEvent): boolean {
+  private pickFace(x: number, y: number): Handle | null {
+    const camera = this.camera.camera!;
+    const inverse = new pc.Mat4().invert(this.getClipBox().getWorldTransform());
+    const start = camera.screenToWorld(x, y, 0);
+    const direction = camera.screenToWorld(x, y, camera.farClip).sub(start);
+    const ray = new pc.Ray(inverse.transformPoint(start), inverse.transformVector(direction).normalize());
+    const local = new pc.Vec3();
+    if (new pc.BoundingBox().intersectsRay(ray, local)) {
+      const axis = axes.reduce((a, b) => Math.abs(local[a]) > Math.abs(local[b]) ? a : b);
+      return this.handles.find(h => h.kind === 'box' && h.axis === axis &&
+        h.side === (local[axis] > 0 ? 'max' : 'min')) ?? null;
+    }
+    return null;
+  }
+
+  pointerDown(event: PointerEvent, allowFace = false): boolean {
     if (event.button !== 0) return false;
-    const point = this.pointerPosition(event); const handle = this.pick(point.x, point.y);
+    const point = this.pointerPosition(event);
+    const handle = this.pick(point.x, point.y) ?? (allowFace && this.getMode() === 'box' ? this.pickFace(point.x, point.y) : null);
     if (!handle) return false;
     const worldAxis = handle.kind === 'axis'
       ? axisVector(handle.axis)
       : this.getClipBox().getRotation().transformVector(axisVector(handle.axis), new pc.Vec3()).normalize();
-    const referenceLength = Math.max(this.sceneMax.clone().sub(this.sceneMin).length() * 0.25, 0.1);
+    const referenceLength = Math.max(this.camera.getPosition().distance(handle.worldPosition) * 0.001, 1e-7);
     const startScreen = this.camera.camera!.worldToScreen(handle.worldPosition);
     const axisScreen = this.camera.camera!.worldToScreen(handle.worldPosition.clone().add(worldAxis.clone().mulScalar(referenceLength)));
     let screenX = axisScreen.x - startScreen.x; let screenY = axisScreen.y - startScreen.y;
     let pixels = Math.hypot(screenX, screenY);
-    if (pixels < 2) { screenX = 0; screenY = -1; pixels = 1; }
+    if (pixels < 1e-4) {
+      screenX = 0; screenY = handle.side === 'max' ? -1 : 1;
+      pixels = 1;
+    }
     this.drag = {
       handle, startX: point.x, startY: point.y, screenAxisX: screenX / pixels, screenAxisY: screenY / pixels,
       worldPerPixel: referenceLength / pixels,
@@ -246,8 +285,8 @@ export class ClippingHandles {
   private pointerPosition(event: PointerEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
-      x: (event.clientX - rect.left) * this.app.graphicsDevice.width / rect.width,
-      y: (event.clientY - rect.top) * this.app.graphicsDevice.height / rect.height,
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
     };
   }
 
@@ -262,7 +301,7 @@ export class ClippingHandles {
       const dx = tip.x - base.x; const dy = tip.y - base.y; const lengthSquared = dx * dx + dy * dy;
       const t = lengthSquared > 0 ? Math.max(0, Math.min(1, ((x - base.x) * dx + (y - base.y) * dy) / lengthSquared)) : 0;
       const distance = Math.hypot(x - (base.x + dx * t), y - (base.y + dy * t));
-      const tolerance = 14 * window.devicePixelRatio;
+      const tolerance = 14;
       if (distance < tolerance && distance < bestDistance) { best = handle; bestDistance = distance; }
     }
     return best;
@@ -271,22 +310,22 @@ export class ClippingHandles {
   private axisHoverTarget(x: number, y: number): Handle | null {
     const center = this.sceneMin.clone().add(this.sceneMax).mulScalar(0.5);
     const centerScreen = this.camera.camera!.worldToScreen(center);
-    if (this.revealedHandle && Math.hypot(x - centerScreen.x, y - centerScreen.y) < 18 * window.devicePixelRatio) {
+    if (this.revealedHandle && Math.hypot(x - centerScreen.x, y - centerScreen.y) < 18) {
       return this.revealedHandle;
     }
     const diagonal = this.sceneMax.clone().sub(this.sceneMin).length();
-    let best: Handle | null = null; let bestDistance = 18 * window.devicePixelRatio;
+    let best: Handle | null = null; let bestDistance = 18;
     for (const handle of this.handles) {
       if (handle.kind !== 'axis') continue;
       const direction = axisVector(handle.axis).mulScalar(handle.side === 'min' ? -1 : 1);
       const reference = center.clone().add(direction.mulScalar(Math.max(diagonal * 0.08, 0.1)));
       const referenceScreen = this.camera.camera!.worldToScreen(reference);
       const dx = referenceScreen.x - centerScreen.x; const dy = referenceScreen.y - centerScreen.y;
-      const length = Math.hypot(dx, dy); if (length < 4 * window.devicePixelRatio) continue;
+      const length = Math.hypot(dx, dy); if (length < 4) continue;
       const unitX = dx / length; const unitY = dy / length;
       const fromCenterX = x - centerScreen.x; const fromCenterY = y - centerScreen.y;
       const along = fromCenterX * unitX + fromCenterY * unitY;
-      if (along < 3 * window.devicePixelRatio) continue;
+      if (along < 3) continue;
       const distance = Math.abs(fromCenterX * unitY - fromCenterY * unitX);
       if (distance < bestDistance) { best = handle; bestDistance = distance; }
     }

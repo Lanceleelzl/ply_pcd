@@ -13,6 +13,7 @@ export interface SceneNavigationOptions {
   blocked?: () => boolean;
   keyboardOnly?: boolean;
   rightButtonPan?: boolean;
+  beginPan?: (x: number, y: number, pointer: () => { x: number; y: number }) => Promise<(x: number, y: number) => void>;
   frame?: (callback: FrameRequestCallback) => number;
   cancelFrame?: (handle: number) => void;
 }
@@ -36,6 +37,8 @@ export class SceneNavigationController {
   private lastFrame = 0;
   private dragging: 'look' | 'pan' | null = null;
   private pointer = { x: 0, y: 0 };
+  private panTo?: (x: number, y: number) => void;
+  private gesture = 0;
 
   constructor(private readonly options: SceneNavigationOptions) {
     const { canvas } = options;
@@ -57,6 +60,15 @@ export class SceneNavigationController {
       canvas.focus();
       this.dragging = event.button === 0 ? 'look' : 'pan';
       this.pointer = { x: event.clientX, y: event.clientY };
+      const gesture = ++this.gesture;
+      this.panTo = undefined;
+      if (this.dragging === 'pan' && options.beginPan) {
+        const start = this.pointer;
+        void options.beginPan(start.x, start.y, () => this.pointer).then(panTo => {
+          if (gesture !== this.gesture) return;
+          this.panTo = panTo;
+        });
+      }
       if (event.button === 1) event.preventDefault();
     }, { signal });
     if (!options.keyboardOnly) window.addEventListener('pointermove', event => {
@@ -66,19 +78,21 @@ export class SceneNavigationController {
       const dy = event.clientY - this.pointer.y;
       this.pointer = { x: event.clientX, y: event.clientY };
       if (this.dragging === 'look') options.camera.look(dx, dy);
+      else if (this.panTo) this.panTo(event.clientX, event.clientY);
       else options.camera.pan(dx, dy);
     }, { signal });
     if (!options.keyboardOnly) window.addEventListener('pointerup', () => { this.dragging = null; }, { signal });
     if (!options.keyboardOnly) canvas.addEventListener('wheel', event => {
       if (this.blocked()) return;
       event.preventDefault();
+      if (options.beginPan) { this.gesture++; this.panTo = undefined; this.dragging = null; }
       options.camera.dolly(event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1));
     }, { passive: false, signal });
     canvas.addEventListener('contextmenu', event => event.preventDefault(), { signal });
     this.frameHandle = this.frame(this.tick);
   }
 
-  clear(): void { this.keys.clear(); this.dragging = null; }
+  clear(): void { this.gesture++; this.panTo = undefined; this.keys.clear(); this.dragging = null; }
 
   destroy(): void {
     this.events.abort();
