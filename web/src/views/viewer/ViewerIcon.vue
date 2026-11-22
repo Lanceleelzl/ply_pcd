@@ -2,7 +2,7 @@
 const paths = {
   map: 'm2 5 6-2 8 3 6-2v15l-6 2-8-3-6 2z M8 3v15m8-12v15',
   folder: 'M3 7V5h6l2 2h9v3 M3 9h18l-3 10H3z',
-  unload: 'M4 16v4h16v-4 M12 15V3m-5 5 5-5 5 5',
+  unload: 'm12 3 9 5-9 5-9-5z M3 12l9 5 3-1.7 M3 16l9 5 M16 19h6',
   center: 'M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5 M12 9v6m-3-3h6',
   cube: 'M12 2 3 7v10l9 5 9-5V7z M3 7l9 5 9-5m-9 5v10',
   clip: 'M3 16 13 4h7L10 16z M3 20h18',
