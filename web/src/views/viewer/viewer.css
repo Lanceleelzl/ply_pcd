@@ -81,6 +81,7 @@ h2 small { font-weight: normal; color: var(--muted); margin-left: 4px; }
   .layer-row[aria-busy=true]::after { animation: none; }
 }
 .layer-row.current { background: #193441; border-color: var(--active); }
+.layer-row[aria-busy] > button:not(.layer-name) { padding-inline: 3px; min-width: 24px; }
 .viewer-panel .layer-name { display: grid; justify-content: stretch; text-align: left; gap: 1px; flex: 1; min-width: 0; color: inherit; }
 .layer-name strong { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .layer-name small { white-space: normal; overflow-wrap: anywhere; color: var(--muted); }
