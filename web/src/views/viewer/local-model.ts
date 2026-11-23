@@ -1,8 +1,11 @@
 import { lccIndex } from '../../engine/modules/lcc-index';
 import { readOrigin, type GeoOrigin } from './viewer-origin';
+import { readLocalLas } from './local-las';
 export interface ModelFile {
   url: string;
   filename: string;
+  points?: Awaited<ReturnType<typeof readLocalLas>>;
+  environment?: { url: string; filename: string };
 }
 export async function localModel(
   files: Map<string, Blob>,
@@ -10,6 +13,7 @@ export async function localModel(
   signal: AbortSignal,
   onOrigin: (origin: GeoOrigin) => void,
   onLocationMissing?: (reason: string) => void,
+  onFormat?: (format: string) => void,
 ): Promise<ModelFile> {
   const paths = [...files.keys()];
   const basename = (p: string) => p.split('/').pop()!;
@@ -18,6 +22,15 @@ export async function localModel(
   const entry = indexes[0] ?? (metas.length === 1 ? metas[0] : paths.length === 1 ? paths[0] : undefined);
   if (indexes.length > 1) throw new Error('目录含多个模型入口，请选择单个模型目录');
   if (!entry) throw new Error('未找到模型索引。独立 PLY 请通过「加载模型 → 选择文件」打开所需文件。');
+  const name = basename(entry).toLowerCase();
+  const format = name === 'lod-meta.json' ? '流式 SOG' : name === 'meta.json' ? 'SOG' : name.match(/\.([^.]+)$/)?.[1].toUpperCase();
+  if (format) onFormat?.(format);
+  if (name.endsWith('.laz')) throw Error('当前本地浏览支持 LAS，请先将 LAZ 解压为 LAS');
+  if (name.endsWith('.las')) {
+    const points = await readLocalLas(files.get(entry)!, signal);
+    if (points.origin) onOrigin(points.origin);
+    return {filename: basename(entry), url: '', points};
+  }
   let origin = await readOrigin(new Map([[entry, files.get(entry)!]]));
   if (!origin && basename(entry) === 'lod-meta.json') {
     const parent = entry.slice(0, -'lod-meta.json'.length);
@@ -78,8 +91,9 @@ export async function localModel(
     return url + '#/' + encodeURIComponent(basename(path));
   };
   if (/\.lcc$/i.test(entry)) {
-    const manifest = await lccIndex(files, entry, signal);
-    return { filename: 'lod-meta.json', url: makeUrl(new Blob([JSON.stringify(manifest)]), 'lod-meta.json') };
+    const {environment, ...manifest} = await lccIndex(files, entry, signal);
+    return { filename: 'lod-meta.json', url: makeUrl(new Blob([JSON.stringify(manifest)]), 'lod-meta.json'),
+      environment: environment ? {url:environment, filename:'environment.lcctile'} : undefined };
   }
   if (/\.(zip|spz)$/i.test(entry)) {
     const converted = await new Promise<Map<string, Blob>>((resolve, reject) => {
@@ -105,9 +119,10 @@ export async function localModel(
       };
       worker.postMessage({ files, entry });
     });
-    return localModel(converted, urls, signal, onOrigin, onLocationMissing);
+    return localModel(converted, urls, signal, onOrigin, onLocationMissing, name.endsWith('.zip') ? onFormat : undefined);
   }
   const references = new Map<string, Promise<string>>();
+  let environment: ModelFile['environment'];
   function resource(path: string): Promise<string> {
     const cached = references.get(path);
     if (cached) return cached;
@@ -134,9 +149,15 @@ export async function localModel(
       );
       if (meta.environment) meta.environment = await child(meta.environment, /(?:^|\/)meta\.json$|\.sog$/i);
     } else if (/\.lcc2$/i.test(path)) {
+      const envIndex = meta.root.data?.env?.name;
+      const filename = meta.root.splatFiles[envIndex];
       meta.root.splatFiles = await Promise.all(
         meta.root.splatFiles.map((name: string) => child(name, /\.(sog|ply)$/i)),
       );
+      if (typeof filename === 'string') {
+        environment = {filename:basename(filename), url:meta.root.splatFiles[envIndex]};
+        delete meta.root.data.env;
+      }
     } else {
       for (const item of [meta.means, meta.scales, meta.quats, meta.sh0, meta.shN, ...(meta.blind ?? [])]) {
         if (item?.files)
@@ -145,5 +166,6 @@ export async function localModel(
     }
     return makeUrl(new Blob([JSON.stringify(meta)], { type: 'application/json' }), path);
   }
-  return { filename: basename(entry), url: await resource(entry) };
+  const url = await resource(entry);
+  return { filename: basename(entry), url, environment };
 }

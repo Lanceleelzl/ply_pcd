@@ -11,10 +11,14 @@ import { geographicPosition, type GeoOrigin } from '../../views/viewer/viewer-or
 import { TransformGizmoInput } from '../core/TransformGizmoInput';
 import { mountClippingLabels } from '../../views/workbench/clipping-labels';
 
-type ModelFile = { filename: string; url: string };
+import type { ModelFile } from '../../views/viewer/local-model';
+import { createPointCloudEntity, type PointCloudMaterial } from '../../point-cloud';
 class Layer {
   root = new pc.Entity();
   asset?: pc.Asset;
+  points?: PointCloudMaterial;
+  environment?: pc.Entity;
+  environmentAsset?: pc.Asset;
   clip?: GaussianClipController;
   bounds?: pc.BoundingBox;
 }
@@ -178,6 +182,19 @@ export class GaussianViewer {
     this.layers.set(id, layer);
     this.scene.app.root.addChild(layer.root);
     const app = this.scene.app;
+    if (file.points) {
+      const {cloud, total} = file.points;
+      const entity = createPointCloudEntity(app, cloud, new pc.Color(0.84, 0.9, 1), file.filename);
+      layer.root.addChild(entity);
+      layer.points = entity.render!.meshInstances[0].material as PointCloudMaterial;
+      layer.bounds = new pc.BoundingBox();
+      layer.bounds.setMinMax(cloud.min, cloud.max);
+      this.applyClip(layer);
+      this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, layer.bounds.halfExtents.length() * 100);
+      if (!this.framedModel && layer.root.enabled) { this.fit(); this.framedModel = true; }
+      report('');
+      return {count: total, displayed: cloud.count};
+    }
     const asset = new pc.Asset(file.filename, 'gsplat', { url: file.url, filename: file.filename });
     try {
       app.assets.add(asset);
@@ -187,7 +204,7 @@ export class GaussianViewer {
         app.assets.load(asset);
       });
       if (this.closed) return;
-      const resource = asset.resource as { aabb: pc.BoundingBox; octree?: { lodLevels: number } };
+      const resource = asset.resource as { aabb: pc.BoundingBox; numSplats: number; gsplatData?: {isCompressed?: boolean}; octree?: { lodLevels: number } };
       const bounds = resource.aabb.clone();
       const span = Math.max(0.1, bounds.halfExtents.length() * 2);
       if (!Number.isFinite(span)) throw new Error('无效的模型范围');
@@ -205,6 +222,7 @@ export class GaussianViewer {
         this.framedModel = true;
       }
       report('');
+      return {count: resource.numSplats, compressed: resource.gsplatData?.isCompressed === true};
     } catch (error) {
       if (!this.closed) {
         asset.unload();
@@ -218,6 +236,11 @@ export class GaussianViewer {
     const layer = this.layers.get(id);
     if (!layer) return;
     layer.root.destroy();
+    layer.points?.destroy();
+    if (layer.environmentAsset) {
+      layer.environmentAsset.unload();
+      this.scene.app.assets.remove(layer.environmentAsset);
+    }
     if (layer.asset) {
       layer.asset.unload();
       this.scene.app.assets.remove(layer.asset);
@@ -229,8 +252,30 @@ export class GaussianViewer {
     const layer = this.layers.get(id);
     if (layer) layer.root.enabled = value;
   }
+  async showEnvironment(id: number, file: ModelFile, visible: boolean) {
+    const layer=this.layers.get(id);
+    if (!layer) return;
+    if (layer.environment) { layer.environment.enabled=visible; return; }
+    if (!visible) return;
+    const assets=this.scene.app.assets;
+    const asset=new pc.Asset(file.filename,'gsplat',{url:file.url,filename:file.filename});
+    assets.add(asset);
+    try {
+      await new Promise<void>((ok,fail)=>{
+        asset.once('load',ok); asset.once('error',fail); assets.load(asset);
+      });
+      if (this.closed || this.layers.get(id)!==layer) return;
+      const node=new pc.Entity('环境');
+      node.addComponent('gsplat',{asset});
+      layer.root.addChild(node);
+      layer.environment=node;
+      layer.environmentAsset=asset;
+    } finally {
+      if (!layer.environmentAsset && !this.closed) { asset.unload(); assets.remove(asset); }
+    }
+  }
   loaded(id: number) {
-    return !!this.layers.get(id)?.asset;
+    return !!this.layers.get(id)?.bounds;
   }
   transform(id: number, value: TransformParameters) {
     const root = this.layers.get(id)?.root;
@@ -497,6 +542,7 @@ export class GaussianViewer {
     const min = new pc.Vec3(-1e30, -1e30, -1e30),
       max = min.clone().mulScalar(-1);
     if (this.axis === 'x' || this.axis === 'y' || this.axis === 'z') max[this.axis] = this.cut;
+    layer.points?.setClipState(!!this.axis, min, max, this.axis === 'box', this.box, pc.Vec3.ZERO, pc.Mat4.IDENTITY);
     layer.clip?.setClipState(
       !!this.axis,
       min,

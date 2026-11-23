@@ -22,7 +22,11 @@ const layers = reactive<
   {
     id: number;
     name: string;
+    format?: string;
+    splatCount?: number;
+    displayedPoints?: number;
     visible: boolean;
+    environment?: { file: {url:string;filename:string}; visible:boolean; expanded:boolean; busy:boolean };
     status: string;
     loading: boolean;
     geo: string;
@@ -352,6 +356,16 @@ function applyLayerOrigin(layer: typeof layers[number]) {
     layer.originDraft = undefined;
   } catch (error) { draft.message = String(error); }
 }
+async function toggleEnvironment(layer: (typeof layers)[number]) {
+  const env=layer.environment;
+  if (!env || env.busy || !layer.visible || !viewer) return;
+  env.busy=true;
+  try {
+    await viewer.showEnvironment(layer.id,env.file,!env.visible);
+    env.visible=!env.visible;
+  } catch (error) { message.value='环境加载失败：'+String(error); }
+  finally { env.busy=false; }
+}
 async function open(
   files: File[],
   directory: boolean,
@@ -392,15 +406,19 @@ async function open(
       } catch (error) {
         layer.geo = `${error} · 按本地原点显示`;
       }
-    }, reason => { layer.geo = reason; });
+    }, reason => { layer.geo = reason; }, format => { layer.format = format; });
     lifetime.signal.throwIfAborted();
     if (!viewer) throw new Error('三维视口初始化失败，请刷新页面重试');
+    if (model.environment) layer.environment={file:model.environment, visible:false, expanded:false, busy:false};
     const loading = viewer.add(id, model, (value) => {
       layer.status = value;
     });
     viewer.visible(id, layer.visible);
     viewer.transform(id, layer.transform);
-    await loading;
+    const result = await loading;
+    layer.splatCount = result?.count;
+    layer.displayedPoints = result?.displayed;
+    if (layer.format === 'PLY' && result?.compressed) layer.format = 'PLY Compressed';
     if (viewer.loaded(id) && !candidate)
       layer.originDraft = { epsg: '4326', offset: ['', '', ''], message: '' };
     if (viewer.loaded(id) && candidate) {
@@ -492,10 +510,10 @@ onUnmounted(() => {
     </div>
     <aside v-if="layersOpen || panel" class="dock">
       <section v-if="layersOpen" class="viewer-panel layer-panel" aria-label="图层">
-        <header><h2>图层 <small>{{ layers.length + Number(configured) }}</small></h2><button aria-label="关闭图层" @click="layersOpen = false"><ViewerIcon name="close" /></button></header>
+        <header><h2>图层</h2><button aria-label="关闭图层" @click="layersOpen = false"><ViewerIcon name="close" /></button></header>
         <div class="layer-list">
           <div v-if="configured" class="map-group">
-            <div class="layer-row"><button class="layer-name" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '▾' : '▸' }} 地图</button>
+            <div class="layer-row"><button class="layer-name" :aria-expanded="expanded" @click="expanded = !expanded"><span class="layer-title">地图</span></button>
               <button aria-label="显示地图" :title="parentVisible ? '隐藏' : '显示'" :aria-pressed="parentVisible" @click="parentVisible = !parentVisible"><ViewerIcon :name="parentVisible ? 'eye' : 'hidden'" /></button></div>
             <div v-if="expanded" class="map-children" role="group" aria-label="地图子图层">
               <div v-for="layer in mapLayers" :key="layer.key" class="layer-row">
@@ -505,9 +523,11 @@ onUnmounted(() => {
             </div>
           </div>
           <p v-if="!layers.length && !configured" class="empty">尚未加载图层</p>
-          <div v-for="layer in layers" :key="layer.id" class="layer-row" :aria-busy="layer.loading">
-            <button class="layer-name" :aria-pressed="selectedId === layer.id" :title="layer.name" @click="selectLayer(layer.id)">
-              <strong>{{ layer.name }}</strong><small v-if="layer.status">{{ layer.status }}</small>
+          <template v-for="layer in layers" :key="layer.id">
+          <div class="layer-row" :aria-busy="layer.loading">
+            <button class="layer-name" :aria-expanded="layer.environment?.expanded" :aria-pressed="selectedId === layer.id" :title="layer.name"
+              @click="selectLayer(layer.id); if (layer.environment) layer.environment.expanded = !layer.environment.expanded">
+              <span class="layer-title">{{ layer.name }}</span><small v-if="layer.status">{{ layer.status }}</small>
             </button>
             <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" title="卸载" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
             <button type="button" :disabled="layer.loading || !viewer?.loaded(layer.id)" :aria-label="'定位到 ' + layer.name"
@@ -515,6 +535,13 @@ onUnmounted(() => {
             <button class="visibility" :aria-pressed="layer.visible" :aria-label="'显示 ' + layer.name" :title="layer.visible ? '隐藏' : '显示'"
               @click="layer.visible = !layer.visible; viewer?.visible(layer.id, layer.visible)"><ViewerIcon :name="layer.visible ? 'eye' : 'hidden'" /></button>
           </div>
+          <div v-if="layer.environment?.expanded" class="map-children" role="group" :aria-label="layer.name + ' 子图层'">
+            <div class="layer-row" :aria-busy="layer.environment.busy">
+              <span class="map-child-name">环境</span>
+              <button aria-label="显示环境" :aria-pressed="layer.environment.visible" :title="layer.environment.visible ? '隐藏' : '显示'" :disabled="!layer.visible || layer.environment.busy || !viewer?.loaded(layer.id)" @click="toggleEnvironment(layer)"><ViewerIcon :name="layer.environment.visible && layer.visible ? 'eye' : 'hidden'" /></button>
+            </div>
+          </div>
+          </template>
         </div>
       </section>
       <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图'}[panel]">
@@ -559,7 +586,10 @@ onUnmounted(() => {
             <small role="status">{{ mapStatus }}</small>
           </form>
           <template v-if="panel === 'properties' && selected">
-            <div class="field"><span>模型</span><b>{{ selected.name }}</b></div>
+            <div class="field"><span>模型名称</span><b>{{ selected.name }}</b></div>
+            <div class="field"><span>数据格式</span><span>{{ selected.format || '—' }}</span></div>
+            <div class="field"><span>{{ selected.format === 'LAS' ? '点云点数' : '高斯点数' }}</span><span>{{ selected.splatCount?.toLocaleString('zh-CN') ?? '—' }}</span></div>
+            <div v-if="selected.displayedPoints && selected.displayedPoints !== selected.splatCount" class="field"><span>预览点数</span><span>{{ selected.displayedPoints.toLocaleString('zh-CN') }}</span></div>
             <details :key="'coordinates-' + selected.id" class="coordinate-section" open>
               <summary>坐标</summary>
               <div v-if="shownOrigin && !selected.originDraft" class="map-form">
@@ -610,7 +640,7 @@ onUnmounted(() => {
       </section>
     </aside>
     <div class="view-gizmo viewer-gizmo" aria-label="快速视角"><ViewportCube /></div>
-    <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip" @change="select($event, false)" />
+    <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip,.las" @change="select($event, false)" />
     <input ref="directoryPicker" hidden type="file" webkitdirectory multiple @change="select($event, true)" />
     <div v-if="worldLimitVisible" class="world-limit" role="status">已缩放至全球范围</div>
     <footer><span role="status">{{ message || (layers.find(l => l.status === '正在读取本地模型') ? '正在读取本地模型' : '') || stats || '可拖入本地模型文件或文件夹' }}</span>

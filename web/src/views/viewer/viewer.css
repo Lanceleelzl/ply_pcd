@@ -67,7 +67,6 @@ option { background: var(--surface); }
 .coordinate-section[open] > summary { margin-bottom: 6px; }
 .viewer-panel > header { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--line); }
 h2 { margin: 0; font-size: 14px; font-weight: 600; }
-h2 small { font-weight: normal; color: var(--muted); margin-left: 4px; }
 .viewer-panel header button { min-height: 26px; padding: 3px 5px; }
 .layer-list, .panel-body { overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #425369 transparent; }
 .layer-list { padding: 6px; }
@@ -90,9 +89,16 @@ h2 small { font-weight: normal; color: var(--muted); margin-left: 4px; }
 .layer-row > button:not(.layer-name) { box-sizing: border-box; flex: 0 0 24px; height: 32px; padding: 0; }
 .layer-row > button:last-child { margin-right: 4px; }
 .viewer-panel .layer-name { display: grid; justify-content: stretch; text-align: left; gap: 1px; flex: 1; min-width: 0; color: inherit; }
-.layer-name strong { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.layer-title { overflow: hidden; text-overflow: ellipsis; }
+.layer-title, .panel-body :deep(details > summary) { font-family: inherit; font-size: 14px; font-weight: 400; }
+.layer-name[aria-expanded] .layer-title::before, .panel-body :deep(details > summary::before) {
+  content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px;
+  vertical-align: 1px; background: currentColor; clip-path: polygon(16% 0, 91% 50%, 16% 100%);
+}
+.layer-name[aria-expanded=true] .layer-title::before, .panel-body :deep(details[open] > summary::before) { transform: rotate(90deg); }
 .layer-name small { white-space: normal; overflow-wrap: anywhere; color: var(--muted); }
 .panel-body { display: grid; gap: 10px; padding: 12px; }
+.panel-body:has(.coordinate-section) { padding-inline: 6px; }
 .field { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); }
 .field > :last-child { color: #e2ecf7; overflow-wrap: anywhere; }
 .meter-field { position: relative; display: grid; align-items: center; }
@@ -116,7 +122,7 @@ h2 small { font-weight: normal; color: var(--muted); margin-left: 4px; }
 .box-fields label { color: var(--muted); font-size: 12px; }
 .panel-body .coordinate-section, .panel-body :deep(.transform-disclosure) { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
 .panel-body :deep(details > summary) {
-  display: list-item; box-sizing: border-box; width: 100%; padding: 0 8px;
+  display: block; list-style: none; box-sizing: border-box; width: 100%; padding: 0 9px;
   background: var(--row-surface); border-radius: 4px; cursor: pointer;
   color: #c4dcf6; font-size: 14px; line-height: 32px;
 }

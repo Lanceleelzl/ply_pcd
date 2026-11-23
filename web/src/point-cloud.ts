@@ -3,6 +3,7 @@ import { apiFetch } from './api/api-auth.ts';
 
 export interface PreviewCloud {
   positions: Float32Array;
+  colors?: Uint8Array;
   count: number;
   min: pc.Vec3;
   max: pc.Vec3;
@@ -30,18 +31,20 @@ export async function loadPreview(url: string, signal?: AbortSignal): Promise<Pr
   return { positions: new Float32Array(buffer, 40, count * 3), count, min, max };
 }
 
-function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMaterial {
+function createPointCloudMaterial(color: pc.Color, name: string, colored: boolean): PointCloudMaterial {
   const material = new pc.ShaderMaterial({
-    uniqueName: `PointCloudClip-${name}`,
-    attributes: { aPosition: pc.SEMANTIC_POSITION },
+    uniqueName: `PointCloudClip-${name}-${colored ? 'rgb' : 'uniform'}`,
+    attributes: { aPosition: pc.SEMANTIC_POSITION, ...(colored ? {aColor: pc.SEMANTIC_COLOR} : {}) },
     vertexGLSL: `
       attribute vec3 aPosition;
+      ${colored ? 'attribute vec4 aColor; varying vec3 vColor;' : ''}
       uniform mat4 matrix_model;
       uniform mat4 matrix_viewProjection;
       varying vec3 vWorldPosition;
       void main(void) {
         vec4 world = matrix_model * vec4(aPosition, 1.0);
         vWorldPosition = world.xyz;
+        ${colored ? 'vColor = aColor.rgb;' : ''}
         gl_Position = matrix_viewProjection * world;
         gl_PointSize = 1.0;
       }
@@ -49,6 +52,7 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
     fragmentGLSL: `
       precision highp float;
       uniform vec3 uPointColor;
+      ${colored ? 'varying vec3 vColor;' : ''}
       uniform float uClipEnabled;
       uniform vec3 uClipMin;
       uniform vec3 uClipMax;
@@ -69,7 +73,7 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
         if ((uOriginClipSides.x > 0.5 && originPoint.x < 0.0) || (uOriginClipSides.x < -0.5 && originPoint.x > 0.0)
           || (uOriginClipSides.y > 0.5 && originPoint.y < 0.0) || (uOriginClipSides.y < -0.5 && originPoint.y > 0.0)
           || (uOriginClipSides.z > 0.5 && originPoint.z < 0.0) || (uOriginClipSides.z < -0.5 && originPoint.z > 0.0)) discard;
-        gl_FragColor = vec4(uPointColor, 1.0);
+        gl_FragColor = vec4(${colored ? 'vColor' : 'uPointColor'}, 1.0);
       }
     `,
   }) as PointCloudMaterial;
@@ -107,8 +111,9 @@ function createPointCloudMaterial(color: pc.Color, name: string): PointCloudMate
 export function createPointCloudEntity(app: pc.Application, cloud: PreviewCloud, color: pc.Color, name: string): pc.Entity {
   const mesh = new pc.Mesh(app.graphicsDevice);
   mesh.setPositions(cloud.positions);
+  if (cloud.colors) mesh.setColors32(cloud.colors);
   mesh.update(pc.PRIMITIVE_POINTS);
-  const material = createPointCloudMaterial(color, name);
+  const material = createPointCloudMaterial(color, name, !!cloud.colors);
   const entity = new pc.Entity(name);
   entity.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, material)] });
   return entity;
