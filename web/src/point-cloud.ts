@@ -31,13 +31,14 @@ export async function loadPreview(url: string, signal?: AbortSignal): Promise<Pr
   return { positions: new Float32Array(buffer, 40, count * 3), count, min, max };
 }
 
-function createPointCloudMaterial(color: pc.Color, name: string, colored: boolean): PointCloudMaterial {
+function createPointCloudMaterial(color: pc.Color, name: string, colored: boolean, adjustable: boolean): PointCloudMaterial {
   const material = new pc.ShaderMaterial({
-    uniqueName: `PointCloudClip-${name}-${colored ? 'rgb' : 'uniform'}`,
+    uniqueName: `PointCloudClip-${name}-${colored ? 'rgb' : 'uniform'}-${adjustable}`,
     attributes: { aPosition: pc.SEMANTIC_POSITION, ...(colored ? {aColor: pc.SEMANTIC_COLOR} : {}) },
     vertexGLSL: `
       attribute vec3 aPosition;
       ${colored ? 'attribute vec4 aColor; varying vec3 vColor;' : ''}
+      ${adjustable ? 'uniform mat4 matrix_projection; uniform vec4 screen_size; uniform float pointPixels; uniform float pointSpacing;' : ''}
       uniform mat4 matrix_model;
       uniform mat4 matrix_viewProjection;
       varying vec3 vWorldPosition;
@@ -46,7 +47,10 @@ function createPointCloudMaterial(color: pc.Color, name: string, colored: boolea
         vWorldPosition = world.xyz;
         ${colored ? 'vColor = aColor.rgb;' : ''}
         gl_Position = matrix_viewProjection * world;
-        gl_PointSize = 1.0;
+        ${adjustable ? `
+        float worldSpacing = pointSpacing * max(length(matrix_model[0].xyz), max(length(matrix_model[1].xyz), length(matrix_model[2].xyz)));
+        float pixels = worldSpacing * screen_size.y * 0.5 * abs(matrix_projection[1][1]) / max(gl_Position.w, 0.0001);
+        gl_PointSize = pointPixels > 0.0 ? pointPixels : clamp(pixels, 1.0, 3.0);` : 'gl_PointSize = 1.0;'}
       }
     `,
     fragmentGLSL: `
@@ -108,12 +112,19 @@ function createPointCloudMaterial(color: pc.Color, name: string, colored: boolea
   return material;
 }
 
-export function createPointCloudEntity(app: pc.Application, cloud: PreviewCloud, color: pc.Color, name: string): pc.Entity {
+export function createPointCloudEntity(app: pc.Application, cloud: PreviewCloud, color: pc.Color, name: string, pointPixels?: number): pc.Entity {
   const mesh = new pc.Mesh(app.graphicsDevice);
   mesh.setPositions(cloud.positions);
   if (cloud.colors) mesh.setColors32(cloud.colors);
   mesh.update(pc.PRIMITIVE_POINTS);
-  const material = createPointCloudMaterial(color, name, !!cloud.colors);
+  const material = createPointCloudMaterial(color, name, !!cloud.colors, pointPixels !== undefined);
+  if (pointPixels !== undefined) {
+    const span = cloud.max.clone().sub(cloud.min);
+    const [a,b] = [span.x,span.y,span.z].sort((x,y)=>y-x);
+    // Estimate the sample footprint from the two widest dimensions.
+    material.setParameter('pointSpacing', Math.sqrt(a*b/Math.max(1,cloud.count)));
+    material.setParameter('pointPixels', pointPixels);
+  }
   const entity = new pc.Entity(name);
   entity.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, material)] });
   return entity;

@@ -13,6 +13,11 @@ import '../../view-gizmo.css';
 import { GaussianViewer } from '../../engine/modules/GaussianViewer';
 import { collectDirectoryFiles, pickDirectory, type PickedDirectoryHandle } from '../../shared/directory-selection';
 import { localModel } from './local-model';
+import { readLocalLas } from './local-las';
+import {copcApi,submitCopc,type CopcJob} from '../../api/copc';
+import {getApiKey} from '../../api/api-auth';
+import {useBackgroundCacheStore} from '../../stores/background-cache-store';
+const pointChoices=ref<{file:File;path:string;sidecar?:File}[]>([]);
 const canvas = ref<HTMLCanvasElement>(),
   viewport = ref<HTMLElement>();
 const filePicker = ref<HTMLInputElement>(),
@@ -24,7 +29,11 @@ const layers = reactive<
     name: string;
     format?: string;
     splatCount?: number;
+    pointPixels: number;
     displayedPoints?: number;
+    las?: File;
+    pointHint?: string;
+    operation?: 'convert' | 'full';
     visible: boolean;
     environment?: { file: {url:string;filename:string}; visible:boolean; expanded:boolean; busy:boolean };
     status: string;
@@ -366,12 +375,69 @@ async function toggleEnvironment(layer: (typeof layers)[number]) {
   } catch (error) { message.value='环境加载失败：'+String(error); }
   finally { env.busy=false; }
 }
+async function convertLayer(layer:typeof layers[number]) {
+  const resource=resources.get(layer.id);
+  if (!layer.las || !resource || !viewer || layer.loading) return;
+  const {signal}=resource.controller;
+  layer.operation='convert';
+  layer.loading=true;
+  layer.status='请在本机选择原始 LAS';
+  try {
+    let job=await submitCopc(layer.las,signal);
+    useBackgroundCacheStore().trackCopc();
+    while (job.status==='queued'||job.status==='converting') {
+      layer.status=job.status==='queued' ? '等待转换' : '正在转换为 COPC';
+      await new Promise(resolve=>setTimeout(resolve,800));
+      job=await copcApi<CopcJob>('/'+job.id,{signal});
+    }
+    if (job.status!=='ready') throw Error(job.error||'后台转换失败');
+    const {matchCopc}=await import('./local-copc');
+    const data=await matchCopc(layer.las,{url:'/api/copc/jobs/'+job.id+'/result',key:getApiKey()},signal);
+    signal.throwIfAborted();
+    viewer.useCopc(layer.id,data,value=>{layer.status=value;});
+    layer.pointPixels=0;
+    delete layer.displayedPoints;
+    layer.format='COPC';
+    layer.pointHint='';
+    layer.status='';
+    layer.las=undefined;
+  } catch (error) { layer.status=''; layer.pointHint=String(error); }
+  finally { layer.loading=false; layer.operation=undefined; }
+}
+async function loadFull(layer:typeof layers[number]) {
+  const resource=resources.get(layer.id);
+  if (!layer.las || !viewer || !resource || layer.loading) return;
+  layer.operation='full';
+  layer.loading=true;
+  layer.status='正在读取全部点';
+  try {
+    const points=await readLocalLas(layer.las,resource.controller.signal,true);
+    resource.controller.signal.throwIfAborted();
+    viewer.replacePoints(layer.id,points,layer.pointPixels);
+    layer.displayedPoints=points.total;
+    layer.status='';
+    layer.pointHint='';
+  } catch (error) { layer.status='全量加载失败：'+String(error); }
+  finally { layer.loading=false; layer.operation=undefined; }
+}
 async function open(
   files: File[],
   directory: boolean,
   paths = files.map((file) => file.webkitRelativePath || file.name),
+  sidecar?: File,
+  directoryChecked=false,
 ) {
   if (!files.length) return;
+  if (directory && !paths.some(p=>/(?:^|\/)(lod-meta\.json|meta\.json|[^/]+\.lcc2?)$/i.test(p))) {
+    const byPath=new Map(paths.map((p,i)=>[p.toLowerCase(),files[i]]));
+    const choices=paths.flatMap((path,i)=>{
+      if (/\.las$/i.test(path)) return [{path,file:files[i],sidecar:byPath.get(path.toLowerCase().replace(/\.las$/,'.copc.laz'))}];
+      if (/\.copc\.laz$/i.test(path) && !byPath.has(path.toLowerCase().replace(/\.copc\.laz$/,'.las'))) return [{path,file:files[i],sidecar:undefined}];
+      return [];
+    });
+    if (choices.length===1) { const c=choices[0]; return open([c.file],false,[c.file.name],c.sidecar,true); }
+    if (choices.length>1) { pointChoices.value=choices; return; }
+  }
   message.value = '';
   const id = nextLayerId++;
   const controller = new AbortController(), urls: string[] = [];
@@ -381,6 +447,7 @@ async function open(
     name: directory ? paths[0].split('/')[0] : files[0].name,
     visible: true,
     projected: false,
+    pointPixels: 0,
     status: '正在读取本地模型',
     loading: true,
     geo: '未确定地理原点',
@@ -399,14 +466,30 @@ async function open(
     lifetime.signal.throwIfAborted();
     let candidate: GeoOrigin | undefined;
     const entries = new Map(files.map((file, i) => [paths[i], file]));
-    const model = await localModel(entries, urls, controller.signal, (origin) => {
+    const onOrigin=(origin:GeoOrigin) => {
       try {
         positionLayer(layer, origin);
         candidate = origin;
       } catch (error) {
         layer.geo = `${error} · 按本地原点显示`;
       }
-    }, reason => { layer.geo = reason; }, format => { layer.format = format; });
+    };
+    let model;
+    if (sidecar) {
+      try {
+        const {matchCopc}=await import('./local-copc');
+        const copc=await matchCopc(files[0],sidecar,controller.signal);
+        model={filename:sidecar.name,url:'',copc};
+        layer.format='COPC';
+        if (copc.origin) onOrigin(copc.origin);
+      } catch (error) { controller.signal.throwIfAborted(); layer.pointHint='同名 COPC 无法使用：'+String(error); }
+    }
+    model??=await localModel(entries,urls,controller.signal,onOrigin,reason=>{layer.geo=reason;},format=>{layer.format=format;});
+    if (model.points) {
+      layer.las=files[0];
+      if (directoryChecked && model.points.total>model.points.cloud.count)
+        layer.pointHint ||= '同目录未找到同名 COPC，当前显示抽稀预览。';
+    }
     lifetime.signal.throwIfAborted();
     if (!viewer) throw new Error('三维视口初始化失败，请刷新页面重试');
     if (model.environment) layer.environment={file:model.environment, visible:false, expanded:false, busy:false};
@@ -417,7 +500,7 @@ async function open(
     viewer.transform(id, layer.transform);
     const result = await loading;
     layer.splatCount = result?.count;
-    layer.displayedPoints = result?.displayed;
+    if (result?.displayed !== undefined) layer.displayedPoints = result.displayed;
     if (layer.format === 'PLY' && result?.compressed) layer.format = 'PLY Compressed';
     if (viewer.loaded(id) && !candidate)
       layer.originDraft = { epsg: '4326', offset: ['', '', ''], message: '' };
@@ -527,7 +610,7 @@ onUnmounted(() => {
           <div class="layer-row" :aria-busy="layer.loading">
             <button class="layer-name" :aria-expanded="layer.environment?.expanded" :aria-pressed="selectedId === layer.id" :title="layer.name"
               @click="selectLayer(layer.id); if (layer.environment) layer.environment.expanded = !layer.environment.expanded">
-              <span class="layer-title">{{ layer.name }}</span><small v-if="layer.status">{{ layer.status }}</small>
+              <span class="layer-title">{{ layer.name }}</span>
             </button>
             <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" title="卸载" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
             <button type="button" :disabled="layer.loading || !viewer?.loaded(layer.id)" :aria-label="'定位到 ' + layer.name"
@@ -588,8 +671,17 @@ onUnmounted(() => {
           <template v-if="panel === 'properties' && selected">
             <div class="field"><span>模型名称</span><b>{{ selected.name }}</b></div>
             <div class="field"><span>数据格式</span><span>{{ selected.format || '—' }}</span></div>
-            <div class="field"><span>{{ selected.format === 'LAS' ? '点云点数' : '高斯点数' }}</span><span>{{ selected.splatCount?.toLocaleString('zh-CN') ?? '—' }}</span></div>
-            <div v-if="selected.displayedPoints && selected.displayedPoints !== selected.splatCount" class="field"><span>预览点数</span><span>{{ selected.displayedPoints.toLocaleString('zh-CN') }}</span></div>
+            <div class="field"><span>{{ selected.format === 'LAS' || selected.format === 'COPC' ? '点云点数' : '高斯点数' }}</span><span>{{ selected.splatCount?.toLocaleString('zh-CN') ?? '—' }}</span></div>
+            <div v-if="selected.format === 'LAS' && selected.displayedPoints !== undefined && selected.displayedPoints !== selected.splatCount" class="field"><span>预览点数</span><span>{{ selected.displayedPoints.toLocaleString('zh-CN') }}</span></div>
+            <small v-if="selected.status && !selected.operation" role="status">{{ selected.status }}</small>
+            <label v-if="selected.las || selected.format === 'COPC'" class="field">像素大小<select v-model.number="selected.pointPixels" @change="viewer?.setPointSize(selected.id,selected.pointPixels)">
+              <option :value="0">自动</option><option v-for="n in 4" :key="n" :value="n">{{ n }} 像素</option>
+            </select></label>
+            <template v-if="selected.las">
+              <small v-if="selected.pointHint">{{ selected.pointHint }}</small>
+              <button v-if="selected.displayedPoints !== selected.splatCount" class="apply-origin" :disabled="selected.loading" :aria-busy="selected.operation==='full'" @click="loadFull(selected)">{{ selected.operation==='full' ? selected.status : '加载全量点云' }}</button>
+              <button type="button" class="apply-origin" :disabled="selected.loading" :aria-busy="selected.operation==='convert'" @click="convertLayer(selected)">{{ selected.operation==='convert' ? selected.status : '转换为 COPC' }}</button>
+            </template>
             <details :key="'coordinates-' + selected.id" class="coordinate-section" open>
               <summary>坐标</summary>
               <div v-if="shownOrigin && !selected.originDraft" class="map-form">
@@ -640,7 +732,12 @@ onUnmounted(() => {
       </section>
     </aside>
     <div class="view-gizmo viewer-gizmo" aria-label="快速视角"><ViewportCube /></div>
-    <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip,.las" @change="select($event, false)" />
+    <dialog :open="pointChoices.length>0" class="point-choices">
+      <strong>选择点云</strong>
+      <button v-for="c in pointChoices" :key="c.path" @click="pointChoices=[]; open([c.file],false,[c.file.name],c.sidecar,true)">{{ c.path }}</button>
+      <button @click="pointChoices=[]">取消</button>
+    </dialog>
+    <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip,.las,.copc.laz" @change="select($event, false)" />
     <input ref="directoryPicker" hidden type="file" webkitdirectory multiple @change="select($event, true)" />
     <div v-if="worldLimitVisible" class="world-limit" role="status">已缩放至全球范围</div>
     <footer><span role="status">{{ message || (layers.find(l => l.status === '正在读取本地模型') ? '正在读取本地模型' : '') || stats || '可拖入本地模型文件或文件夹' }}</span>

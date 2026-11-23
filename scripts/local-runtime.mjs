@@ -236,6 +236,7 @@ async function setup() {
   const environment = managedEnvironment();
   run(uvExecutable, ["python", "install", "3.12"], { env: environment });
   run(uvExecutable, ["sync", "--python", "3.12", "--no-dev"], { env: environment });
+  if (platform() === "win32" && arch() === "x64") run(venvPython, ["scripts/setup-copc.py"]);
   await ensureWorker();
   console.log("[setup] Local runtime is ready.");
 }

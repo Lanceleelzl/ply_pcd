@@ -12,11 +12,14 @@ import { TransformGizmoInput } from '../core/TransformGizmoInput';
 import { mountClippingLabels } from '../../views/workbench/clipping-labels';
 
 import type { ModelFile } from '../../views/viewer/local-model';
+import { CopcLayer } from './copc-layer';
 import { createPointCloudEntity, type PointCloudMaterial } from '../../point-cloud';
 class Layer {
   root = new pc.Entity();
   asset?: pc.Asset;
   points?: PointCloudMaterial;
+  pointEntity?: pc.Entity;
+  copc?: CopcLayer;
   environment?: pc.Entity;
   environmentAsset?: pc.Asset;
   clip?: GaussianClipController;
@@ -172,6 +175,7 @@ export class GaussianViewer {
       elapsed += dt;
       if (elapsed < 0.35) return;
       elapsed = 0;
+      for (const layer of this.layers.values()) layer.copc?.update(this.scene.camera.camera!);
       if (this.map && this.mapConfig) void this.refreshMap().catch(error => this.mapConfig?.report(String(error)));
       stats(`${app.stats.frame.fps} FPS · 本帧高斯 ${app.stats.frame.gsplats.toLocaleString()}`);
     });
@@ -182,10 +186,20 @@ export class GaussianViewer {
     this.layers.set(id, layer);
     this.scene.app.root.addChild(layer.root);
     const app = this.scene.app;
+    if (file.copc) {
+      const data=file.copc;
+      layer.bounds=data.bounds;
+      layer.copc=new CopcLayer(data,layer.root,app,material=>this.applyPointClip(material),report);
+      this.scene.camera.camera!.farClip=Math.max(this.scene.camera.camera!.farClip,data.bounds.halfExtents.length()*100);
+      if (!this.framedModel && layer.root.enabled) { this.fit(); this.framedModel=true; }
+      report('');
+      return {count:data.header.pointCount};
+    }
     if (file.points) {
       const {cloud, total} = file.points;
-      const entity = createPointCloudEntity(app, cloud, new pc.Color(0.84, 0.9, 1), file.filename);
+      const entity = createPointCloudEntity(app, cloud, new pc.Color(0.84, 0.9, 1), file.filename, 0);
       layer.root.addChild(entity);
+      layer.pointEntity=entity;
       layer.points = entity.render!.meshInstances[0].material as PointCloudMaterial;
       layer.bounds = new pc.BoundingBox();
       layer.bounds.setMinMax(cloud.min, cloud.max);
@@ -235,6 +249,7 @@ export class GaussianViewer {
   removeLayer(id: number) {
     const layer = this.layers.get(id);
     if (!layer) return;
+    layer.copc?.destroy();
     layer.root.destroy();
     layer.points?.destroy();
     if (layer.environmentAsset) {
@@ -251,6 +266,34 @@ export class GaussianViewer {
   visible(id: number, value: boolean) {
     const layer = this.layers.get(id);
     if (layer) layer.root.enabled = value;
+  }
+  setPointSize(id:number, pixels:number) {
+    const layer=this.layers.get(id);
+    layer?.points?.setParameter('pointPixels',pixels);
+    layer?.copc?.setPointSize(pixels);
+  }
+  replacePoints(id:number, points: NonNullable<ModelFile['points']>, pixels:number) {
+    const layer=this.layers.get(id);
+    if (!layer?.pointEntity) return;
+    const next=createPointCloudEntity(this.scene.app,points.cloud,new pc.Color(.84,.9,1),'LAS',pixels);
+    layer.root.addChild(next);
+    layer.pointEntity.destroy();
+    layer.points?.destroy();
+    layer.pointEntity=next;
+    layer.points=next.render!.meshInstances[0].material as PointCloudMaterial;
+    this.applyClip(layer);
+  }
+  useCopc(id:number, data:NonNullable<ModelFile['copc']>, report:(message:string)=>void) {
+    const layer=this.layers.get(id);
+    if (!layer) return;
+    layer.copc=new CopcLayer(data,layer.root,this.scene.app,material=>this.applyPointClip(material),report,()=>{
+      if (layer.pointEntity) {
+        layer.pointEntity.destroy();
+        layer.pointEntity=undefined;
+        layer.points?.destroy();
+        layer.points=undefined;
+      }
+    });
   }
   async showEnvironment(id: number, file: ModelFile, visible: boolean) {
     const layer=this.layers.get(id);
@@ -542,7 +585,8 @@ export class GaussianViewer {
     const min = new pc.Vec3(-1e30, -1e30, -1e30),
       max = min.clone().mulScalar(-1);
     if (this.axis === 'x' || this.axis === 'y' || this.axis === 'z') max[this.axis] = this.cut;
-    layer.points?.setClipState(!!this.axis, min, max, this.axis === 'box', this.box, pc.Vec3.ZERO, pc.Mat4.IDENTITY);
+    if (layer.points) this.applyPointClip(layer.points);
+    layer.copc?.updateClip();
     layer.clip?.setClipState(
       !!this.axis,
       min,
@@ -553,6 +597,11 @@ export class GaussianViewer {
       pc.Mat4.IDENTITY,
       true,
     );
+  }
+  private applyPointClip(material:PointCloudMaterial) {
+    const min=new pc.Vec3(-1e30,-1e30,-1e30), max=min.clone().mulScalar(-1);
+    if (this.axis==='x'||this.axis==='y'||this.axis==='z') max[this.axis]=this.cut;
+    material.setClipState(!!this.axis,min,max,this.axis==='box',this.box,pc.Vec3.ZERO,pc.Mat4.IDENTITY);
   }
   destroy() {
     this.closed = true;

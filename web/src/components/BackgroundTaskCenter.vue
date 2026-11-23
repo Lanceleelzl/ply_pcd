@@ -13,8 +13,13 @@ const statusText = (task: CacheTask): string => ({ queued: '等待后台槽位',
   <details class="background-task-center">
     <summary><i :class="{ active: store.activeCount > 0 }" />后台任务 <b v-if="store.activeCount">{{ store.activeCount }}</b></summary>
     <div class="background-task-popover">
-      <header><strong>流式缓存任务</strong><button type="button" :disabled="store.refreshing" @click.prevent="store.refresh">刷新</button></header>
-      <p v-if="!visibleTasks.length" class="background-task-empty">当前没有缓存任务。</p>
+      <header><strong>后台任务</strong><button type="button" :disabled="store.refreshing" @click.prevent="store.refresh">刷新</button></header>
+      <p v-if="!visibleTasks.length && !store.copcJobs.length" class="background-task-empty">当前没有任务。</p>
+      <article v-for="job in store.copcJobs.slice(0,8)" :key="job.id" class="background-task-row" :class="job.status">
+        <div><strong>{{ job.name }}</strong><small>LAS → COPC</small></div>
+        <span>{{ {queued:'等待转换', converting:'正在转换', ready:'转换完成', failed:'转换失败'}[job.status] }}</span>
+        <small v-if="job.error" class="background-task-error">{{ job.error }}</small>
+      </article>
       <article v-for="task in visibleTasks" :key="task.key" class="background-task-row" :class="task.status">
         <div><strong>{{ task.label }}</strong><small>{{ task.format }} · {{ task.sessionId.slice(0, 8) }}</small></div>
         <span><i v-if="task.status === 'converting' && task.progress === null" />{{ statusText(task) }}</span>

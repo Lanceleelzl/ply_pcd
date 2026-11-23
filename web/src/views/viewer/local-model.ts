@@ -1,10 +1,12 @@
 import { lccIndex } from '../../engine/modules/lcc-index';
 import { readOrigin, type GeoOrigin } from './viewer-origin';
 import { readLocalLas } from './local-las';
+import type { LocalCopc } from './local-copc';
 export interface ModelFile {
   url: string;
   filename: string;
   points?: Awaited<ReturnType<typeof readLocalLas>>;
+  copc?: LocalCopc;
   environment?: { url: string; filename: string };
 }
 export async function localModel(
@@ -23,6 +25,13 @@ export async function localModel(
   if (indexes.length > 1) throw new Error('目录含多个模型入口，请选择单个模型目录');
   if (!entry) throw new Error('未找到模型索引。独立 PLY 请通过「加载模型 → 选择文件」打开所需文件。');
   const name = basename(entry).toLowerCase();
+  if (name.endsWith('.copc.laz')) {
+    const {readCopc}=await import('./local-copc');
+    const copc=await readCopc(files.get(entry)!,signal);
+    if (copc.origin) onOrigin(copc.origin);
+    onFormat?.('COPC');
+    return {filename:basename(entry),url:'',copc};
+  }
   const format = name === 'lod-meta.json' ? '流式 SOG' : name === 'meta.json' ? 'SOG' : name.match(/\.([^.]+)$/)?.[1].toUpperCase();
   if (format) onFormat?.(format);
   if (name.endsWith('.laz')) throw Error('当前本地浏览支持 LAS，请先将 LAZ 解压为 LAS');

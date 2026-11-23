@@ -32,6 +32,7 @@ from service.schemas import (
 )
 from service.routes.history import create_history_router
 from service.routes.jobs import create_job_router
+from service.routes.copc import create_copc_router
 from service.routes.registrations import create_registration_router
 from service.routes.coarse_registrations import create_coarse_registration_router
 from service.routes.sessions import create_session_router
@@ -76,6 +77,7 @@ from service.validation import (
 )
 
 app = FastAPI(title="Gaussian PLY / Reference Cloud Registration Service", version=SERVICE_VERSION)
+app.include_router(create_copc_router())
 app.add_middleware(ApiKeyAuthMiddleware, authenticator=ApiKeyAuthenticator(AUTH_ENABLED, API_KEY_HASHES))
 STATIC_ROOT = Path(__file__).parent / "static"
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT / "assets", check_dir=False), name="web-assets")

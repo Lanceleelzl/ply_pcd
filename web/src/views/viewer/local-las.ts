@@ -6,7 +6,15 @@ import type { GeoOrigin } from './viewer-origin';
 const previewLimit = 2_000_000;
 const recordLengths = [20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67];
 
-async function projectedCrs(file: Blob, start: number, end: number, records: number) {
+export function projectedWkt(wkt:string) {
+  if (!/^(?:PROJCS|PROJCRS)\s*\[/i.test(wkt)) return;
+  const authority = wkt.match(/(?:AUTHORITY|ID)\s*\[\s*"EPSG"\s*,\s*"?(\d+)"?\s*\]\s*\]$/i);
+  if (authority) return Number(authority[1]);
+  const utm = wkt.match(/^\w+\s*\[\s*"WGS 84 \/ UTM zone (\d{1,2})([NS])"/i);
+  if (utm && +utm[1] >= 1 && +utm[1] <= 60) return (utm[2].toUpperCase() === 'N' ? 32600 : 32700) + Number(utm[1]);
+}
+
+export async function projectedCrs(file: {slice:(start:number,end:number)=>Pick<Blob,'arrayBuffer'|'text'>}, start: number, end: number, records: number) {
   const decoder = new TextDecoder();
   for (let i = 0; i < records; i++) {
     if (start + 54 > end) throw Error('LAS 坐标记录头不完整');
@@ -24,18 +32,14 @@ async function projectedCrs(file: Blob, start: number, end: number, records: num
     }
     if (user === 'LASF_Projection' && id === 2112) {
       const wkt = (await file.slice(start, start + size).text()).replace(/\0/g, '').trim();
-      if (/^(?:PROJCS|PROJCRS)\s*\[/i.test(wkt)) {
-        const authority = wkt.match(/(?:AUTHORITY|ID)\s*\[\s*"EPSG"\s*,\s*"?(\d+)"?\s*\]\s*\]$/i);
-        if (authority) return Number(authority[1]);
-        const utm = wkt.match(/^\w+\s*\[\s*"WGS 84 \/ UTM zone (\d{1,2})([NS])"/i);
-        if (utm && +utm[1] >= 1 && +utm[1] <= 60) return (utm[2].toUpperCase() === 'N' ? 32600 : 32700) + Number(utm[1]);
-      }
+      const epsg=projectedWkt(wkt);
+      if (epsg) return epsg;
     }
     start += size;
   }
 }
 
-export async function readLocalLas(file: Blob, signal: AbortSignal) {
+export async function readLocalLas(file: Blob, signal: AbortSignal, full = false) {
   const h = new DataView(await file.slice(0, 375).arrayBuffer());
   if (h.byteLength < 227 || h.getUint32(0) !== 0x4c415346 || h.getUint8(24) !== 1) throw Error('无效或不支持的 LAS 文件头');
   const format = h.getUint8(104), recordSize = h.getUint16(105, true);
@@ -54,7 +58,7 @@ export async function readLocalLas(file: Blob, signal: AbortSignal) {
   const center = axes.map(i => (min[i] + max[i]) / 2) as XYZ;
   const epsg = await projectedCrs(file, headerSize, start, h.getUint32(100, true));
   const origin: GeoOrigin | undefined = epsg ? {epsg, offset: center} : undefined;
-  const count = Math.min(total, previewLimit), positions = new Float32Array(count * 3);
+  const count = full ? total : Math.min(total, previewLimit), positions = new Float32Array(count * 3);
   const rgbOffset = format === 2 ? 20 : [3, 5].includes(format) ? 28 : [7, 8, 10].includes(format) ? 30 : undefined;
   const rgb = rgbOffset === undefined ? undefined : new Uint16Array(count * 3);
   let maxColor = 0;

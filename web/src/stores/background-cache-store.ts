@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { loadRegistrationSession } from '../api/registration-api';
 import type { ModelId } from '../api/contracts';
+import {copcApi,type CopcJob} from '../api/copc';
 
 // V2 excludes sessions submitted without a cache request. Do not migrate the old
 // key because it tracked every upload and surfaces unrelated historical failures.
@@ -23,9 +24,16 @@ function readTracked(): TrackedSession[] {
 export const useBackgroundCacheStore = defineStore('background-cache', () => {
   const tracked = ref<TrackedSession[]>(readTracked());
   const tasks = ref<CacheTask[]>([]);
+  const copcJobs=ref<CopcJob[]>([]);
+  let showCopc=sessionStorage.getItem('viewer-copc-jobs')==='1';
   const refreshing = ref(false);
   let timer: ReturnType<typeof setInterval> | undefined;
-  const activeCount = computed(() => tasks.value.filter(task => task.status === 'queued' || task.status === 'converting').length);
+  const activeCount = computed(() => [...tasks.value,...copcJobs.value].filter(task => task.status === 'queued' || task.status === 'converting').length);
+  function trackCopc() {
+    showCopc=true;
+    sessionStorage.setItem('viewer-copc-jobs','1');
+    void refresh();
+  }
   const persist = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(tracked.value));
   function track(sessionId: string, workspaceId: string, labels?: Partial<Record<ModelId, string>>): void {
     const existing = tracked.value.find(item => item.sessionId === sessionId);
@@ -36,8 +44,11 @@ export const useBackgroundCacheStore = defineStore('background-cache', () => {
     void refresh();
   }
   async function refresh(): Promise<void> {
-    if (refreshing.value || !tracked.value.length) return;
+    if (refreshing.value || (!tracked.value.length && !showCopc)) return;
     refreshing.value = true;
+    if (showCopc) {
+      try { copcJobs.value=await copcApi<CopcJob[]>(''); } catch { /* Retry when the local service returns. */ }
+    }
     const next: CacheTask[] = [];
     await Promise.all(tracked.value.map(async item => {
       try {
@@ -63,5 +74,5 @@ export const useBackgroundCacheStore = defineStore('background-cache', () => {
     void refresh();
     timer = setInterval(refresh, 2000);
   }
-  return { tasks, activeCount, refreshing, track, refresh, start };
+  return { tasks, copcJobs, trackCopc, activeCount, refreshing, track, refresh, start };
 });
