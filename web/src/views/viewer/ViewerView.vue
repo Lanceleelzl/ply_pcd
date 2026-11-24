@@ -650,7 +650,7 @@ async function drop(event: DragEvent) {
         }
       ).getAsFileSystemHandle?.();
       if (!handle) {
-        message.value = '请使用「加载模型 → 选择文件夹」选择目录';
+        message.value = '请在「加载模型」中选择「加载数据集目录」';
         return;
       }
       const files: File[] = [],
@@ -686,7 +686,12 @@ onUnmounted(() => {
         <details ref="menu" class="load" @keydown.esc="menu && (menu.open = false)"
           @focusout="event => { if (menu && !menu.contains(event.relatedTarget as Node)) menu.open = false; }">
           <summary><ViewerIcon name="folder" />加载模型<ViewerIcon name="down" /></summary>
-          <div class="choices"><button @click="choose(false)">选择文件…</button><button @click="choose(true)">选择文件夹…</button><button @click="chooseVector('kml')">加载 KMZ／KML…</button><button @click="chooseVector('shp')">加载 SHP…</button></div>
+          <div class="choices">
+            <button @click="choose(false)">加载模型文件</button>
+            <button @click="choose(true)">加载数据集目录</button>
+            <button @click="chooseVector('kml')">加载 KMZ／KML</button>
+            <button @click="chooseVector('shp')">加载 SHP</button>
+          </div>
         </details>
       </div>
       <div class="bar tools" role="group" aria-label="视图与面板">

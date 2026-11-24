@@ -55,7 +55,7 @@ nav span { color: var(--muted); }
 .load summary::-webkit-details-marker { display: none; }
 .load summary svg:last-child { width: 12px; }
 .choices { position: absolute; left: 0; top: calc(100% + 8px); padding: 4px; display: grid; min-width: 130px; }
-.choices button { justify-content: flex-start; }
+.choices button { justify-content: flex-start; white-space: nowrap; }
 .projection { padding-right: 3px; }
 .projection select { background: transparent; color: inherit; border: 0; font: inherit; }
 option { background: var(--surface); }
