@@ -33,7 +33,7 @@ export async function readOrigin(files: Map<string, Blob>): Promise<GeoOrigin | 
   )
     return { epsg, offset };
 }
-function definition(code: number) {
+export function definition(code: number) {
   const zone = code % 100;
   if ((Math.floor(code / 100) === 326 || Math.floor(code / 100) === 327) && zone >= 1 && zone <= 60)
     return `+proj=utm +zone=${zone} ${code >= 32700 ? '+south' : ''} +datum=WGS84 +units=m +no_defs`;
@@ -54,6 +54,16 @@ export function sceneToGeographic(base: GeoOrigin, x: number, y: number) {
   const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0], base.offset[1]) : base.epsg);
   const origin = proj4(definition(base.epsg), target, base.offset.slice(0, 2));
   return proj4(target, 'EPSG:4326', [origin[0] + x, origin[1] + y]);
+}
+export function geographicToScene(base: GeoOrigin) {
+  const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0],base.offset[1]) : base.epsg);
+  const origin = proj4(definition(base.epsg),target,base.offset.slice(0,2));
+  const project = proj4('EPSG:4326',target);
+  return ([lon,lat,height]:XYZ):XYZ => {
+    const [x,y]=project.forward([lon,lat]);
+    if(!Number.isFinite(x)||!Number.isFinite(y)) throw Error('矢量坐标超出场景投影范围');
+    return [x-origin[0],y-origin[1],height-base.offset[2]];
+  };
 }
 export function sceneOffset(source: GeoOrigin, base: GeoOrigin): XYZ {
   const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0], base.offset[1]) : base.epsg);

@@ -23,6 +23,54 @@ const canvas = ref<HTMLCanvasElement>(),
   viewport = ref<HTMLElement>();
 const filePicker = ref<HTMLInputElement>(),
   directoryPicker = ref<HTMLInputElement>();
+const kmlPicker=ref<HTMLInputElement>(),shpPicker=ref<HTMLInputElement>();
+const vectors=reactive<{id:number;name:string;format:string;crs:string;visible:boolean;overlay:boolean;heights:string;features:{name:string;attributes:Record<string,unknown>}[]}[]>([]);
+const vectorFeature=ref(0);
+const currentVector=computed(()=>vectors.find(v=>v.id===selectedId.value));
+function selectVector(id:number,focus=false){
+  selectedId.value=id; panel.value='vector';vectorFeature.value=0;
+  if(focus)viewer?.focusLayer(id);
+}
+function removeVector(id:number){
+  viewer?.removeLayer(id);
+  vectors.splice(vectors.findIndex(v=>v.id===id),1);
+  if(selectedId.value===id){selectedId.value=0;panel.value=undefined;}
+}
+function chooseVector(format:'kml'|'shp'){
+  if(menu.value)menu.value.open=false;
+  (format==='shp'?shpPicker:kmlPicker).value?.click();
+}
+function selectVectors(event:Event){
+  const input=event.target as HTMLInputElement, files=Array.from(input.files??[]);input.value='';
+  void importVectors(files);
+}
+async function importVectors(files:File[],paths?:string[]){
+  if(!files.length || !viewer)return;
+  const previous=pending;
+  let done!:()=>void;
+  pending=new Promise(resolve=>{done=resolve;});
+  await previous;
+  message.value='正在读取矢量数据';
+  try {
+    const {readVectors}=await import('./vector-data');
+    const datasets=await readVectors(files,name=>window.prompt(name+' 缺少投影定义，请输入源 EPSG 编号或投影 WKT'),paths);
+    for(const data of datasets){
+      lifetime.signal.throwIfAborted();
+      const shape=data.features[0].shapes[0],point=shape.rings[0][0];
+      const origin:GeoOrigin=base??{epsg:4326,offset:mapLoaded.value?[lng.value,lat.value,altitude.value]:[point[0],point[1],shape.mode==='绝对高度'?point[2]:0]};
+      const id=nextLayerId++;
+      const firstVisibleLayer=!vectors.some(v=>v.visible) && !layers.some(l=>l.visible && viewer?.loaded(l.id));
+      await viewer.addVector(id,data,origin);
+      if(!base)rememberBase(origin);
+      vectors.push({id,name:data.name,format:data.format,crs:data.crs,visible:true,overlay:false,
+        heights:[...new Set(data.features.flatMap(f=>f.shapes.map(s=>s.mode)))].join('、'),
+        features:data.features.map(f=>({name:f.name,attributes:f.attributes}))});
+      layersOpen.value=true;selectVector(id,firstVisibleLayer);
+    }
+    message.value='';
+  }catch(error){message.value=String(error);}
+  finally{done();}
+}
 const menu = ref<HTMLDetailsElement>();
 const layers = reactive<
   {
@@ -51,7 +99,7 @@ const layers = reactive<
 >([]);
 const selectedId = ref(0);
 const layersOpen = ref(false);
-type Panel = 'properties' | 'clip' | 'settings' | 'map';
+type Panel = 'properties' | 'clip' | 'settings' | 'map' | 'vector';
 const panel = ref<Panel>();
 function togglePanel(next: Panel) {
   panel.value = panel.value === next ? undefined : next;
@@ -495,6 +543,7 @@ async function open(
     });
     if (choices.length===1) { const c=choices[0]; return open([c.file],false,[c.file.name],c.sidecar,true); }
     if (choices.length>1) { pointChoices.value=choices; return; }
+    if (paths.some(path=>/\.(shp|kml|kmz)$/i.test(path)) && !paths.some(path=>/\.(ply|sog|spz)$/i.test(path))) return importVectors(files,paths);
   }
   message.value = '';
   const id = nextLayerId++;
@@ -637,7 +686,7 @@ onUnmounted(() => {
         <details ref="menu" class="load" @keydown.esc="menu && (menu.open = false)"
           @focusout="event => { if (menu && !menu.contains(event.relatedTarget as Node)) menu.open = false; }">
           <summary><ViewerIcon name="folder" />加载模型<ViewerIcon name="down" /></summary>
-          <div class="choices"><button @click="choose(false)">选择文件…</button><button @click="choose(true)">选择文件夹…</button></div>
+          <div class="choices"><button @click="choose(false)">选择文件…</button><button @click="choose(true)">选择文件夹…</button><button @click="chooseVector('kml')">加载 KMZ／KML…</button><button @click="chooseVector('shp')">加载 SHP…</button></div>
         </details>
       </div>
       <div class="bar tools" role="group" aria-label="视图与面板">
@@ -664,7 +713,13 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <p v-if="!layers.length && !configured" class="empty">尚未加载图层</p>
+          <p v-if="!layers.length && !vectors.length && !configured" class="empty">尚未加载图层</p>
+          <div v-for="v in vectors" :key="'vector-'+v.id" class="layer-row">
+            <button class="layer-name" :aria-pressed="selectedId===v.id" @click="selectVector(v.id)"><span class="layer-title">{{ v.name }}</span></button>
+            <button :aria-label="'卸载 '+v.name" title="卸载" @click="removeVector(v.id)"><ViewerIcon name="unload" /></button>
+            <button :aria-label="'定位到 '+v.name" title="定位" @click="selectVector(v.id,true)"><ViewerIcon name="locate" /></button>
+            <button :aria-label="'显示 '+v.name" :aria-pressed="v.visible" @click="v.visible=!v.visible;viewer?.visible(v.id,v.visible)"><ViewerIcon :name="v.visible?'eye':'hidden'" /></button>
+          </div>
           <template v-for="layer in layers" :key="layer.id">
           <div class="layer-row" :aria-busy="layer.loading">
             <button class="layer-name" :aria-expanded="layer.environment?.expanded" :aria-pressed="selectedId === layer.id" :title="layer.name"
@@ -687,10 +742,17 @@ onUnmounted(() => {
           </template>
         </div>
       </section>
-      <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图'}[panel]">
-        <header><h2>{{ {properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图'}[panel] }}</h2>
+      <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel]">
+        <header><h2>{{ {properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel] }}</h2>
           <button aria-label="关闭面板" @click="panel = undefined"><ViewerIcon name="close" /></button></header>
         <div class="panel-body">
+          <template v-if="panel==='vector' && currentVector">
+            <b>{{ currentVector.name }}</b>
+            <label class="toggle">透视显示<input type="checkbox" v-model="currentVector.overlay" @change="viewer?.setVectorOverlay(currentVector.id,currentVector.overlay)"></label>
+            <div v-for="(v,k) in {'格式':currentVector.format,'源坐标系':currentVector.crs,'高度模式':currentVector.heights,'要素数':currentVector.features.length}" :key="k" class="field"><span>{{ k }}</span><span>{{ v }}</span></div>
+            <label class="field">要素<select aria-label="要素" v-model.number="vectorFeature"><option v-for="(f,i) in currentVector.features" :key="i" :value="i">{{ f.name || '要素 '+(i+1) }}</option></select></label>
+            <div v-for="(v,k) in currentVector.features[vectorFeature]?.attributes" :key="k" class="field"><span>{{ k }}</span><span>{{ v }}</span></div>
+          </template>
           <form v-if="panel === 'map'" class="map-form" @submit.prevent="saveProfile">
             <label class="field">地图源<select aria-label="地图源" :value="draft.provider" @change="changeSource(($event.target as HTMLSelectElement).value as Provider)">
               <option v-for="(name,id) in providers" :key="id" :value="id">{{ name }}</option>
@@ -824,6 +886,8 @@ onUnmounted(() => {
       <button v-for="c in pointChoices" :key="c.path" @click="pointChoices=[]; open([c.file],false,[c.file.name],c.sidecar,true)">{{ c.path }}</button>
       <button @click="pointChoices=[]">取消</button>
     </dialog>
+    <input ref="kmlPicker" hidden type="file" multiple accept=".kmz,.kml" @change="selectVectors">
+    <input ref="shpPicker" hidden type="file" multiple accept=".shp,.shx,.dbf,.prj,.cpg,.zip" @change="selectVectors">
     <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip,.las,.copc.laz" @change="select($event, false)" />
     <input ref="directoryPicker" hidden type="file" webkitdirectory multiple @change="select($event, true)" />
     <div v-if="notice" class="world-limit" role="status">{{ notice }}</div>

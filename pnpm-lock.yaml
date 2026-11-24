@@ -14,6 +14,12 @@ importers:
       copc:
         specifier: 0.0.9
         version: 0.0.9
+      earcut:
+        specifier: 3.0.2
+        version: 3.0.2
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
       laz-perf:
         specifier: 0.0.7
         version: 0.0.7
@@ -26,6 +32,9 @@ importers:
       proj4:
         specifier: 2.23.0
         version: 2.23.0
+      shpjs:
+        specifier: 6.2.0
+        version: 6.2.0
       vue:
         specifier: 3.5.42
         version: 3.5.42(typescript@5.9.3)
@@ -259,6 +268,9 @@ packages:
   birpc@2.9.0:
     resolution: {integrity: sha512-KrayHS5pBi69Xi9JmvoqrIgYGDkD6mcSe/i6YKi3w5kekCLzrX4+nawcXqrj2tIp50Kw/mT/s3p+GVK0A0sKxw==}
 
+  but-unzip@0.1.10:
+    resolution: {integrity: sha512-hLfQ9WlUimmv/okzsRl6AYG3Ew5HNWhWgUslSR93FsDdeL0MAoQvmC/BJfs35lqEAO5t/QD7Y4vCFcPJtijt3A==}
+
   copc@0.0.9:
     resolution: {integrity: sha512-10wWYz05hRuJ2um30fxCzumJzkBZUxMft2y7FGCv4RQfdA5gG22mKqb9VspEpXOdyRy1bRFSgIbDHOjWKNtHtw==}
 
@@ -285,6 +297,9 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  earcut@3.0.2:
+    resolution: {integrity: sha512-X7hshQbLyMJ/3RPhyObLARM2sNxxmRALLKx1+NVFFnQ9gKzmCrxm9+uLIAdBcvc8FNLpctqlQ2V6AE92Ol9UDQ==}
+
   entities@7.0.1:
     resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
     engines: {node: '>=0.12'}
@@ -300,6 +315,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -415,6 +433,9 @@ packages:
       encoding:
         optional: true
 
+  parsedbf@2.0.0:
+    resolution: {integrity: sha512-WNjKn/cwgGBkXqQLif+2VMEahcRHkBRU0/RfBWZ7Vj7snRNNW63yW1mVuuHRDyXTRxuGCzAHHBcr/Fn+U/bXjQ==}
+
   path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
 
@@ -460,6 +481,9 @@ packages:
     resolution: {integrity: sha512-VD2IE5PUG4Oj8zz2VGykiYd5wbnjdIiSsNQb8Qu5B+noEp+A78mu2iVvpp27g8es14Tk9rofNs5Tku9iQCS4fA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
+
+  shpjs@6.2.0:
+    resolution: {integrity: sha512-8cR/RKYHQepmVyBMtzZQ+1bnSbWrtLXS6aoEJmpUlOSHtSUddterebVxYmIWq2g9kOEX9jm2kjHiikyPX7cNQA==}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -755,6 +779,8 @@ snapshots:
 
   birpc@2.9.0: {}
 
+  but-unzip@0.1.10: {}
+
   copc@0.0.9:
     dependencies:
       cross-fetch: 4.1.0
@@ -778,6 +804,8 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
+  earcut@3.0.2: {}
+
   entities@7.0.1: {}
 
   estree-walker@2.0.2: {}
@@ -785,6 +813,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fflate@0.8.2: {}
 
   fsevents@2.3.3:
     optional: true
@@ -860,6 +890,8 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
+  parsedbf@2.0.0: {}
+
   path-browserify@1.0.1: {}
 
   perfect-debounce@1.0.0: {}
@@ -913,6 +945,14 @@ snapshots:
       '@rolldown/binding-openharmony-arm64': 1.2.5
       '@rolldown/binding-win32-arm64-msvc': 1.2.5
       '@rolldown/binding-win32-x64-msvc': 1.2.5
+
+  shpjs@6.2.0:
+    dependencies:
+      but-unzip: 0.1.10
+      parsedbf: 2.0.0
+      proj4: 2.23.0
+    transitivePeerDependencies:
+      - geotiff
 
   source-map-js@1.2.1: {}
 

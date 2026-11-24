@@ -153,13 +153,14 @@ export class ViewportCameraController {
     };
   }
 
-  zoom(deltaY: number, maxWidth = Infinity): boolean {
+  zoom(deltaY: number, maxWidth = Infinity, minDistance = this.baseDiagonal * 0.001): boolean {
     const camera = this.camera.camera!;
     const ortho = camera.projection === pc.PROJECTION_ORTHOGRAPHIC;
     const aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
     const widthFactor = 2 * (ortho ? aspect : Math.tan(camera.fov * Math.PI / 360) * (camera.horizontalFov ? 1 : aspect));
     const limit = maxWidth / Math.max(widthFactor, 1e-6);
-    const requested = Math.max(this.baseDiagonal * 0.001, (ortho ? this.orthoHeight : this.distance) * Math.exp(deltaY * 0.001));
+    const current = ortho ? this.orthoHeight : this.distance;
+    const requested = Math.max(Math.min(current, minDistance), current * Math.exp(deltaY * 0.001));
     const next = Math.min(requested, limit);
     if (ortho) camera.orthoHeight = this.orthoHeight = next;
     else { this.distance = next; this.update(); }

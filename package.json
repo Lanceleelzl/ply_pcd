@@ -29,10 +29,13 @@
   "dependencies": {
     "@playcanvas/splat-transform": "3.4.2",
     "copc": "0.0.9",
+    "earcut": "3.0.2",
+    "fflate": "0.8.2",
     "laz-perf": "0.0.7",
     "pinia": "3.0.4",
     "playcanvas": "^2.24.2",
     "proj4": "2.23.0",
+    "shpjs": "6.2.0",
     "vue": "3.5.42",
     "vue-router": "4.6.4"
   },

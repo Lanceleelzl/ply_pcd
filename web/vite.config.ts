@@ -7,7 +7,7 @@ const localConfig = JSON.parse(readFileSync(new URL('../config/local.json', impo
 export default defineConfig({
   root: 'web',
   plugins: [vue()],
-  optimizeDeps: { include: ['copc', 'laz-perf/lib/worker'] },
+  optimizeDeps: { include: ['copc', 'laz-perf/lib/worker', 'shpjs', 'fflate', 'earcut'] },
   build: {
     outDir: '../service/static',
     emptyOutDir: true

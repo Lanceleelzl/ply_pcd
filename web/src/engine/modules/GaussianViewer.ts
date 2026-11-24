@@ -12,11 +12,14 @@ import { TransformGizmoInput } from '../core/TransformGizmoInput';
 import { mountClippingLabels } from '../../views/workbench/clipping-labels';
 
 import type { ModelFile } from '../../views/viewer/local-model';
+import {VectorLayer} from '../../views/viewer/vector-layer';
+import type {VectorData} from '../../views/viewer/vector-data';
 import { CopcLayer } from './copc-layer';
 import { createPointCloudEntity, type PointCloudMaterial } from '../../point-cloud';
 class Layer {
   root = new pc.Entity();
   asset?: pc.Asset;
+  vector?: VectorLayer;
   points?: PointCloudMaterial;
   pointEntity?: pc.Entity;
   copc?: CopcLayer;
@@ -32,6 +35,7 @@ class Layer {
 
 export class GaussianViewer {
   private scene: RegistrationApplication;
+  private vectorOverlay = new pc.Layer({name:'Vector overlay'});
   private camera?: ViewportCameraController;
   private navigation?: SceneNavigationController;
   private panPicker?: pc.Picker;
@@ -57,6 +61,7 @@ export class GaussianViewer {
       request.signal.throwIfAborted();
       this.mapConfig = config;
       if (this.map) this.map.entity.enabled = visible;
+      if (!visible) this.updateVectorHeights();
       if (!visible) { this.mapViewKey = ''; report('地图图层已隐藏'); }
       const sameBackdrop = previous && previous.base.epsg === base.epsg &&
         previous.base.offset.every((v,i)=>v===base.offset[i]) && previous.options.provider===options.provider &&
@@ -94,6 +99,7 @@ export class GaussianViewer {
       const first = !this.map;
       this.map?.destroy();
       this.map = next;
+      this.updateVectorHeights();
       this.mapViewKey = key;
       if (first && !this.framedModel) this.fit();
       else this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, next.radius * 4);
@@ -218,6 +224,9 @@ export class GaussianViewer {
   ) {
     this.scene = new RegistrationApplication({ canvas, viewport });
     const { app } = this.scene;
+    app.scene.layers.pushTransparent(this.vectorOverlay);
+    const cameraComponent = this.scene.camera.camera!;
+    cameraComponent.layers = [...cameraComponent.layers, this.vectorOverlay.id];
     this.boxNode = new pc.Entity('Viewer clip box', app);
     app.root.addChild(this.boxNode);
     this.labels = mountClippingLabels(viewport);
@@ -309,6 +318,25 @@ export class GaussianViewer {
     });
   }
 
+  private groundHeight=(lon:number,lat:number)=>this.map?.entity.enabled ? this.map.groundHeight(lon,lat) : 0;
+  private updateVectorHeights() {
+    for(const layer of this.layers.values()) if(layer.vector?.usesTerrain) layer.vector.rebuild(this.groundHeight);
+  }
+  async addVector(id:number,data:VectorData,base:GeoOrigin) {
+    const vector=new VectorLayer(this.scene.app,data,base);
+    try {
+      await vector.loadIcons();
+      if(this.closed) throw Error('视口已关闭');
+      vector.rebuild(this.groundHeight);
+      const layer=new Layer();
+      this.scene.camera.camera!.farClip=Math.max(this.scene.camera.camera!.farClip,vector.bounds.halfExtents.length()*50);
+      layer.vector=vector;
+      layer.bounds=vector.bounds;
+      layer.root.addChild(vector.root);
+      this.scene.app.root.addChild(layer.root);
+      this.layers.set(id,layer);
+    } catch(error) { vector.destroy(); throw error; }
+  }
   async add(id: number, file: ModelFile, report: (value: string) => void) {
     const layer = new Layer();
     layer.file = file;
@@ -378,6 +406,7 @@ export class GaussianViewer {
   removeLayer(id: number) {
     const layer = this.layers.get(id);
     if (!layer) return;
+    layer.vector?.destroy();
     layer.copc?.destroy();
     layer.root.destroy();
     layer.points?.destroy();
@@ -401,6 +430,9 @@ export class GaussianViewer {
     const layer=this.layers.get(id);
     layer?.points?.setParameter('pointPixels',pixels);
     layer?.copc?.setPointSize(pixels);
+  }
+  setVectorOverlay(id:number, enabled:boolean) {
+    this.layers.get(id)?.vector?.setOverlay(enabled ? this.vectorOverlay.id : undefined);
   }
   replacePoints(id:number, points: NonNullable<ModelFile['points']>, pixels:number) {
     const layer=this.layers.get(id);
@@ -668,7 +700,7 @@ export class GaussianViewer {
             const latitude = geographicPosition(config.base)[1];
             width = 40075016.69 * Math.cos(latitude * Math.PI / 180);
           }
-          if (camera.zoom(d, width)) this.notifyWorldLimit();
+          if (camera.zoom(d, width, this.scene.camera.camera!.nearClip * 2)) this.notifyWorldLimit();
         },
       },
     });

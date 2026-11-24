@@ -193,6 +193,16 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
   }
   app.root.addChild(entity);
   return { entity, radius: mesh.aabb.center.length() + mesh.aabb.halfExtents.length(),
+    groundHeight(lon:number,lat:number) {
+      const rad=lat*Math.PI/180;
+      const u=((lon+180)/360*n-left)*steps/cols;
+      const v=((1-Math.asinh(Math.tan(rad))/Math.PI)/2*n-top)*steps/rows;
+      if(u<0 || v<0 || u>steps || v>steps) return config.heightOffset;
+      const i=Math.min(steps-1,Math.floor(u)),j=Math.min(steps-1,Math.floor(v));
+      const a=j*(steps+1)+i,b=a+steps+1,x=u-i,y=v-j;
+      const z=(idx:number)=>positions[idx*3+2];
+      return x+y<=1 ? z(a)*(1-x-y)+z(a+1)*x+z(b)*y : z(b+1)*(x+y-1)+z(a+1)*(1-y)+z(b)*(1-x);
+    },
     pick(ray: pc.Ray): pc.Vec3 | null {
       if (!entity.enabled || ![...nodes.values()].some(node => node.enabled)) return null;
       const triangle = new pc.Tri(), hit = new pc.Vec3();
