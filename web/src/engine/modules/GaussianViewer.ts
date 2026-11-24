@@ -120,6 +120,8 @@ export class GaussianViewer {
   private labels: ReturnType<typeof mountClippingLabels>;
   private inputs = new AbortController();
   private boxChanged?: (value: TransformParameters) => void;
+  private sceneSections: ViewerSection[] = [];
+  private sceneLines: pc.Vec3[] = [];
   private axisLayer?: number;
   private hoveredPlane?: ViewerSection;
   private planeDrag?: { rule: ViewerSection; pointer: number; x: number; y: number; cut: number; dx: number; dy: number };
@@ -140,25 +142,56 @@ export class GaussianViewer {
     if (drag && this.canvas.hasPointerCapture(drag.pointer)) this.canvas.releasePointerCapture(drag.pointer);
     this.hoverPlane();
   }
+  // Fit the projected corners around the center, including perspective foreshortening.
+  private viewportSectionSize(center: pc.Vec3, axis: ViewerSection['axis']) {
+    const camera = this.scene.camera;
+    const lens = camera.camera!;
+    const ortho = lens.projection === pc.PROJECTION_ORTHOGRAPHIC;
+    const aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
+    const halfY = ortho ? lens.orthoHeight : Math.tan(lens.fov * Math.PI / 360) / (lens.horizontalFov ? aspect : 1);
+    const halfX = halfY * aspect;
+    const relative = center.clone().sub(camera.getPosition());
+    const forward = camera.forward, right = camera.right, up = camera.up;
+    const depth = Math.max(lens.nearClip, relative.dot(forward));
+    const slopeX = ortho ? 0 : relative.dot(right) / depth;
+    const slopeY = ortho ? 0 : relative.dot(up) / depth;
+    let limit = 0;
+    for (let i=0; i<8; i++) {
+      const corner = new pc.Vec3((i&1)-0.5, ((i>>1)&1)-0.5, ((i>>2)&1)-0.5);
+      if (axis !== 'box') corner[axis] = 0;
+      const dz = ortho ? 0 : corner.dot(forward);
+      const x = Math.abs(corner.dot(right)-slopeX*dz) / halfX;
+      const y = Math.abs(corner.dot(up)-slopeY*dz) / halfY;
+      limit = Math.max(limit, 1.5*Math.max(x,y)-dz);
+    }
+    return (ortho ? 1 : depth) / Math.max(1e-8,limit);
+  }
+  private planeBounds(rule: ViewerSection) {
+    const center = new pc.Vec3(...rule.box.translation);
+    if (rule.axis !== 'box') center[rule.axis] = rule.cut;
+    const size = this.viewportSectionSize(center,rule.axis);
+    return {...rule, box:{...rule.box, scale:[size,size,size] as XYZ}};
+  }
   private pickPlane(event: PointerEvent) {
     const layer = this.axisLayer === undefined ? undefined : this.layers.get(this.axisLayer);
-    if (!layer?.root.enabled || !this.camera) return;
+    if ((this.axisLayer !== 0 && !layer?.root.enabled) || !this.camera) return;
     const ray = this.camera.pointerRay(event.clientX,event.clientY);
     const rect = this.canvas.getBoundingClientRect();
     const camera = this.scene.camera.camera!;
     let closest: {rule: ViewerSection; point: pc.Vec3; distance: number} | undefined;
-    for (const rule of layer.sections) {
+    for (const rule of layer?.sections ?? this.sceneSections) {
       const axis = rule.axis;
       if (!rule.boundary || axis==='box') continue;
+      const display = this.planeBounds(rule);
       const distance = (rule.cut-ray.origin[axis])/ray.direction[axis];
       let point: pc.Vec3 | undefined;
       if (Number.isFinite(distance) && distance >= 0) {
         const hit = ray.direction.clone().mulScalar(distance).add(ray.origin);
-        if ((['x','y','z'] as const).every((dim,i)=>dim===axis || Math.abs(hit[dim]-rule.box.translation[i])<=rule.box.scale[i]/2)) point=hit;
+        if ((['x','y','z'] as const).every((dim,i)=>dim===axis || Math.abs(hit[dim]-rule.box.translation[i])<=display.box.scale[i]/2)) point=hit;
       }
       // A plane viewed edge-on is still selectable along its visible outline.
       if (!point) {
-        const lines=boundaryLines(rule);
+        const lines=boundaryLines(display);
         for (let i=0;i<lines.length;i+=2) {
           const a=camera.worldToScreen(lines[i]), b=camera.worldToScreen(lines[i+1]);
           const dx=b.x-a.x, dy=b.y-a.y, x=event.clientX-rect.left-a.x, y=event.clientY-rect.top-a.y;
@@ -253,7 +286,15 @@ export class GaussianViewer {
       if (this.showGrid) app.drawLines(this.gridLines, gridColor);
       if (this.showAxes) app.drawLines(this.axes, axisColors, false);
       for (const layer of this.layers.values()) if (layer.root.enabled && layer.lines.length) app.drawLines(layer.lines, boxColor, false);
-      if (this.hoveredPlane?.boundary) app.drawLines(boundaryLines(this.hoveredPlane), pc.Color.YELLOW, false);
+      if (this.sceneLines.length) app.drawLines(this.sceneLines, boxColor, false);
+      const drawPlanes = (sections: ViewerSection[]) => {
+        for (const rule of sections) {
+          if (rule.axis !== 'box' && rule.boundary)
+            app.drawLines(boundaryLines(this.planeBounds(rule)), rule===this.hoveredPlane ? pc.Color.YELLOW : boxColor, false);
+        }
+      };
+      drawPlanes(this.sceneSections);
+      for (const layer of this.layers.values()) if (layer.root.enabled) drawPlanes(layer.sections);
       this.handles?.update();
     });
     this.fit();
@@ -277,7 +318,7 @@ export class GaussianViewer {
     if (file.copc) {
       const data=file.copc;
       layer.bounds=data.bounds;
-      layer.copc=new CopcLayer(data,layer.root,app,material=>applySections(material,[layer.sections]),report);
+      layer.copc=new CopcLayer(data,layer.root,app,material=>applySections(material,[[...this.sceneSections,...layer.sections]]),report);
       this.scene.camera.camera!.farClip=Math.max(this.scene.camera.camera!.farClip,data.bounds.halfExtents.length()*100);
       if (!this.framedModel && layer.root.enabled) { this.fit(); this.framedModel=true; }
       report('');
@@ -377,7 +418,7 @@ export class GaussianViewer {
     const layer=this.layers.get(id);
     if (!layer) return;
     layer.file={...layer.file,copc:data};
-    layer.copc=new CopcLayer(data,layer.root,this.scene.app,material=>applySections(material,[layer.sections]),report,()=>{
+    layer.copc=new CopcLayer(data,layer.root,this.scene.app,material=>applySections(material,[[...this.sceneSections,...layer.sections]]),report,()=>{
       if (layer.pointEntity) {
         layer.pointEntity.destroy();
         layer.pointEntity=undefined;
@@ -640,10 +681,10 @@ export class GaussianViewer {
     const layer = this.layers.get(id);
     const bounds = layer?.bounds && new pc.BoundingBox();
     if (bounds && layer?.bounds) bounds.setFromTransformedAabb(layer.bounds,layer.root.getWorldTransform());
-    const c = bounds?.center ?? pc.Vec3.ZERO;
-    const h = bounds?.halfExtents ?? new pc.Vec3(5, 5, 5);
+    const c = bounds?.center ?? this.camera?.observationCenter ?? pc.Vec3.ZERO;
+    const size = bounds ? 0 : this.viewportSectionSize(c,'box');
     return { translation: [c.x, c.y, c.z], rotation_degrees: [0,0,0],
-      scale: [Math.max(0.1, 2*h.x), Math.max(0.1, 2*h.y), Math.max(0.1, 2*h.z)] };
+      scale: bounds ? [bounds.halfExtents.x, bounds.halfExtents.y, bounds.halfExtents.z].map(v=>Math.max(0.1,2*v)) as XYZ : [size, size, size] };
   }
   editBoxNode(box: TransformParameters) {
     this.boxNode.setLocalPosition(...box.translation);
@@ -652,10 +693,11 @@ export class GaussianViewer {
   }
   setSections(id: number, sections: ViewerSection[]) {
     const layer = this.layers.get(id);
-    if (!layer) return;
-    layer.sections = sections;
+    if (!layer && id !== 0) return;
     if (this.axisLayer===id && this.hoveredPlane && (!this.hoveredPlane.boundary || !sections.includes(this.hoveredPlane))) this.endPlaneDrag();
-    layer.lines = sections.filter(s=>s.boundary).flatMap(boundaryLines);
+    const lines = sections.filter(s=>s.boundary && s.axis==='box').flatMap(boundaryLines);
+    if (layer) { layer.sections=sections; layer.lines=lines; }
+    else { this.sceneSections=sections; this.sceneLines=lines; }
     this.refreshSections();
   }
   async duplicate(sourceId: number, id: number, report: (message:string)=>void) {
@@ -680,7 +722,7 @@ export class GaussianViewer {
     const groups = new Map<string,{node:pc.Entity; rules:ViewerSection[][]}>();
     for (const layer of this.layers.values()) {
       if (!layer.root.enabled) continue;
-      if (layer.points) applySections(layer.points,[layer.sections]);
+      if (layer.points) applySections(layer.points,[[...this.sceneSections,...layer.sections]]);
       layer.copc?.updateClip();
       const matrix = layer.root.getWorldTransform();
       const collect = (node:pc.Entity, source:string) => {
@@ -696,7 +738,7 @@ export class GaussianViewer {
         else layer.environment.enabled=false;
       }
     }
-    for (const group of groups.values()) applySections(group.node.gsplat!,group.rules);
+    for (const group of groups.values()) applySections(group.node.gsplat!,group.rules.map(local=>[...this.sceneSections,...local]));
   }
   destroy() {
     this.closed = true;

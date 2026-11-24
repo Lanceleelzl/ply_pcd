@@ -188,3 +188,5 @@ footer { left: 10px; max-width: calc(100% - 20px); }
 .section-direction { display: flex; gap: 16px; align-items: center; }
 .section-direction label { display: inline-flex; align-items: center; gap: 4px; }
 .panel-body .section-direction input[type=radio] { width: 14px; height: 14px; margin: 0; padding: 0; }
+
+.clip-controls { display: grid; gap: 10px; padding-top: 8px; }

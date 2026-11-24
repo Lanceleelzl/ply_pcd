@@ -58,22 +58,26 @@ function togglePanel(next: Panel) {
 }
 function selectLayer(id: number) {
   selectedId.value = id;
-  if (panel.value !== 'clip') panel.value = 'properties';
+  panel.value = 'properties';
 }
 const selected = computed(() => layers.find((l) => l.id === selectedId.value));
 const transformOpen = ref(false);
-watch([panel, selectedId], () => { transformOpen.value = false; });
-const active = computed(() => selected.value?.sections.find(rule=>rule.id===selected.value?.activeSection));
+watch([panel, selectedId], () => { transformOpen.value = false; layerClipOpen.value=false; });
+const sceneTarget = reactive({id:0, name:'整个场景', visible:true, loading:false, sections:[] as ViewerSection[], activeSection:undefined as number|undefined});
+const layerClipOpen = ref(false);
+const target = computed(() => panel.value==='clip' ? sceneTarget : selected.value);
+const editingClip = computed(() => panel.value==='clip' || (panel.value==='properties' && layerClipOpen.value));
+const active = computed(() => target.value?.sections.find(rule=>rule.id===target.value?.activeSection));
 function updateTool() {
   const rule = active.value;
-  viewer?.axisTools(panel.value==='clip' && selected.value?.visible ? selected.value.id : undefined);
-  if (panel.value==='clip' && selected.value?.visible && rule?.axis==='box' && rule.boundary) {
+  viewer?.axisTools(editingClip.value && target.value?.visible ? target.value.id : undefined);
+  if (editingClip.value && target.value?.visible && rule?.axis==='box' && rule.boundary) {
     viewer?.editBoxNode(rule.box);
     viewer?.boxTool(value=>{rule.box=value;});
     return;
   }
   const layer = selected.value;
-  viewer?.edit(layer?.id ?? 0, panel.value === 'properties' && layer?.visible ? transformOpen.value : false, (value) => {
+  viewer?.edit(layer?.id ?? 0, panel.value === 'properties' && layer?.visible && !editingClip.value ? transformOpen.value : false, (value) => {
     if (layer) layer.transform = value;
   });
 }
@@ -243,29 +247,29 @@ const message = ref(''),
   stats = ref('');
 let nextSectionId = 1;
 const newAxis = ref<ViewerSection['axis']>('box');
-const boxAlreadyPresent = computed(() => newAxis.value === 'box' && selected.value?.sections.some(rule => rule.axis === 'box'));
+const boxAlreadyPresent = computed(() => newAxis.value === 'box' && target.value?.sections.some(rule => rule.axis === 'box'));
 const lifetime = new AbortController();
-watch([panel, active, selectedId, transformOpen, () => active.value?.boundary, () => selected.value?.visible], updateTool);
-watch(() => selected.value?.sections, sections=>{
-  if (sections && selected.value) viewer?.setSections(selected.value.id,sections);
+watch([panel, editingClip, active, selectedId, transformOpen, () => active.value?.boundary, () => target.value?.visible], updateTool);
+watch(() => target.value?.sections, sections=>{
+  if (sections && target.value) viewer?.setSections(target.value.id,sections);
   if (active.value?.axis==='box') viewer?.editBoxNode(active.value.box);
 }, {deep:true});
 function addSection() {
-  const layer = selected.value;
-  if (!layer || !viewer?.loaded(layer.id)) return;
+  const layer = target.value;
+  if (!layer || !viewer || (layer.id!==0 && !viewer.loaded(layer.id))) return;
   if (boxAlreadyPresent.value) {
-    showNotice('每个图层只能有一个剖切盒');
+    showNotice(layer.id===0?'场景只能有一个剖切盒':'每个图层只能有一个剖切盒');
     return;
   }
-  const box = viewer.initialSectionBox(layer.id);
   const axis = newAxis.value;
+  const box = viewer.initialSectionBox(layer.id);
   const id = nextSectionId++;
   layer.sections.push({id,axis,box,
-    cut:axis==='box'?0:box.translation['xyz'.indexOf(axis)],enabled:true,boundary:true,positive:true});
+    cut:axis==='box'?0:box.translation['xyz'.indexOf(axis)],enabled:layer.id!==sceneTarget.id || axis!=='box',boundary:true,positive:true});
   layer.activeSection=undefined;
 }
 function removeSection(id:number) {
-  const layer=selected.value;
+  const layer=target.value;
   if (!layer) return;
   layer.sections=layer.sections.filter(rule=>rule.id!==id);
   if (layer.activeSection===id) layer.activeSection=undefined;
@@ -670,7 +674,7 @@ onUnmounted(() => {
             <button title="复制图层" :aria-label="'复制图层 '+layer.name" :disabled="layer.loading || layer.environment?.busy || !viewer?.loaded(layer.id)" @click="duplicateLayer(layer)"><ViewerIcon name="copy" /></button>
             <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" title="卸载" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
             <button type="button" :disabled="layer.loading || !viewer?.loaded(layer.id)" :aria-label="'定位到 ' + layer.name"
-              title="定位" @click="viewer?.focusLayer(layer.id)"><ViewerIcon name="locate" /></button>
+              title="定位" @click="selectLayer(layer.id); viewer?.focusLayer(layer.id)"><ViewerIcon name="locate" /></button>
             <button class="visibility" :aria-pressed="layer.visible" :aria-label="'显示 ' + layer.name" :title="layer.visible ? '隐藏' : '显示'"
               @click="layer.visible = !layer.visible; viewer?.visible(layer.id, layer.visible)"><ViewerIcon :name="layer.visible ? 'eye' : 'hidden'" /></button>
           </div>
@@ -767,18 +771,19 @@ onUnmounted(() => {
             <TransformEditor heading="变换" collapsible-matrix @expanded="transformOpen = $event" :key="selected.id" :model="selected.name" :model-value="selected.transform" :reset-value="selected.baseline"
               @update:model-value="value => { if (selected) { selected.transform = value; viewer?.transform(selected.id, value); } }" />
           </template>
-          <template v-if="panel === 'clip'">
-            <p v-if="!selected">请先加载模型图层</p>
-            <template v-else>
-              <b>{{ selected.name }}</b>
+          <component v-if="target && (panel==='properties' || panel==='clip')" :is="panel==='clip' ? 'div' : 'details'" :key="panel+'-'+target.id" :class="panel==='properties' ? 'coordinate-section' : ''"
+            @toggle.self="layerClipOpen = ($event.target as HTMLDetailsElement).open">
+            <summary v-if="panel==='properties'">剖切</summary>
+            <b v-else>整个场景</b>
+            <div class="clip-controls">
               <div class="section-actions">
                 <label class="field">剖切方式<select v-model="newAxis"><option value="box">旋转剖切盒</option><option v-for="a in ['x','y','z']" :value="a">{{ a.toUpperCase() }} 轴</option></select></label>
-                <button :disabled="selected.loading || !viewer?.loaded(selected.id)" @click="addSection">添加剖切</button>
+                <button class="apply-origin" :disabled="target.loading || (target.id !== 0 && !viewer?.loaded(target.id))" @click="addSection">添加剖切</button>
               </div>
-              <div v-if="selected.sections.length" class="section-list" role="group" aria-label="剖切列表">
-                <div v-for="(rule,index) in selected.sections" :key="rule.id" class="section-item">
+              <div v-if="target.sections.length" class="section-list" role="group" aria-label="剖切列表">
+                <div v-for="(rule,index) in target.sections" :key="rule.id" class="section-item">
                   <div class="section-row" :class="{selected:active?.id===rule.id}">
-                    <button class="layer-name" :aria-expanded="active?.id===rule.id" @click="selected.activeSection=active?.id===rule.id ? undefined : rule.id"><span class="layer-title">剖切{{ index + 1 }}</span></button>
+                    <button class="layer-name" :aria-expanded="active?.id===rule.id" @click="target.activeSection=active?.id===rule.id ? undefined : rule.id"><span class="layer-title">剖切{{ index + 1 }}</span></button>
                     <label><input type="checkbox" v-model="rule.enabled" @change="!rule.enabled && (rule.boundary = false)">生效</label>
                     <label><input type="checkbox" v-model="rule.boundary">边界</label>
                     <button :aria-label="'删除剖切'+(index+1)" @click="removeSection(rule.id)">删除</button>
@@ -804,8 +809,8 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
-            </template>
-          </template>
+            </div>
+          </component>
           <template v-if="panel === 'settings'">
             <label class="toggle">XOY 平面网格<input v-model="showGrid" type="checkbox" /></label>
             <label class="toggle">XYZ 坐标轴<input v-model="showAxes" type="checkbox" /></label>

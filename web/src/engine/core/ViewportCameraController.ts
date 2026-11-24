@@ -33,6 +33,7 @@ export class ViewportCameraController {
   private readonly orientationChanged: (orientation: CameraOrientation) => void;
   private readonly baseDiagonal: number;
   private readonly getBounds: () => ViewportBounds;
+  get observationCenter() { return this.target.clone(); }
   private readonly target = new pc.Vec3();
   mapFootprint() {
     const camera = this.camera.camera!;
