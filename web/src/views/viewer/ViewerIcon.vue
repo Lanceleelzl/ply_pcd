@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const paths = {
+  copy: 'M8 8h12v13H8z M16 8V3H3v13h5',
   map: 'm2 5 6-2 8 3 6-2v15l-6 2-8-3-6 2z M8 3v15m8-12v15',
   folder: 'M3 7V5h6l2 2h9v3 M3 9h18l-3 10H3z',
   unload: 'm12 3 9 5-9 5-9-5z M3 12l9 5 3-1.7 M3 16l9 5 M16 19h6',

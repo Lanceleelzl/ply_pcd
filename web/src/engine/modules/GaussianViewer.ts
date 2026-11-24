@@ -3,7 +3,7 @@ import { RegistrationApplication } from '../core/Application';
 import { SceneNavigationController } from '../core/SceneNavigationController';
 import { ViewportCameraController, type CameraOrientation } from '../core/ViewportCameraController';
 import type { TransformParameters, XYZ } from '../../coordinate-math';
-import { GaussianClipController } from '../../gaussian-clipping';
+import { applySections, boundaryLines, type ViewerSection } from '../../views/viewer/viewer-sections';
 import { readLocalTile } from './lcc-index';
 import { ClippingHandles } from '../../clipping-handles';
 import { buildProjectMap, worldBackdrop, mapWindow, type MapOptions } from '../../views/viewer/project-map';
@@ -22,7 +22,11 @@ class Layer {
   copc?: CopcLayer;
   environment?: pc.Entity;
   environmentAsset?: pc.Asset;
-  clip?: GaussianClipController;
+  model?: pc.Entity;
+  file!: ModelFile;
+  sections: ViewerSection[] = [];
+  lines: pc.Vec3[] = [];
+  environmentVisible = false;
   bounds?: pc.BoundingBox;
 }
 
@@ -98,8 +102,6 @@ export class GaussianViewer {
       if (!request.signal.aborted) { report(String(error)); throw error; }
     } finally { if (!pending) request.abort(); }
   }
-  private axis = '';
-  private cut = 0;
   private size = 1;
   private framedModel = false;
   showGrid = true;
@@ -111,15 +113,68 @@ export class GaussianViewer {
   private modelScale?: pc.ScaleGizmo;
   private modelInput?: TransformGizmoInput;
   private dragging = false;
-  private box = new pc.Mat4();
-  private boxNode = new pc.Entity('Viewer clip box');
+  private boxNode: pc.Entity;
   private handles?: ClippingHandles;
   private boxRotation?: pc.RotateGizmo;
   private boxInput?: TransformGizmoInput;
   private labels: ReturnType<typeof mountClippingLabels>;
   private inputs = new AbortController();
   private boxChanged?: (value: TransformParameters) => void;
-  private boxLines: pc.Vec3[] = [];
+  private axisLayer?: number;
+  private hoveredPlane?: ViewerSection;
+  private planeDrag?: { rule: ViewerSection; pointer: number; x: number; y: number; cut: number; dx: number; dy: number };
+
+  axisTools(layerId?: number) {
+    if (this.axisLayer === layerId) return;
+    this.endPlaneDrag();
+    this.axisLayer = layerId;
+  }
+  private hoverPlane(rule?: ViewerSection) {
+    if (rule === this.hoveredPlane) return;
+    this.hoveredPlane = rule;
+    this.canvas.style.cursor = rule ? 'grab' : '';
+  }
+  private endPlaneDrag() {
+    const drag = this.planeDrag;
+    this.planeDrag = undefined;
+    if (drag && this.canvas.hasPointerCapture(drag.pointer)) this.canvas.releasePointerCapture(drag.pointer);
+    this.hoverPlane();
+  }
+  private pickPlane(event: PointerEvent) {
+    const layer = this.axisLayer === undefined ? undefined : this.layers.get(this.axisLayer);
+    if (!layer?.root.enabled || !this.camera) return;
+    const ray = this.camera.pointerRay(event.clientX,event.clientY);
+    const rect = this.canvas.getBoundingClientRect();
+    const camera = this.scene.camera.camera!;
+    let closest: {rule: ViewerSection; point: pc.Vec3; distance: number} | undefined;
+    for (const rule of layer.sections) {
+      const axis = rule.axis;
+      if (!rule.boundary || axis==='box') continue;
+      const distance = (rule.cut-ray.origin[axis])/ray.direction[axis];
+      let point: pc.Vec3 | undefined;
+      if (Number.isFinite(distance) && distance >= 0) {
+        const hit = ray.direction.clone().mulScalar(distance).add(ray.origin);
+        if ((['x','y','z'] as const).every((dim,i)=>dim===axis || Math.abs(hit[dim]-rule.box.translation[i])<=rule.box.scale[i]/2)) point=hit;
+      }
+      // A plane viewed edge-on is still selectable along its visible outline.
+      if (!point) {
+        const lines=boundaryLines(rule);
+        for (let i=0;i<lines.length;i+=2) {
+          const a=camera.worldToScreen(lines[i]), b=camera.worldToScreen(lines[i+1]);
+          const dx=b.x-a.x, dy=b.y-a.y, x=event.clientX-rect.left-a.x, y=event.clientY-rect.top-a.y;
+          const t=Math.max(0,Math.min(1,(x*dx+y*dy)/(dx*dx+dy*dy || 1)));
+          if (Math.hypot(x-t*dx,y-t*dy)>4) continue;
+          const hit=new pc.Vec3().lerp(lines[i],lines[i+1],t);
+          if (hit.clone().sub(ray.origin).dot(ray.direction)>0) { point=hit; break; }
+        }
+      }
+      if (point) {
+        const depth=point.distance(ray.origin);
+        if (!closest || depth<closest.distance) closest={rule,point,distance:depth};
+      }
+    }
+    return closest;
+  }
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -130,21 +185,52 @@ export class GaussianViewer {
   ) {
     this.scene = new RegistrationApplication({ canvas, viewport });
     const { app } = this.scene;
+    this.boxNode = new pc.Entity('Viewer clip box', app);
     app.root.addChild(this.boxNode);
     this.labels = mountClippingLabels(viewport);
     const events = { signal: this.inputs.signal, capture: true };
     canvas.addEventListener('pointerdown', e => {
-      if (!this.dragging && this.handles?.pointerDown(e, !this.boxInput?.hovered)) { e.stopImmediatePropagation(); canvas.focus(); }
+      if (!this.dragging && this.handles?.pointerDown(e, !this.boxInput?.hovered)) { e.stopImmediatePropagation(); canvas.focus(); return; }
+      if (e.button!==0 || this.dragging || this.boxInput?.hovered || this.planeDrag) return;
+      const hit=this.pickPlane(e);
+      if (!hit || hit.rule.axis==='box') return;
+      const camera=this.scene.camera.camera!;
+      const length=Math.max(hit.distance*0.01,0.001);
+      const end=hit.point.clone();
+      end[hit.rule.axis]+=length;
+      const a=camera.worldToScreen(hit.point), b=camera.worldToScreen(end);
+      let dx=b.x-a.x, dy=b.y-a.y;
+      if (Math.hypot(dx,dy)<0.5) {
+        const up=camera.worldToScreen(hit.point.clone().add(this.scene.camera.up.clone().mulScalar(length)));
+        dx=0; dy=-Math.max(0.5,Math.abs(up.y-a.y));
+      }
+      const factor=length/(dx*dx+dy*dy);
+      this.planeDrag={rule:hit.rule,pointer:e.pointerId,x:e.clientX,y:e.clientY,cut:hit.rule.cut,dx:dx*factor,dy:dy*factor};
+      this.hoverPlane(hit.rule);
+      canvas.style.cursor='grabbing';
+      this.navigation?.clear();
+      canvas.setPointerCapture(e.pointerId);
+      canvas.focus();
+      e.stopImmediatePropagation();
     }, events);
-    canvas.addEventListener('pointerleave', () => this.handles?.pointerLeave(), events);
+    canvas.addEventListener('pointerleave', () => { this.handles?.pointerLeave(); if (!this.planeDrag) this.hoverPlane(); }, events);
     canvas.addEventListener('pointermove', e => {
+      const drag=this.planeDrag;
+      if (drag && drag.pointer===e.pointerId) {
+        drag.rule.cut=drag.cut+(e.clientX-drag.x)*drag.dx+(e.clientY-drag.y)*drag.dy;
+        e.stopImmediatePropagation();
+        return;
+      }
       if (this.handles?.pointerMove(e) && this.handles.dragging) {
         this.publishBox();
         e.stopImmediatePropagation();
-      }
+      } else if (!e.buttons) this.hoverPlane(this.pickPlane(e)?.rule);
     }, events);
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const)
-      canvas.addEventListener(type, e => this.handles?.pointerUp(e), events);
+      canvas.addEventListener(type, e => {
+        if (this.planeDrag?.pointer===e.pointerId) this.endPlaneDrag();
+        else this.handles?.pointerUp(e);
+      }, events);
     app.loader.getHandler('gsplat')!.addParser({
       canParse: (context) => context.ext === 'lcctile',
       load: async (url, callback) => {
@@ -166,7 +252,8 @@ export class GaussianViewer {
     app.on('update', () => {
       if (this.showGrid) app.drawLines(this.gridLines, gridColor);
       if (this.showAxes) app.drawLines(this.axes, axisColors, false);
-      if (this.axis === 'box') app.drawLines(this.boxLines, boxColor, false);
+      for (const layer of this.layers.values()) if (layer.root.enabled && layer.lines.length) app.drawLines(layer.lines, boxColor, false);
+      if (this.hoveredPlane?.boundary) app.drawLines(boundaryLines(this.hoveredPlane), pc.Color.YELLOW, false);
       this.handles?.update();
     });
     this.fit();
@@ -183,13 +270,14 @@ export class GaussianViewer {
 
   async add(id: number, file: ModelFile, report: (value: string) => void) {
     const layer = new Layer();
+    layer.file = file;
     this.layers.set(id, layer);
     this.scene.app.root.addChild(layer.root);
     const app = this.scene.app;
     if (file.copc) {
       const data=file.copc;
       layer.bounds=data.bounds;
-      layer.copc=new CopcLayer(data,layer.root,app,material=>this.applyPointClip(material),report);
+      layer.copc=new CopcLayer(data,layer.root,app,material=>applySections(material,[layer.sections]),report);
       this.scene.camera.camera!.farClip=Math.max(this.scene.camera.camera!.farClip,data.bounds.halfExtents.length()*100);
       if (!this.framedModel && layer.root.enabled) { this.fit(); this.framedModel=true; }
       report('');
@@ -203,7 +291,7 @@ export class GaussianViewer {
       layer.points = entity.render!.meshInstances[0].material as PointCloudMaterial;
       layer.bounds = new pc.BoundingBox();
       layer.bounds.setMinMax(cloud.min, cloud.max);
-      this.applyClip(layer);
+      this.refreshSections();
       this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, layer.bounds.halfExtents.length() * 100);
       if (!this.framedModel && layer.root.enabled) { this.fit(); this.framedModel = true; }
       report('');
@@ -228,8 +316,8 @@ export class GaussianViewer {
       if (resource.octree) model.gsplat!.lodBaseDistance = Math.max(0.1, span / 16);
       layer.asset = asset;
       layer.bounds = bounds;
-      layer.clip = new GaussianClipController(model.gsplat!);
-      this.applyClip(layer);
+      layer.model = model;
+      this.refreshSections();
       this.scene.camera.camera!.farClip = Math.max(this.scene.camera.camera!.farClip, span * 50);
       if (!this.framedModel && layer.root.enabled) {
         this.fit();
@@ -256,16 +344,17 @@ export class GaussianViewer {
       layer.environmentAsset.unload();
       this.scene.app.assets.remove(layer.environmentAsset);
     }
-    if (layer.asset) {
+    if (layer.asset && ![...this.layers.values()].some(other=>other!==layer && other.asset===layer.asset)) {
       layer.asset.unload();
       this.scene.app.assets.remove(layer.asset);
     }
     this.layers.delete(id);
+    this.refreshSections();
     if (!this.layers.size) this.framedModel = false;
   }
   visible(id: number, value: boolean) {
     const layer = this.layers.get(id);
-    if (layer) layer.root.enabled = value;
+    if (layer) { layer.root.enabled = value; this.refreshSections(); }
   }
   setPointSize(id:number, pixels:number) {
     const layer=this.layers.get(id);
@@ -275,18 +364,20 @@ export class GaussianViewer {
   replacePoints(id:number, points: NonNullable<ModelFile['points']>, pixels:number) {
     const layer=this.layers.get(id);
     if (!layer?.pointEntity) return;
+    layer.file={...layer.file,points};
     const next=createPointCloudEntity(this.scene.app,points.cloud,new pc.Color(.84,.9,1),'LAS',pixels);
     layer.root.addChild(next);
     layer.pointEntity.destroy();
     layer.points?.destroy();
     layer.pointEntity=next;
     layer.points=next.render!.meshInstances[0].material as PointCloudMaterial;
-    this.applyClip(layer);
+    this.refreshSections();
   }
   useCopc(id:number, data:NonNullable<ModelFile['copc']>, report:(message:string)=>void) {
     const layer=this.layers.get(id);
     if (!layer) return;
-    layer.copc=new CopcLayer(data,layer.root,this.scene.app,material=>this.applyPointClip(material),report,()=>{
+    layer.file={...layer.file,copc:data};
+    layer.copc=new CopcLayer(data,layer.root,this.scene.app,material=>applySections(material,[layer.sections]),report,()=>{
       if (layer.pointEntity) {
         layer.pointEntity.destroy();
         layer.pointEntity=undefined;
@@ -298,7 +389,8 @@ export class GaussianViewer {
   async showEnvironment(id: number, file: ModelFile, visible: boolean) {
     const layer=this.layers.get(id);
     if (!layer) return;
-    if (layer.environment) { layer.environment.enabled=visible; return; }
+    layer.environmentVisible=visible;
+    if (layer.environment) { this.refreshSections(); return; }
     if (!visible) return;
     const assets=this.scene.app.assets;
     const asset=new pc.Asset(file.filename,'gsplat',{url:file.url,filename:file.filename});
@@ -313,6 +405,7 @@ export class GaussianViewer {
       layer.root.addChild(node);
       layer.environment=node;
       layer.environmentAsset=asset;
+      this.refreshSections();
     } finally {
       if (!layer.environmentAsset && !this.closed) { asset.unload(); assets.remove(asset); }
     }
@@ -326,7 +419,7 @@ export class GaussianViewer {
     root?.setLocalEulerAngles(...value.rotation_degrees);
     root?.setLocalScale(...value.scale);
     const layer = this.layers.get(id);
-    if (layer && this.axis === 'box') this.applyClip(layer);
+    if (layer) this.refreshSections();
   }
   direction(value: XYZ) {
     this.camera?.setViewDirection(new pc.Vec3(...value));
@@ -338,7 +431,7 @@ export class GaussianViewer {
     this.clearFaceHandles();
     this.attachGizmo(this.layers.get(id)?.root, enabled ? 'model' : '', value => {
       const layer = this.layers.get(id);
-      if (layer && this.axis === 'box') this.applyClip(layer);
+      if (layer) this.refreshSections();
       changed(value);
     });
   }
@@ -443,7 +536,6 @@ export class GaussianViewer {
     const xyz = (v: pc.Vec3): XYZ => [v.x, v.y, v.z];
     const value = { translation: xyz(this.boxNode.getLocalPosition()),
       rotation_degrees: xyz(this.boxNode.getLocalEulerAngles()), scale: xyz(this.boxNode.getLocalScale()) };
-    this.section('box', this.cut, value);
     this.boxChanged?.(value);
   }
   focusLayer(id: number) {
@@ -544,64 +636,67 @@ export class GaussianViewer {
   projection(ortho: boolean) {
     this.camera?.setProjection(ortho);
   }
-  initialSectionBox(): TransformParameters {
-    let bounds: pc.BoundingBox | undefined;
-    for (const layer of this.layers.values()) {
-      if (!layer.root.enabled || !layer.bounds) continue;
-      const world = new pc.BoundingBox();
-      world.setFromTransformedAabb(layer.bounds, layer.root.getWorldTransform());
-      if (bounds) bounds.add(world);
-      else bounds = world;
-    }
+  initialSectionBox(id: number): TransformParameters {
+    const layer = this.layers.get(id);
+    const bounds = layer?.bounds && new pc.BoundingBox();
+    if (bounds && layer?.bounds) bounds.setFromTransformedAabb(layer.bounds,layer.root.getWorldTransform());
     const c = bounds?.center ?? pc.Vec3.ZERO;
     const h = bounds?.halfExtents ?? new pc.Vec3(5, 5, 5);
     return { translation: [c.x, c.y, c.z], rotation_degrees: [0,0,0],
       scale: [Math.max(0.1, 2*h.x), Math.max(0.1, 2*h.y), Math.max(0.1, 2*h.z)] };
   }
-  section(axis: string, position: number, box: TransformParameters) {
+  editBoxNode(box: TransformParameters) {
     this.boxNode.setLocalPosition(...box.translation);
     this.boxNode.setLocalEulerAngles(...box.rotation_degrees);
     this.boxNode.setLocalScale(...box.scale);
-    this.axis = axis;
-    this.cut = position;
-    this.box
-      .setTRS(
-        new pc.Vec3(...box.translation),
-        new pc.Quat().setFromEulerAngles(...box.rotation_degrees),
-        new pc.Vec3(...box.scale),
-      );
-    if (axis === 'box') {
-      const corners = Array.from({ length: 8 }, (_, i) => this.box.transformPoint(new pc.Vec3(
-        (i & 1) - 0.5, ((i >> 1) & 1) - 0.5, ((i >> 2) & 1) - 0.5)));
-      this.boxLines = [];
-      corners.forEach((corner, i) => {
-        for (const bit of [1, 2, 4]) if (!(i & bit)) this.boxLines.push(corner, corners[i | bit]);
-      });
+  }
+  setSections(id: number, sections: ViewerSection[]) {
+    const layer = this.layers.get(id);
+    if (!layer) return;
+    layer.sections = sections;
+    if (this.axisLayer===id && this.hoveredPlane && (!this.hoveredPlane.boundary || !sections.includes(this.hoveredPlane))) this.endPlaneDrag();
+    layer.lines = sections.filter(s=>s.boundary).flatMap(boundaryLines);
+    this.refreshSections();
+  }
+  async duplicate(sourceId: number, id: number, report: (message:string)=>void) {
+    const source = this.layers.get(sourceId)!;
+    if (!source.asset || !source.model) {
+      await this.add(id, source.file, report);
+      return;
     }
-    this.box.invert();
-    for (const layer of this.layers.values()) this.applyClip(layer);
+    const layer = new Layer();
+    layer.file = source.file;
+    layer.asset = source.asset;
+    layer.bounds = source.bounds;
+    this.layers.set(id, layer);
+    this.scene.app.root.addChild(layer.root);
+    layer.model = new pc.Entity();
+    layer.root.addChild(layer.model);
+    layer.model.addComponent('gsplat',{asset:layer.asset});
+    layer.model.gsplat!.lodBaseDistance = source.model.gsplat!.lodBaseDistance;
+    this.refreshSections();
   }
-  private applyClip(layer: Layer) {
-    const min = new pc.Vec3(-1e30, -1e30, -1e30),
-      max = min.clone().mulScalar(-1);
-    if (this.axis === 'x' || this.axis === 'y' || this.axis === 'z') max[this.axis] = this.cut;
-    if (layer.points) this.applyPointClip(layer.points);
-    layer.copc?.updateClip();
-    layer.clip?.setClipState(
-      !!this.axis,
-      min,
-      max,
-      this.axis === 'box',
-      this.axis === 'box' ? new pc.Mat4().mul2(this.box, layer.root.getWorldTransform()) : this.box,
-      pc.Vec3.ZERO,
-      pc.Mat4.IDENTITY,
-      true,
-    );
-  }
-  private applyPointClip(material:PointCloudMaterial) {
-    const min=new pc.Vec3(-1e30,-1e30,-1e30), max=min.clone().mulScalar(-1);
-    if (this.axis==='x'||this.axis==='y'||this.axis==='z') max[this.axis]=this.cut;
-    material.setClipState(!!this.axis,min,max,this.axis==='box',this.box,pc.Vec3.ZERO,pc.Mat4.IDENTITY);
+  private refreshSections() {
+    const groups = new Map<string,{node:pc.Entity; rules:ViewerSection[][]}>();
+    for (const layer of this.layers.values()) {
+      if (!layer.root.enabled) continue;
+      if (layer.points) applySections(layer.points,[layer.sections]);
+      layer.copc?.updateClip();
+      const matrix = layer.root.getWorldTransform();
+      const collect = (node:pc.Entity, source:string) => {
+        const key = source + ':' + matrix.data.join(',');
+        const existing = groups.get(key);
+        node.enabled = !existing;
+        if (existing) existing.rules.push(layer.sections);
+        else groups.set(key,{node,rules:[layer.sections]});
+      };
+      if (layer.model) collect(layer.model,'model'+layer.asset!.id);
+      if (layer.environment) {
+        if (layer.environmentVisible) collect(layer.environment,layer.file.environment!.url);
+        else layer.environment.enabled=false;
+      }
+    }
+    for (const group of groups.values()) applySections(group.node.gsplat!,group.rules);
   }
   destroy() {
     this.closed = true;

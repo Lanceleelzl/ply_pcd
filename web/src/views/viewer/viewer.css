@@ -98,6 +98,7 @@ h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .layer-name[aria-expanded=true] .layer-title::before, .panel-body :deep(details[open] > summary::before) { transform: rotate(90deg); }
 .layer-name small { white-space: normal; overflow-wrap: anywhere; color: var(--muted); }
 .panel-body { display: grid; gap: 10px; padding: 12px; }
+.section-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .panel-body:has(.coordinate-section) { padding-inline: 6px; }
 .field { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); }
 .field > :last-child { color: #e2ecf7; overflow-wrap: anywhere; }
@@ -119,7 +120,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .map-children { margin: 4px 0 0 12px; padding-left: 5px; border-left: 1px solid var(--line); }
 .map-child-name { flex: 1; padding-inline: 8px; }
 .box-fields { display: grid; grid-template-columns: auto repeat(3,minmax(0,1fr)); gap: 5px; align-items: end; }
-.box-fields label { color: var(--muted); font-size: 12px; }
+.box-fields label { position: relative; min-width: 0; color: var(--muted); font-size: 12px; }
+.box-fields label input[type="number"] { box-sizing: border-box; width: 100%; padding-right: 20px; }
+.box-fields label > span { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); pointer-events: none; }
 .panel-body .coordinate-section, .panel-body :deep(.transform-disclosure) { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
 .panel-body :deep(details > summary) {
   display: block; list-style: none; box-sizing: border-box; width: 100%; padding: 0 9px;
@@ -173,3 +176,15 @@ footer { left: 10px; max-width: calc(100% - 20px); }
   border: 1px solid #364658;
   border-radius: 6px;
 }
+
+.section-list { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.section-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 6px; align-items: center; padding: 5px 6px; }
+.section-parameters { display: grid; gap: 8px; padding: 8px; }
+.section-item + .section-item { border-top: 1px solid var(--line); }
+.section-row.selected { background: var(--row-surface); }
+.section-row button:first-child { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.section-row label { display: inline-flex; gap: 3px; align-items: center; white-space: nowrap; }
+.section-property { grid-template-columns: 5em minmax(0, 1fr); white-space: nowrap; }
+.section-direction { display: flex; gap: 16px; align-items: center; }
+.section-direction label { display: inline-flex; align-items: center; gap: 4px; }
+.panel-body .section-direction input[type=radio] { width: 14px; height: 14px; margin: 0; padding: 0; }

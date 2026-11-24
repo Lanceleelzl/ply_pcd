@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue';
 import ViewportCube from '../../components/ViewportCube.vue';
 import { providers, readMapService, type Provider, type RasterLayer } from './map-service';
 import type { MapOptions } from './project-map';
+import type { ViewerSection } from './viewer-sections';
 import ViewerIcon from './ViewerIcon.vue';
 import TransformEditor from '../../components/home/TransformEditor.vue';
 import type { TransformParameters } from '../../coordinate-math';
@@ -29,6 +30,8 @@ const layers = reactive<
     name: string;
     format?: string;
     splatCount?: number;
+    sections: ViewerSection[];
+    activeSection?: number;
     pointPixels: number;
     displayedPoints?: number;
     las?: File;
@@ -55,19 +58,18 @@ function togglePanel(next: Panel) {
 }
 function selectLayer(id: number) {
   selectedId.value = id;
-  panel.value = 'properties';
+  if (panel.value !== 'clip') panel.value = 'properties';
 }
 const selected = computed(() => layers.find((l) => l.id === selectedId.value));
 const transformOpen = ref(false);
 watch([panel, selectedId], () => { transformOpen.value = false; });
-const box = ref<TransformParameters>({
-  translation: [0, 0, 0],
-  rotation_degrees: [0, 0, 0],
-  scale: [10, 10, 10],
-});
+const active = computed(() => selected.value?.sections.find(rule=>rule.id===selected.value?.activeSection));
 function updateTool() {
-  if (axis.value === 'box' && !(panel.value === 'properties' && transformOpen.value && selected.value?.visible)) {
-    viewer?.boxTool(value => { box.value = value; });
+  const rule = active.value;
+  viewer?.axisTools(panel.value==='clip' && selected.value?.visible ? selected.value.id : undefined);
+  if (panel.value==='clip' && selected.value?.visible && rule?.axis==='box' && rule.boundary) {
+    viewer?.editBoxNode(rule.box);
+    viewer?.boxTool(value=>{rule.box=value;});
     return;
   }
   const layer = selected.value;
@@ -215,12 +217,12 @@ async function applyMap(settings: SourceProfile = mapOptions) {
   finally { if (revision === mapRevision) mapBusy.value = false; }
 }
 let controls: ReturnType<typeof mountViewControls> | undefined;
-const worldLimitVisible = ref(false);
+const notice = ref('');
 let limitTimer: ReturnType<typeof setTimeout>;
-function showWorldLimit() {
-  worldLimitVisible.value = true;
+function showNotice(text: string) {
+  notice.value = text;
   clearTimeout(limitTimer);
-  limitTimer = setTimeout(() => { worldLimitVisible.value = false; }, 2000);
+  limitTimer = setTimeout(() => { notice.value = ''; }, 2000);
 }
 onMounted(() => {
   controls = mountViewControls(viewport.value!, {
@@ -229,7 +231,7 @@ onMounted(() => {
     projection: (o) => viewer?.projection(o),
   });
   try {
-    viewer = new GaussianViewer(canvas.value!, viewport.value!, value => { stats.value = value; }, o => controls?.update(o), showWorldLimit);
+    viewer = new GaussianViewer(canvas.value!, viewport.value!, value => { stats.value = value; }, o => controls?.update(o), () => showNotice('已缩放至全球范围'));
     if (configured.value) void applyMap();
   } catch (error) { message.value = String(error); }
 });
@@ -239,34 +241,86 @@ watch([showGrid, showAxes], ([grid, axes]) => {
 });
 const message = ref(''),
   stats = ref('');
-const axis = ref(''),
-  cut = ref(0);
+let nextSectionId = 1;
+const newAxis = ref<ViewerSection['axis']>('box');
+const boxAlreadyPresent = computed(() => newAxis.value === 'box' && selected.value?.sections.some(rule => rule.axis === 'box'));
 const lifetime = new AbortController();
-watch([panel, axis, selectedId, transformOpen, () => selected.value?.visible], updateTool);
+watch([panel, active, selectedId, transformOpen, () => active.value?.boundary, () => selected.value?.visible], updateTool);
+watch(() => selected.value?.sections, sections=>{
+  if (sections && selected.value) viewer?.setSections(selected.value.id,sections);
+  if (active.value?.axis==='box') viewer?.editBoxNode(active.value.box);
+}, {deep:true});
+function addSection() {
+  const layer = selected.value;
+  if (!layer || !viewer?.loaded(layer.id)) return;
+  if (boxAlreadyPresent.value) {
+    showNotice('每个图层只能有一个剖切盒');
+    return;
+  }
+  const box = viewer.initialSectionBox(layer.id);
+  const axis = newAxis.value;
+  const id = nextSectionId++;
+  layer.sections.push({id,axis,box,
+    cut:axis==='box'?0:box.translation['xyz'.indexOf(axis)],enabled:true,boundary:true,positive:true});
+  layer.activeSection=undefined;
+}
+function removeSection(id:number) {
+  const layer=selected.value;
+  if (!layer) return;
+  layer.sections=layer.sections.filter(rule=>rule.id!==id);
+  if (layer.activeSection===id) layer.activeSection=undefined;
+}
 const boxFields = [
   { key: 'translation', label: '中心（米）' },
   { key: 'rotation_degrees', label: '旋转（度）' },
   { key: 'scale', label: '尺寸（米）' },
 ] as const;
-function changeSection() {
-  if (axis.value === 'box' && viewer) box.value = viewer.initialSectionBox();
-  viewer?.section(axis.value, cut.value, box.value);
+function editCut(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (!active.value) return;
+  if (Number.isFinite(input.valueAsNumber)) active.value.cut = input.valueAsNumber;
+  else input.value = String(active.value.cut);
 }
 function editBox(event: Event, key: keyof TransformParameters, index: number) {
+  if (!active.value) return;
+  const box=active.value.box;
   const input = event.target as HTMLInputElement;
   const value = input.valueAsNumber;
   if (Number.isFinite(value) && (key !== 'scale' || value > 0)) {
-    box.value[key][index] = value;
-    viewer?.section(axis.value, cut.value, box.value);
-  } else input.value = String(box.value[key][index]);
+    box[key][index] = value;
+  } else input.value = String(box[key][index]);
 }
 let nextLayerId = 1;
 const resources = new Map<number, { urls: string[]; controller: AbortController }>();
 function releaseLayer(id: number) {
   const resource = resources.get(id);
+  resources.delete(id);
+  if (resource && [...resources.values()].includes(resource)) return;
   resource?.controller.abort();
   resource?.urls.forEach(url => URL.revokeObjectURL(url));
-  resources.delete(id);
+}
+async function duplicateLayer(original:typeof layers[number]) {
+  const resource=resources.get(original.id);
+  if (!viewer || !resource || original.loading) return;
+  const id=nextLayerId++;
+  const copy=reactive(structuredClone(toRaw(original)));
+  copy.id=id;
+  copy.name=original.name+'－副本';
+  copy.loading=true;
+  resources.set(id,resource);
+  layers.splice(layers.indexOf(original)+1,0,copy);
+  selectLayer(id);
+  try {
+    await viewer.duplicate(original.id,id,message=>{copy.status=message;});
+    if (lifetime.signal.aborted) return;
+    viewer.transform(id,copy.transform);
+    viewer.visible(id,copy.visible);
+    viewer.setPointSize(id,copy.pointPixels);
+    viewer.setSections(id,copy.sections);
+    if (copy.environment?.visible) await viewer.showEnvironment(id,copy.environment.file,true);
+  } catch(error) {
+    copy.status=String(error);
+  } finally { copy.loading=false; }
 }
 function unloadLayer(id: number) {
   const index = layers.findIndex(layer => layer.id === id);
@@ -446,6 +500,7 @@ async function open(
     id,
     name: directory ? paths[0].split('/')[0] : files[0].name,
     visible: true,
+    sections: [],
     projected: false,
     pointPixels: 0,
     status: '正在读取本地模型',
@@ -612,6 +667,7 @@ onUnmounted(() => {
               @click="selectLayer(layer.id); if (layer.environment) layer.environment.expanded = !layer.environment.expanded">
               <span class="layer-title">{{ layer.name }}</span>
             </button>
+            <button title="复制图层" :aria-label="'复制图层 '+layer.name" :disabled="layer.loading || layer.environment?.busy || !viewer?.loaded(layer.id)" @click="duplicateLayer(layer)"><ViewerIcon name="copy" /></button>
             <button type="button" :disabled="layer.loading" :aria-label="'卸载 ' + layer.name" title="卸载" @click="unloadLayer(layer.id)"><ViewerIcon name="unload" /></button>
             <button type="button" :disabled="layer.loading || !viewer?.loaded(layer.id)" :aria-label="'定位到 ' + layer.name"
               title="定位" @click="viewer?.focusLayer(layer.id)"><ViewerIcon name="locate" /></button>
@@ -669,7 +725,7 @@ onUnmounted(() => {
             <small role="status">{{ mapStatus }}</small>
           </form>
           <template v-if="panel === 'properties' && selected">
-            <div class="field"><span>模型名称</span><b>{{ selected.name }}</b></div>
+            <div class="field"><span>模型名称</span><input v-model="selected.name" aria-label="图层名称" /></div>
             <div class="field"><span>数据格式</span><span>{{ selected.format || '—' }}</span></div>
             <div class="field"><span>{{ selected.format === 'LAS' || selected.format === 'COPC' ? '点云点数' : '高斯点数' }}</span><span>{{ selected.splatCount?.toLocaleString('zh-CN') ?? '—' }}</span></div>
             <div v-if="selected.format === 'LAS' && selected.displayedPoints !== undefined && selected.displayedPoints !== selected.splatCount" class="field"><span>预览点数</span><span>{{ selected.displayedPoints.toLocaleString('zh-CN') }}</span></div>
@@ -712,17 +768,43 @@ onUnmounted(() => {
               @update:model-value="value => { if (selected) { selected.transform = value; viewer?.transform(selected.id, value); } }" />
           </template>
           <template v-if="panel === 'clip'">
-            <label class="field">剖切方式<select v-model="axis" @change="changeSection">
-              <option value="">关闭</option><option v-for="a in ['x','y','z']" :key="a" :value="a">{{ a.toUpperCase() }} 轴</option><option value="box">旋转剖切盒</option></select></label>
-            <template v-if="axis === 'box'">
-              <div v-for="field in boxFields" :key="field.key" class="box-fields">
-                <span>{{ field.label }}</span>
-                <label v-for="(dim,i) in ['X','Y','Z']" :key="dim">{{ dim }}
-                  <input type="number" step="any" :aria-label="field.label + dim" :value="box[field.key][i]" @change="editBox($event, field.key, i)" />
-                </label>
+            <p v-if="!selected">请先加载模型图层</p>
+            <template v-else>
+              <b>{{ selected.name }}</b>
+              <div class="section-actions">
+                <label class="field">剖切方式<select v-model="newAxis"><option value="box">旋转剖切盒</option><option v-for="a in ['x','y','z']" :value="a">{{ a.toUpperCase() }} 轴</option></select></label>
+                <button :disabled="selected.loading || !viewer?.loaded(selected.id)" @click="addSection">添加剖切</button>
+              </div>
+              <div v-if="selected.sections.length" class="section-list" role="group" aria-label="剖切列表">
+                <div v-for="(rule,index) in selected.sections" :key="rule.id" class="section-item">
+                  <div class="section-row" :class="{selected:active?.id===rule.id}">
+                    <button class="layer-name" :aria-expanded="active?.id===rule.id" @click="selected.activeSection=active?.id===rule.id ? undefined : rule.id"><span class="layer-title">剖切{{ index + 1 }}</span></button>
+                    <label><input type="checkbox" v-model="rule.enabled" @change="!rule.enabled && (rule.boundary = false)">生效</label>
+                    <label><input type="checkbox" v-model="rule.boundary">边界</label>
+                    <button :aria-label="'删除剖切'+(index+1)" @click="removeSection(rule.id)">删除</button>
+                  </div>
+                  <div v-if="active?.id===rule.id" class="section-parameters">
+                    <div class="field section-property"><span>剖切类型</span><span>{{ rule.axis==='box' ? '剖切盒' : rule.axis.toUpperCase()+' 轴剖切面' }}</span></div>
+                    <template v-if="rule.axis==='box'">
+                      <div v-for="field in boxFields" :key="field.key" class="box-fields">
+                        <span>{{ field.label }}</span>
+                        <label v-for="(dim,i) in ['X','Y','Z']" :key="dim">
+                          <input type="number" step="any" :aria-label="field.label + dim" :value="rule.box[field.key][i]" @change="editBox($event, field.key, i)" />
+                          <span aria-hidden="true">{{ dim }}</span>
+                        </label>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <label class="field section-property">偏移（米）<input type="number" step="any" :value="rule.cut" @change="editCut"></label>
+                      <div class="field section-property"><span id="section-direction-label">剖切方向</span><div class="section-direction" role="radiogroup" aria-labelledby="section-direction-label">
+                        <label><input type="radio" name="section-direction" v-model="rule.positive" :value="true">正向</label>
+                        <label><input type="radio" name="section-direction" v-model="rule.positive" :value="false">反向</label>
+                      </div></div>
+                    </template>
+                  </div>
+                </div>
               </div>
             </template>
-            <label v-else-if="axis" class="field">剖切位置<input v-model.number="cut" type="number" @change="viewer?.section(axis, cut, box)" /></label>
           </template>
           <template v-if="panel === 'settings'">
             <label class="toggle">XOY 平面网格<input v-model="showGrid" type="checkbox" /></label>
@@ -739,7 +821,7 @@ onUnmounted(() => {
     </dialog>
     <input ref="filePicker" hidden type="file" accept=".ply,.spz,.sog,.zip,.las,.copc.laz" @change="select($event, false)" />
     <input ref="directoryPicker" hidden type="file" webkitdirectory multiple @change="select($event, true)" />
-    <div v-if="worldLimitVisible" class="world-limit" role="status">已缩放至全球范围</div>
+    <div v-if="notice" class="world-limit" role="status">{{ notice }}</div>
     <footer><span role="status">{{ message || (layers.find(l => l.status === '正在读取本地模型') ? '正在读取本地模型' : '') || stats || '可拖入本地模型文件或文件夹' }}</span>
       <span v-if="mapLoaded && parentVisible">{{ attribution }}</span>
       <span class="guide">WASD 移动 · 左键环绕 · 右键平移 · 滚轮缩放</span></footer>
