@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue';
+import CoordinateAnnotations from './CoordinateAnnotations.vue';
 import ViewportCube from '../../components/ViewportCube.vue';
 import { providers, readMapService, type Provider, type RasterLayer } from './map-service';
 import type { MapOptions } from './project-map';
@@ -7,8 +8,7 @@ import type { ViewerSection } from './viewer-sections';
 import ViewerIcon from './ViewerIcon.vue';
 import TransformEditor from '../../components/home/TransformEditor.vue';
 import type { TransformParameters } from '../../coordinate-math';
-import { readOrigin, convertOrigin, geographicPosition, sceneOffset, type GeoOrigin } from './viewer-origin';
-import { wgs84Utm } from '../streaming/geographic-frame';
+import { readOrigin, cgcsProjections, isGeographic, metricCode, convertOrigin, geographicPosition, sceneOffset, type GeoOrigin } from './viewer-origin';
 import { mountViewControls } from '../workbench/view-controls';
 import '../../view-gizmo.css';
 import { GaussianViewer } from '../../engine/modules/GaussianViewer';
@@ -92,14 +92,15 @@ const layers = reactive<
     geo: string;
     origin?: GeoOrigin;
     projected?: boolean;
-    originDraft?: { epsg: string; offset: [string, string, string]; message: string };
+    heightDatum: string;
+    originDraft?: { epsg: string; offset: [string, string, string]; heightDatum: string; message: string };
     baseline?: TransformParameters;
     transform: TransformParameters;
   }[]
 >([]);
 const selectedId = ref(0);
 const layersOpen = ref(false);
-type Panel = 'properties' | 'clip' | 'settings' | 'map' | 'vector';
+type Panel = 'properties' | 'clip' | 'settings' | 'map' | 'vector' | 'annotations';
 const panel = ref<Panel>();
 function togglePanel(next: Panel) {
   panel.value = panel.value === next ? undefined : next;
@@ -130,6 +131,7 @@ function updateTool() {
   });
 }
 let base: GeoOrigin | undefined;
+
 const hasBase = ref(false), mapLoaded = ref(false), mapBusy = ref(false);
 const mapStatus = ref(''), attribution = ref('');
 const lng = ref(116.3974), lat = ref(39.9093), altitude = ref(0);
@@ -139,7 +141,7 @@ function readProfile() {
 }
 const profile = readProfile();
 interface SourceProfile extends MapOptions {
-  endpoint: string; protocol: 'WMS' | 'WMTS'; terrain: 'default' | 'local' | 'WMS' | 'WMTS';
+  endpoint: string; protocol: 'WMS' | 'WMTS'; terrain: 'default' | 'tianditu' | 'local' | 'WMS' | 'WMTS';
 }
 function defaults(provider: Provider): SourceProfile {
   return { provider, key:'', keyParameter:'key', elevationParameter:'key', imagery:true, labels:false, dem:false, heightOffset:0, endpoint:'',
@@ -244,6 +246,9 @@ function rememberBase(origin: GeoOrigin) {
 async function applyMap(settings: SourceProfile = mapOptions) {
   if (!viewer) return;
   mapStatus.value = '';
+  if (settings.dem && settings.terrain==='tianditu' && !(settings.provider==='tianditu' ? settings.key : settings.elevationKey)?.trim()) {
+    mapStatus.value='请输入天地图 DEM 服务 Key'; return;
+  }
   if (settings.provider === 'tianditu' && parentVisible.value && (settings.imagery || settings.labels) && !settings.key.trim()) { mapStatus.value = '影像和注记需要天地图浏览器端 Key'; return; }
   if (![lng.value, lat.value, altitude.value, settings.heightOffset].every(Number.isFinite)) {
     mapStatus.value = '请填写场景原点的经纬度、高程和高度修正'; return;
@@ -262,8 +267,13 @@ async function applyMap(settings: SourceProfile = mapOptions) {
     if (visible && !mapWasVisible) showGrid.value = false;
     mapWasVisible = visible;
     mapLoaded.value = layersOpen.value = true;
-    attribution.value = [(options.imagery || options.labels) && providers[options.provider],
-      options.dem && (options.terrain!=='default' ? '自定义 DEM' : 'DEM：Mapzen Terrain Tiles')].filter(Boolean).join(' · ');
+
+    const imagery = options.provider==='tianditu' ? '天地图（CGCS2000／球面墨卡托）'
+      : providers[options.provider] + '（' + (options.imageLayer?.crs || options.labelLayer?.crs || '坐标系未知') + '）';
+    const terrain = options.terrain==='tianditu' ? '天地图（CGCS2000／1985 国家高程基准）'
+      : options.terrain==='default' ? 'Mapzen Terrain Tiles（EPSG:3857／高程基准未确认）'
+      : '自定义 DEM（' + (options.elevationLayer?.crs || 'EPSG:3857') + '／高程基准未确认）';
+    attribution.value = [(options.imagery || options.labels) && imagery, options.dem && 'DEM：'+terrain].filter(Boolean).join(' · ');
     return true;
   } catch (error) { if (revision === mapRevision) mapStatus.value = String(error); }
   finally { if (revision === mapRevision) mapBusy.value = false; }
@@ -394,7 +404,7 @@ let pending = Promise.resolve();
 function positionLayer(layer: typeof layers[number], origin: GeoOrigin, reference = base ?? origin) {
   const translation = sceneOffset(origin, reference);
   let angle = 0, scale = 1;
-  if (origin.epsg !== 4326 && origin.epsg !== reference.epsg) {
+  if (!isGeographic(origin.epsg) && origin.epsg !== reference.epsg) {
     const east = sceneOffset(
       { ...origin, offset: [origin.offset[0] + 1, origin.offset[1], origin.offset[2]] },
       reference,
@@ -418,22 +428,22 @@ const shownOrigin = computed(() => {
   const layer = selected.value;
   if (!layer?.origin) return;
   const origin = layer.origin;
-  if (!layer.projected) return convertOrigin(origin, 4326);
-  return origin.epsg === 4326 ? convertOrigin(origin, wgs84Utm(origin.offset[0], origin.offset[1])) : origin;
+  if (!layer.projected) return convertOrigin(origin, origin.epsg>=4490 && origin.epsg<=4554 ? 4490 : 4326);
+  return convertOrigin(origin, metricCode(origin));
 });
 const projectionLabel = computed(() => {
   const origin = selected.value?.origin;
   if (!origin) return '投影坐标参考系';
-  const code = origin.epsg === 4326 ? wgs84Utm(origin.offset[0], origin.offset[1]) : origin.epsg;
+  const code = metricCode(origin);
   const zone = code % 100, series = Math.floor(code / 100);
   if ((series === 326 || series === 327) && zone >= 1 && zone <= 60)
     return `WGS 84 / UTM zone ${zone}${series === 326 ? 'N' : 'S'}`;
   return `投影坐标参考系（EPSG:${code}）`;
 });
 function editCoordinates() {
-  const origin = shownOrigin.value;
+  const origin = selected.value?.origin;
   if (origin && selected.value) selected.value.originDraft = {
-    epsg: String(origin.epsg), offset: origin.offset.map(String) as [string, string, string], message: '',
+    heightDatum:selected.value.heightDatum, epsg: String(origin.epsg), offset: origin.offset.map(String) as [string, string, string], message: '',
   };
 }
 async function readPlyFields(event: Event, layer: typeof layers[number]) {
@@ -461,12 +471,18 @@ function applyLayerOrigin(layer: typeof layers[number]) {
     const point = geographicPosition({ epsg, offset });
     if (!point.every(Number.isFinite) || Math.abs(point[0]) > 180 || Math.abs(point[1]) > 90)
       throw Error('原点超出经纬度范围，请核对坐标系和单位');
-    const origin = epsg === 4326 && layer.origin && layer.origin.epsg !== 4326
-      ? convertOrigin({ epsg, offset }, layer.origin.epsg) : { epsg, offset };
+    const origin = {epsg,offset};
+    if(layer.origin?.epsg===epsg && offset.every((v,i)=>v===layer.origin!.offset[i])) {
+      layer.heightDatum=draft.heightDatum;
+      layer.originDraft=undefined;
+      return;
+    }
     const establishBase = !base || (layers.length === 1 && !!layer.origin);
     positionLayer(layer, origin, establishBase ? origin : base);
     viewer.transform(layer.id, layer.transform);
     if (establishBase) rememberBase(origin);
+    layer.heightDatum=draft.heightDatum;
+    layer.projected=!isGeographic(epsg);
     viewer.focusLayer(layer.id);
     layer.originDraft = undefined;
   } catch (error) { draft.message = String(error); }
@@ -555,6 +571,7 @@ async function open(
     visible: true,
     sections: [],
     projected: false,
+    heightDatum: '待确认',
     pointPixels: 0,
     status: '正在读取本地模型',
     loading: true,
@@ -577,6 +594,7 @@ async function open(
     const onOrigin=(origin:GeoOrigin) => {
       try {
         positionLayer(layer, origin);
+        layer.projected=!isGeographic(origin.epsg);
         candidate = origin;
       } catch (error) {
         layer.geo = `${error} · 按本地原点显示`;
@@ -611,7 +629,7 @@ async function open(
     if (result?.displayed !== undefined) layer.displayedPoints = result.displayed;
     if (layer.format === 'PLY' && result?.compressed) layer.format = 'PLY Compressed';
     if (viewer.loaded(id) && !candidate)
-      layer.originDraft = { epsg: '4326', offset: ['', '', ''], message: '' };
+      layer.originDraft = { epsg: '', offset: ['', '', ''], heightDatum:'待确认', message: '' };
     if (viewer.loaded(id) && candidate) {
       if (!base) rememberBase(candidate);
       if (layer.visible) viewer.focusLayer(id);
@@ -698,6 +716,7 @@ onUnmounted(() => {
         <button title="回中" @click="viewer?.fit()"><ViewerIcon name="center" />回中</button>
         <label class="projection"><ViewerIcon name="cube" /><select aria-label="视图" @change="viewer?.projection(($event.target as HTMLSelectElement).value === 'ortho')"><option>透视</option><option value="ortho">轴测</option></select></label>
         <i class="divider" aria-hidden="true" />
+        <button :aria-expanded="panel === 'annotations'" @click="togglePanel('annotations')">坐标标注</button>
         <button :aria-expanded="panel === 'clip'" @click="togglePanel('clip')"><ViewerIcon name="clip" />剖切</button>
         <button :aria-expanded="panel === 'map'" @click="togglePanel('map')"><ViewerIcon name="map" />地图</button>
         <button :aria-expanded="layersOpen" @click="layersOpen = !layersOpen"><ViewerIcon name="layers" />图层</button>
@@ -747,10 +766,11 @@ onUnmounted(() => {
           </template>
         </div>
       </section>
-      <section v-if="panel" class="viewer-panel" :aria-label="{properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel]">
-        <header><h2>{{ {properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel] }}</h2>
+      <section v-if="panel" class="viewer-panel" :aria-label="{annotations:'坐标标注',properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel]">
+        <header><h2>{{ {annotations:'坐标标注',properties:'模型属性',clip:'剖切',settings:'显示设置',map:'地图',vector:'矢量属性'}[panel] }}</h2>
           <button aria-label="关闭面板" @click="panel = undefined"><ViewerIcon name="close" /></button></header>
         <div class="panel-body">
+          <div v-if="panel === 'annotations'" id="annotation-fields"></div>
           <template v-if="panel==='vector' && currentVector">
             <b>{{ currentVector.name }}</b>
             <label class="toggle">透视显示<input type="checkbox" v-model="currentVector.overlay" @change="viewer?.setVectorOverlay(currentVector.id,currentVector.overlay)"></label>
@@ -777,8 +797,9 @@ onUnmounted(() => {
             <label v-if="draft.provider==='tianditu'||draft.labelLayer" class="toggle">注记<input v-model="draft.labels" type="checkbox"></label>
             <label class="toggle">地形<input v-model="draft.dem" type="checkbox"></label>
             <template v-if="draft.dem">
-              <label class="field">高程来源<select aria-label="高程来源" v-model="draft.terrain" @change="resetCatalog(true)"><option value="default">Mapzen Terrain Tiles</option><option value="local">本地 XYZ</option><option>WMS</option><option>WMTS</option></select></label>
-              <label v-if="draft.terrain==='local'" class="field">地形地址<input v-model.trim="draft.demUrl" placeholder="/dem/{z}/{x}/{y}.png"></label>
+              <label class="field">高程来源<select aria-label="高程来源" v-model="draft.terrain" @change="resetCatalog(true)"><option value="default">Mapzen Terrain Tiles</option><option value="tianditu">天地图 DEM（1985 国家高程基准）</option><option value="local">本地 XYZ</option><option>WMS</option><option>WMTS</option></select></label>
+              <label v-if="draft.terrain==='tianditu' && draft.provider!=='tianditu'" class="field">天地图 DEM Key<input v-model="draft.elevationKey" type="password" autocomplete="off"></label>
+              <label v-if="draft.terrain==='local'"  class="field">地形地址<input v-model.trim="draft.demUrl" placeholder="/dem/{z}/{x}/{y}.png"></label>
               <template v-if="draft.terrain==='WMS'||draft.terrain==='WMTS'">
                 <label class="field">高程服务<input v-model.trim="draft.elevationEndpoint" @input="resetCatalog(true)"></label>
                 <label class="field">高程 Key<input v-model="draft.elevationKey" type="password" autocomplete="off" placeholder="匿名服务可留空"></label>
@@ -786,7 +807,7 @@ onUnmounted(() => {
                 <button type="button" :disabled="reading || !draft.elevationEndpoint" @click="discover(true)">读取高程图层</button>
                 <label v-if="elevations.length" class="field">高程图层<select aria-label="高程图层" v-model="draft.elevationLayer"><option v-for="l in elevations" :key="l.id" :value="l">{{ l.title }}</option></select></label>
               </template>
-              <label v-if="draft.terrain!=='default'" class="field">高程编码<select aria-label="高程编码" v-model="draft.encoding"><option value="terrarium">Terrarium</option><option value="terrain-rgb">Terrain-RGB</option></select></label>
+              <label v-if="draft.terrain!=='default' && draft.terrain!=='tianditu'" class="field">高程编码<select aria-label="高程编码" v-model="draft.encoding"><option value="terrarium">Terrarium</option><option value="terrain-rgb">Terrain-RGB</option></select></label>
             </template>
             <label class="field">经度<input v-model.number="lng" :disabled="hasBase" required type="number" step="any" min="-180" max="180"></label>
             <label class="field">纬度<input v-model.number="lat" :disabled="hasBase" required type="number" step="any" min="-85" max="85"></label>
@@ -812,21 +833,31 @@ onUnmounted(() => {
             <details :key="'coordinates-' + selected.id" class="coordinate-section" open>
               <summary>坐标</summary>
               <div v-if="shownOrigin && !selected.originDraft" class="map-form">
-                <label class="field">坐标类型<select v-model="selected.projected" aria-label="坐标类型">
-                  <option :value="false">WGS 84（地理坐标系）</option><option :value="true">{{ projectionLabel }}</option>
+                <label class="field">原点显示格式<select v-model="selected.projected" aria-label="坐标类型">
+                  <option :value="false">{{selected.origin && selected.origin.epsg>=4490 && selected.origin.epsg<=4554 ? 'CGCS2000' : 'WGS 84'}}（经纬度）</option><option :value="true">{{ projectionLabel }}</option>
                 </select></label>
                 <div class="field"><span>EPSG</span><span>{{ shownOrigin.epsg }}</span></div>
                 <div v-for="(v, i) in shownOrigin.offset" :key="i" class="field">
-                  <span>{{ (selected.projected ? ['X', 'Y', '高程'] : ['经度', '纬度', '高程'])[i] }}</span>
+                  <span>{{ (selected.projected ? ['东坐标 E', '北坐标 N', '高程'] : ['经度', '纬度', '高程'])[i] }}</span>
                   <span>{{ Number(v.toFixed(selected.projected || i === 2 ? 4 : 8)) }}{{ !selected.projected && i < 2 ? '°' : ' m' }}</span>
                 </div>
-                <button type="button" class="apply-origin" @click="editCoordinates">修改坐标</button>
+                <div class="field"><span>模型水平基准</span><span>EPSG:{{selected.origin?.epsg}}</span></div>
+                <div class="field"><span>模型高程基准</span><span>{{selected.heightDatum}}</span></div>
+                <button type="button" class="apply-origin" @click="editCoordinates">确认或修改模型坐标</button>
               </div>
               <small v-else-if="!selected.origin">{{ selected.geo }}</small>
             <form v-if="selected.originDraft" :key="selected.id" class="map-form" @submit.prevent="applyLayerOrigin(selected)">
+              <label class="field">模型水平坐标系<select aria-label="模型水平坐标系" v-model="selected.originDraft.epsg">
+                <option value="">请选择</option>
+                <optgroup label="地理坐标"><option value="4326">WGS 84 经纬度</option><option value="4490">CGCS2000 经纬度</option></optgroup>
+                <optgroup label="CGCS2000 高斯投影"><option v-for="p in cgcsProjections" :key="p.epsg" :value="String(p.epsg)">{{p.label}}</option></optgroup>
+                <optgroup v-for="series in [326,327]" :key="series" :label="'WGS 84 / UTM '+(series===326?'北半球':'南半球')"><option v-for="zone in 60" :key="zone" :value="String(series*100+zone)">UTM {{zone}}{{series===326?'N':'S'}}</option></optgroup>
+                <option v-if="selected.originDraft.epsg && !isGeographic(+selected.originDraft.epsg) && !cgcsProjections.some(p=>p.epsg===Number(selected?.originDraft?.epsg)) && ![326,327].includes(Math.floor(+selected.originDraft.epsg/100))" :value="selected.originDraft.epsg">EPSG:{{selected.originDraft.epsg}}</option>
+              </select></label>
+              <label class="field">模型高程基准<select v-model="selected.originDraft.heightDatum"><option>待确认</option><option>1985 国家高程基准</option><option>椭球高</option><option>项目独立高程</option></select></label>
               <label class="field">EPSG<input v-model="selected.originDraft.epsg" required inputmode="numeric" placeholder="如 32651 或 4326" /></label>
-              <label v-for="(axisName, i) in ['X', 'Y', 'Z']" :key="axisName" class="field">
-                {{ Number(selected.originDraft.epsg) === 4326 ? ['经度（度）', '纬度（度）', '原点高程（米）'][i] : '原点 ' + axisName }}
+              <label v-for="i in [0,1,2]" :key="i" class="field">
+                {{ isGeographic(Number(selected.originDraft.epsg)) ? ['经度（度）', '纬度（度）', '原点高程（米）'][i] : ['东坐标 E（米）','北坐标 N（米）','原点高程（米）'][i] }}
                 <input v-model="selected.originDraft.offset[i]" required inputmode="decimal" />
               </label>
               <label class="field">PLY 读取<input type="file" accept=".ply" @change="readPlyFields($event, selected)" /></label>
@@ -885,6 +916,7 @@ onUnmounted(() => {
         </div>
       </section>
     </aside>
+    <CoordinateAnnotations v-if="canvas" :canvas="canvas" :engine="() => viewer" :active="panel === 'annotations'" :models="layers.filter(l=>!l.loading && viewer?.loaded(l.id))" :preferred="selectedId" @select="panel = 'annotations'" />
     <div class="view-gizmo viewer-gizmo" aria-label="快速视角"><ViewportCube /></div>
     <dialog :open="pointChoices.length>0" class="point-choices">
       <strong>选择点云</strong>

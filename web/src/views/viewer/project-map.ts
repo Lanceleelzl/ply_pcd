@@ -1,4 +1,5 @@
 import * as pc from 'playcanvas';
+import { tiandituHeights } from './tianditu-heights';
 import { paintService, type Provider, type RasterLayer } from './map-service';
 import { sceneToGeographic, sceneOffset, type GeoOrigin } from './viewer-origin';
 
@@ -8,6 +9,7 @@ export interface MapOptions {
   elevationEndpoint?: string; elevationKey?: string; elevationParameter?: string;
   heightOffset: number;
   provider: Provider;
+  terrain?: 'default' | 'tianditu' | 'local' | 'WMS' | 'WMTS';
   imageLayer?: RasterLayer;
   labelLayer?: RasterLayer;
   demUrl: string;
@@ -131,7 +133,7 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
       if (config.labels) await paintLayer(config,'cia',z,x,y,labels,i*256,j*256,signal);
       const dz = Math.min(15,z), factor = 2 ** (z-dz);
       const terrainTemplate = config.demUrl || 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
-      if (config.dem) {
+      if (config.dem && config.terrain !== 'tianditu') {
         dem.imageSmoothingEnabled=false;
         if (config.elevationLayer) {
           const tile=surface(256);
@@ -145,15 +147,21 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
     }));
   }
   signal.throwIfAborted();
-  const pixels = config.dem ? dem.getImageData(0, 0, 256*cols, 256*rows).data : undefined;
+  const pixels = config.dem && config.terrain !== 'tianditu' ? dem.getImageData(0, 0, 256*cols, 256*rows).data : undefined;
   const positions: number[] = [], uv: number[] = [], indices: number[] = [];
   const steps = 96;
+  const heights = config.dem && config.terrain === 'tianditu'
+    ? await tiandituHeights(Array.from({length:(steps+1)**2}, (_,index) => {
+        const u = (index % (steps+1))/steps, v = Math.floor(index/(steps+1))/steps;
+        return [(left+u*cols)/n*360-180,latitudeAt(top+v*rows)];
+      }), z, config.provider==='tianditu' ? config.key : config.elevationKey || '', signal)
+    : undefined;
   for (let j = 0; j <= steps; j++) for (let i = 0; i <= steps; i++) {
     const u = i / steps, v = j / steps;
     const lng = (left + u*cols) / n * 360 - 180;
     const latitude = Math.atan(Math.sinh(Math.PI * (1 - 2*(top + v*rows)/n))) * 180 / Math.PI;
     const p = (Math.min(rows*256-1,Math.floor(v*rows*256))*cols*256 + Math.min(cols*256-1,Math.floor(u*cols*256)))*4;
-    let height=base.offset[2];
+    let height=heights?.[j*(steps+1)+i] ?? base.offset[2];
     if (pixels && pixels[p+3]) height=config.encoding==='terrain-rgb'
       ? -10000 + (pixels[p]*65536 + pixels[p+1]*256 + pixels[p+2])*0.1
       : pixels[p]*256 + pixels[p+1] + pixels[p+2]/256 - 32768;
@@ -188,7 +196,9 @@ export async function buildProjectMap(app: pc.Application, base: GeoOrigin, conf
     material.update();
     resources.push(material);
     const child = new pc.Entity(kind);
-    child.addComponent('render', { meshInstances: [new pc.MeshInstance(mesh, material)] });
+    const mi = new pc.MeshInstance(mesh, material);
+    mi.pick = false;
+    child.addComponent('render', { meshInstances: [mi] });
     entity.addChild(child); nodes.set(kind, child);
   }
   app.root.addChild(entity);

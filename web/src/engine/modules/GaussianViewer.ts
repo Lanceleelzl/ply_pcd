@@ -35,10 +35,12 @@ class Layer {
 
 export class GaussianViewer {
   private scene: RegistrationApplication;
-  private vectorOverlay = new pc.Layer({name:'Vector overlay'});
+  private readonly vectorOverlay: pc.Layer;
   private camera?: ViewportCameraController;
   private navigation?: SceneNavigationController;
   private panPicker?: pc.Picker;
+  private annotationPicker?: pc.Picker;
+  private annotationPickQueue: Promise<unknown> = Promise.resolve();
   private layers = new Map<number, Layer>();
   private closed = false;
   private map?: Awaited<ReturnType<typeof buildProjectMap>>;
@@ -118,6 +120,12 @@ export class GaussianViewer {
   private modelRotation?: pc.RotateGizmo;
   private modelScale?: pc.ScaleGizmo;
   private modelInput?: TransformGizmoInput;
+  private annotationNode: pc.Entity;
+  private annotationGizmo?: pc.TranslateGizmo;
+  private annotationMove?: (world: XYZ) => void;
+  private annotationDragging = false;
+  private annotationHovered = false;
+  private annotationInteracted = false;
   private dragging = false;
   private boxNode: pc.Entity;
   private handles?: ClippingHandles;
@@ -224,11 +232,16 @@ export class GaussianViewer {
   ) {
     this.scene = new RegistrationApplication({ canvas, viewport });
     const { app } = this.scene;
+    app.scene.gsplat.enableIds = true;
+    app.scene.gsplat.alphaClip = 0.05;
+    this.vectorOverlay = new pc.Layer({name:'Vector overlay'});
     app.scene.layers.pushTransparent(this.vectorOverlay);
     const cameraComponent = this.scene.camera.camera!;
     cameraComponent.layers = [...cameraComponent.layers, this.vectorOverlay.id];
     this.boxNode = new pc.Entity('Viewer clip box', app);
     app.root.addChild(this.boxNode);
+    this.annotationNode = new pc.Entity('Viewer annotation point', app);
+    app.root.addChild(this.annotationNode);
     this.labels = mountClippingLabels(viewport);
     const events = { signal: this.inputs.signal, capture: true };
     canvas.addEventListener('pointerdown', e => {
@@ -512,8 +525,9 @@ export class GaussianViewer {
     this.clearModelTools();
     this.gizmo?.destroy();
     this.gizmo = undefined;
-    this.dragging = false;
+    this.dragging = this.annotationDragging;
     if (!root || !mode) return;
+    this.setAnnotationHandle(undefined);
     const overlay =
       this.scene.app.scene.layers.getLayerByName('Viewer gizmos') ??
       pc.TranslateGizmo.createLayer(this.scene.app, 'Viewer gizmos');
@@ -706,6 +720,142 @@ export class GaussianViewer {
     });
     this.canvas.focus();
   }
+  annotationScreen(point: XYZ) {
+    const position = new pc.Vec3(...point);
+    const camera = this.scene.camera;
+    const comp = camera.camera!;
+    if (position.clone().sub(camera.getPosition()).dot(camera.forward) <= comp.nearClip) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width || this.canvas.clientWidth;
+    const h = rect.height || this.canvas.clientHeight;
+    const vp = new pc.Mat4().mul2(comp.projectionMatrix, comp.viewMatrix);
+    const clip = vp.transformVec4(new pc.Vec4(position.x, position.y, position.z, 1));
+    if (clip.w <= 1e-6) return;
+    const x = (clip.x / clip.w + 1) * 0.5 * w;
+    const y = (1 - clip.y / clip.w) * 0.5 * h;
+    return new pc.Vec3(x, y, clip.z / clip.w);
+  }
+
+  consumeAnnotationInteraction() {
+    const active = this.annotationDragging || this.annotationHovered || this.annotationInteracted;
+    this.annotationInteracted = false;
+    return active;
+  }
+
+  setAnnotationHandle(point?: XYZ, onMove?: (world: XYZ) => void) {
+    this.annotationMove = point ? onMove : undefined;
+    if (!point) {
+      this.annotationGizmo?.detach();
+      this.annotationHovered = false;
+      this.annotationInteracted = false;
+      if (this.annotationDragging) {
+        this.annotationDragging = false;
+        this.dragging = false;
+      }
+      return;
+    }
+    if (!this.annotationGizmo) {
+      const overlay =
+        this.scene.app.scene.layers.getLayerByName('Viewer annotation gizmo') ??
+        pc.TranslateGizmo.createLayer(this.scene.app, 'Viewer annotation gizmo');
+      const gizmo = (this.annotationGizmo = new pc.TranslateGizmo(this.scene.camera.camera!, overlay));
+      gizmo.mouseButtons[1] = gizmo.mouseButtons[2] = false;
+      gizmo.axisGap = 0.08;
+      gizmo.axisLineLength = 0.72;
+      gizmo.axisPlaneSize = 0.14;
+      gizmo.axisPlaneGap = 0.22;
+      gizmo.flipPlanes = true;
+      gizmo.on(pc.Gizmo.EVENT_POINTERMOVE, (_x: number, _y: number, mesh: unknown) => {
+        this.annotationHovered = Boolean(mesh);
+      });
+      gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMSTART, () => {
+        this.annotationDragging = true;
+        this.annotationInteracted = true;
+        this.dragging = true;
+        this.navigation?.clear();
+      });
+      gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMMOVE, () => {
+        const pos = this.annotationNode.getPosition();
+        this.annotationMove?.([pos.x, pos.y, pos.z]);
+      });
+      gizmo.on(pc.TransformGizmo.EVENT_TRANSFORMEND, () => {
+        this.annotationDragging = false;
+        this.dragging = false;
+      });
+    }
+    if (!this.annotationDragging) {
+      this.annotationNode.setPosition(point[0], point[1], point[2]);
+      if (!this.annotationGizmo.nodes.includes(this.annotationNode)) {
+        this.annotationGizmo.attach([this.annotationNode]);
+      }
+    }
+  }
+
+  annotationPosition(id:number, point:XYZ, toLocal=false): XYZ | undefined {
+    const layer=this.layers.get(id);
+    if (!layer) return;
+    const matrix=layer.root.getWorldTransform();
+    const p=(toLocal ? matrix.clone().invert() : matrix).transformPoint(new pc.Vec3(...point));
+    return [p.x,p.y,p.z];
+  }
+  annotationPick(clientX: number, clientY: number): Promise<{ id: number; point: XYZ; screen: { x: number; y: number } } | undefined> {
+    const task = this.annotationPickQueue.then(() => this.runAnnotationPick(clientX, clientY));
+    this.annotationPickQueue = task.catch(() => undefined);
+    return task;
+  }
+
+  private async runAnnotationPick(clientX: number, clientY: number): Promise<{ id: number; point: XYZ; screen: { x: number; y: number } } | undefined> {
+    if (this.closed) return;
+    if (![...this.layers.values()].some(layer => layer.root.enabled && (layer.asset || (layer.environmentVisible && layer.environmentAsset)))) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width)), h = Math.max(1, Math.round(rect.height));
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const px = (clientX - rect.left) * w / rect.width;
+    const py = (clientY - rect.top) * h / rect.height;
+    if (px < 0 || py < 0 || px >= w || py >= h) return;
+    const app = this.scene.app;
+    const world = app.scene.layers.getLayerById(pc.LAYERID_WORLD)!;
+    const picker = this.annotationPicker ??= new pc.Picker(app, w, h, true);
+    if (picker.width !== w || picker.height !== h) picker.resize(w, h);
+    picker.prepare(this.scene.camera.camera!, app.scene, [world]);
+    const matchLayer = (selected: unknown[]) => {
+      const component = selected.find(item => item instanceof pc.GSplatComponent);
+      if (!component) return;
+      return [...this.layers].find(([, layer]) => layer.model?.gsplat === component || layer.environment?.gsplat === component);
+    };
+    const pickAt = async (x: number, y: number, exact: boolean) => {
+      const entry = matchLayer(await picker.getSelectionAsync(x, y, 1, 1));
+      if (!entry) return;
+      const hit = await picker.getWorldPointAsync(x, y);
+      if (!hit || ![hit.x, hit.y, hit.z].every(Number.isFinite)) return;
+      const point = this.annotationPosition(entry[0], [hit.x, hit.y, hit.z], true);
+      if (point) {
+        const screen = exact
+          ? { x: clientX - rect.left, y: clientY - rect.top }
+          : { x: (Math.floor(x) + 0.5) * rect.width / w, y: (Math.floor(y) + 0.5) * rect.height / h };
+        return { id: entry[0], point, screen };
+      }
+    };
+    const direct = await pickAt(px, py, true);
+    if (direct) return direct;
+    const radius = 3;
+    const area = await picker.getSelectionAsync(Math.max(0, px - radius), Math.max(0, py - radius), radius * 2 + 1, radius * 2 + 1);
+    if (!matchLayer(area)) return;
+    const offsets: [number, number][] = [];
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx || dy) offsets.push([dx, dy]);
+      }
+    }
+    offsets.sort((a, b) => (a[0] * a[0] + a[1] * a[1]) - (b[0] * b[0] + b[1] * b[1]));
+    for (const [dx, dy] of offsets) {
+      const x = px + dx, y = py + dy;
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const nearby = await pickAt(x, y, false);
+      if (nearby) return nearby;
+    }
+  }
+
   projection(ortho: boolean) {
     this.camera?.setProjection(ortho);
   }
@@ -777,12 +927,15 @@ export class GaussianViewer {
     this.backdropRequest?.abort();
     this.releaseBackdrop?.();
     this.panPicker?.destroy();
+    this.annotationPicker?.destroy();
     this.mapRequest?.abort();
     this.map?.destroy();
     this.inputs.abort();
     this.clearFaceHandles();
     this.labels.destroy();
     this.clearModelTools();
+    this.annotationGizmo?.destroy();
+    this.annotationNode.destroy();
     this.gizmo?.destroy();
     this.navigation?.destroy();
     for (const id of this.layers.keys()) this.removeLayer(id);

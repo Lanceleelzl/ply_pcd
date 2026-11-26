@@ -33,7 +33,29 @@ export async function readOrigin(files: Map<string, Blob>): Promise<GeoOrigin | 
   )
     return { epsg, offset };
 }
+export const cgcsProjections = [
+  {first:4491,count:11,zone:13,width:6,prefix:true},
+  {first:4502,count:11,zone:13,width:6,prefix:false},
+  {first:4513,count:21,zone:25,width:3,prefix:true},
+  {first:4534,count:21,zone:25,width:3,prefix:false},
+].flatMap(group => Array.from({length:group.count}, (_,i) => {
+  const zone = group.zone+i, epsg = group.first+i;
+  const meridian = zone*group.width - (group.width===6 ? 3 : 0);
+  const east = (group.prefix ? zone*1000000 : 0) + 500000;
+  return { epsg, label:`EPSG:${epsg} · ${group.width}°带 · ${meridian}°E · ${group.prefix ? '含带号' : '无带号'}`,
+    definition:`+proj=tmerc +lat_0=0 +lon_0=${meridian} +k=1 +x_0=${east} +y_0=0 +a=6378137 +rf=298.257222101 +units=m +no_defs` };
+}));
+
+export const cgcsGeographic = '+proj=longlat +a=6378137 +rf=298.257222101 +no_defs';
+
+export const isGeographic = (epsg:number) => epsg===4326 || epsg===4490;
+export function metricCode(base:GeoOrigin) {
+  return isGeographic(base.epsg) ? wgs84Utm(base.offset[0],base.offset[1]) : base.epsg;
+}
 export function definition(code: number) {
+  if(code===4490) return cgcsGeographic;
+  const cgcs=cgcsProjections.find(p=>p.epsg===code);
+  if(cgcs) return cgcs.definition;
   const zone = code % 100;
   if ((Math.floor(code / 100) === 326 || Math.floor(code / 100) === 327) && zone >= 1 && zone <= 60)
     return `+proj=utm +zone=${zone} ${code >= 32700 ? '+south' : ''} +datum=WGS84 +units=m +no_defs`;
@@ -51,12 +73,12 @@ export function convertOrigin(origin: GeoOrigin, epsg: number): GeoOrigin {
   return { epsg, offset: [x, y, origin.offset[2]] };
 }
 export function sceneToGeographic(base: GeoOrigin, x: number, y: number) {
-  const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0], base.offset[1]) : base.epsg);
+  const target = definition(metricCode(base));
   const origin = proj4(definition(base.epsg), target, base.offset.slice(0, 2));
   return proj4(target, 'EPSG:4326', [origin[0] + x, origin[1] + y]);
 }
 export function geographicToScene(base: GeoOrigin) {
-  const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0],base.offset[1]) : base.epsg);
+  const target = definition(metricCode(base));
   const origin = proj4(definition(base.epsg),target,base.offset.slice(0,2));
   const project = proj4('EPSG:4326',target);
   return ([lon,lat,height]:XYZ):XYZ => {
@@ -66,7 +88,7 @@ export function geographicToScene(base: GeoOrigin) {
   };
 }
 export function sceneOffset(source: GeoOrigin, base: GeoOrigin): XYZ {
-  const target = definition(base.epsg === 4326 ? wgs84Utm(base.offset[0], base.offset[1]) : base.epsg);
+  const target = definition(metricCode(base));
   const project = (g: GeoOrigin) => proj4(definition(g.epsg), target, g.offset.slice(0, 2));
   const a = project(source),
     b = project(base);

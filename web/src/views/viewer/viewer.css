@@ -35,12 +35,12 @@
 .bar { display: flex; align-items: center; padding: 5px; gap: 2px; pointer-events: auto; }
 .primary { z-index: 1; }
 .viewer button, summary, select { cursor: pointer; }
-.bar button, .bar summary, .projection, .viewer-panel button {
+.bar button, .bar summary, .projection, .viewer-panel button, #annotation-fields :deep(button) {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: transparent; border: 0; border-radius: 3px; color: #b9d2f0; font: inherit;
   padding: 5px 8px; min-height: 32px; white-space: nowrap;
 }
-.bar button:enabled:hover, .bar summary:hover, .projection:hover, .viewer-panel button:enabled:hover { background: #263448; color: white; }
+.bar button:enabled:hover, .bar summary:hover, .projection:hover, .viewer-panel button:enabled:hover, #annotation-fields :deep(button:enabled:hover) { background: #263448; color: white; }
 .viewer :deep(:is(button:enabled, summary, select:enabled, input[type=file]:enabled):hover) { box-shadow: inset 0 0 0 1px #7797ba; cursor: pointer; }
 .viewer :deep(button:disabled) { cursor: not-allowed; }
 .viewer :focus-visible { outline: 2px solid var(--active); outline-offset: -2px; }
@@ -100,23 +100,23 @@ h2 { margin: 0; font-size: 14px; font-weight: 600; }
 .panel-body { display: grid; gap: 10px; padding: 12px; }
 .section-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .panel-body:has(.coordinate-section) { padding-inline: 6px; }
-.field { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); }
-.field > :last-child { color: #e2ecf7; overflow-wrap: anywhere; }
+.field, #annotation-fields :deep(.field) { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; gap: 8px; color: var(--muted); }
+.field > :last-child, #annotation-fields :deep(.field > :last-child) { color: #e2ecf7; overflow-wrap: anywhere; }
 .meter-field { position: relative; display: grid; align-items: center; }
 .meter-field input { font: inherit; }
 .meter-field > span { position: absolute; left: 7px; right: 26px; white-space: pre; overflow: hidden; color: var(--muted); pointer-events: none; }
 .meter-field > span::before { content: attr(data-value); visibility: hidden; margin-right: 4px; }
 .meter-field:has(input:invalid) > span { visibility: hidden; }
-.panel-body select, .panel-body input:not([type=checkbox]), .panel-body :deep(input[type=text]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 4px 6px; color: inherit; background: #101620; border: 1px solid #405065; border-radius: 3px; }
+.panel-body select, #annotation-fields :deep(select), .panel-body input:not([type=checkbox]), #annotation-fields :deep(input), .panel-body :deep(input[type=text]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 4px 6px; color: inherit; background: #101620; border: 1px solid #405065; border-radius: 3px; }
 .toggle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
 .toggle input { accent-color: var(--active); width: 16px; height: 16px; }
 .toggle:has(input:enabled):hover { color: var(--active); }
 .toggle input:enabled { cursor: pointer; }
 .map-form { display: grid; gap: 9px; }
-.viewer-panel .apply-origin, .viewer-panel .cancel-origin { background: #202d40; border: 1px solid var(--line); }
-.viewer-panel .apply-origin:enabled:hover { background: #185b83; border-color: #4995bc; color: white; }
-.viewer-panel .apply-origin:enabled:active { background: #124866; }
-.viewer-panel .apply-origin:focus-visible { outline: 2px solid #71d6ff; outline-offset: 2px; }
+.viewer-panel .apply-origin, #annotation-fields :deep(.apply-origin), .viewer-panel .cancel-origin, #annotation-fields :deep(.cancel-origin) { background: #202d40; border: 1px solid var(--line); }
+.viewer-panel .apply-origin:enabled:hover, #annotation-fields :deep(.apply-origin:enabled:hover) { background: #185b83; border-color: #4995bc; color: white; }
+.viewer-panel .apply-origin:enabled:active, #annotation-fields :deep(.apply-origin:enabled:active) { background: #124866; }
+.viewer-panel .apply-origin:focus-visible, #annotation-fields :deep(.apply-origin:focus-visible) { outline: 2px solid #71d6ff; outline-offset: 2px; }
 .map-children { margin: 4px 0 0 12px; padding-left: 5px; border-left: 1px solid var(--line); }
 .map-child-name { flex: 1; padding-inline: 8px; }
 .box-fields { display: grid; grid-template-columns: auto repeat(3,minmax(0,1fr)); gap: 5px; align-items: end; }

@@ -79,7 +79,7 @@ export class VectorLayer {
       mat.setParameter('tint',new Float32Array([1,3,5,7].map(i=>parseInt(g.color.slice(i,i+2),16)/255)));
       mat.setParameter('markerSize',g.texture?24:8);if(g.texture)mat.setParameter('icon',g.texture);
       this.materials.push(mat);
-      const child=new pc.Entity();child.addComponent('render',{layers:[this.overlayLayer??pc.LAYERID_WORLD],meshInstances:[new pc.MeshInstance(mesh,mat)]});this.draw.addChild(child);
+      const child=new pc.Entity();const mi=new pc.MeshInstance(mesh,mat);mi.pick=false;child.addComponent('render',{layers:[this.overlayLayer??pc.LAYERID_WORLD],meshInstances:[mi]});this.draw.addChild(child);
     }
     this.bounds.setMinMax(min,max);
   }
